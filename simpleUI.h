@@ -1,5 +1,5 @@
 #pragma once
-#include <raylib.h>
+#include "raylib.h"
 #include <iostream>
 #include <vector>
 #include <sstream>
@@ -29,6 +29,47 @@ void createFont(const char* name, const char* path, int size) {
 
 int defaultSpacing = 5;
 float dt = 0;
+
+namespace Tasks {
+	class Task;
+
+	std::vector<Task*> ActiveTasks;
+
+	class Task {
+	public:
+		float TimeLeft{};
+		std::function<void(void)> Callback{};
+
+		void Cancel() {
+			auto obj = find(ActiveTasks.begin(), ActiveTasks.end(), this);
+			if (obj != ActiveTasks.end()) {
+				ActiveTasks.erase(obj);
+			}
+			delete this;
+		}
+
+		Task(float TimeInSeconds, std::function<void(void)> f) : TimeLeft(TimeInSeconds), Callback(f) { ActiveTasks.push_back(this); }
+		~Task() {
+			auto obj = find(ActiveTasks.begin(), ActiveTasks.end(), this);
+			if (obj != ActiveTasks.end()) {
+				ActiveTasks.erase(obj);
+			}
+		}
+	};
+
+	void UpdateTasks(float dt) {
+		std::vector<Task*> z = ActiveTasks;
+
+		for (int i = 0; z.size() > 0;) {
+			z[i]->TimeLeft -= dt;
+			if (z[i]->TimeLeft <= 0) {
+				z[i]->Callback();
+				delete z[i];
+			}
+			z.erase(z.begin() + i);
+		}
+	}
+}
 
 std::vector<void*> ActiveSignals;
 template <typename T>
@@ -61,6 +102,140 @@ public:
 	~ChangedSignal() {
 		if (!LastValue) return;
 		delete LastValue;
+	}
+};
+
+namespace Animate {
+	enum Function {
+		Linear = 0,
+		Quad,
+		Cube,
+		Exponential,
+		Sine,
+		Circular
+	};
+
+	enum Ease {
+		In = 0,
+		Out,
+	};
+
+	float getTime(Function f, Ease e, float t) {
+		t = std::clamp(t,0.0f,1.0f);
+		if (f == Linear) {return t;}
+		if (f == Quad) {
+			if (e == In) { return t * t; } 
+			else { return 1 - (1 - t) * (1 - t); }
+		}
+		if (f == Cube) {
+			if (e == In) { return t * t * t; }
+			else { return 1 - (1 - t) * (1 - t) * (1 - t); }
+		}
+		if (f == Exponential) {
+			if (e == In) { return (t == 0) ? t : powf(2, 10*(t-1)); }
+			else { return (t == 1) ? 1 : (1 - powf(2, -10 * t)); }
+		}
+		if (f == Sine) {
+			if (e == In) { return 1 - cos((PI * t) / 2); }
+			else { return sin((PI * t) / 2); }
+		}
+		if (f == Circular) {
+			if (e == In) { return 1 - sqrt(1-t*t); }
+			else { return sqrt(1-(t-1)*(t-1)); }
+		}
+
+		return t;
+	}
+
+	class Animation;
+	std::unordered_map<void*, Animation*> ActiveAnimations;
+
+	void deleteCurrent(void* ptr) {
+		auto an = ActiveAnimations.find(ptr);
+		if (an != ActiveAnimations.end()) {
+			ActiveAnimations.erase(an);
+		}
+	}
+
+	class Animation {
+		void* ptr = nullptr;
+		Function func = Linear;
+		Ease ease = In;
+		float currentTime = 0.0f;
+		float endTime = 0.0f;
+
+		int startValueI{};
+		int endValueI{};
+		float startValueF{};
+		float endValueF{};
+		Color startValueC{};
+		Color endValueC{};
+		Vector2 startValueV{};
+		Vector2 endValueV{};
+
+		const char* type = "int";
+	public:
+		std::function<void(void)> Completed = []() {};
+
+		bool Update(float dt) {
+			currentTime += dt;
+			if (currentTime >= endTime) {
+				if (type == "int") { *(int*)ptr = endValueI; }
+				else if (type == "float") { *(float*)ptr = endValueF; }
+				else if (type == "color") { *(Color*)ptr = endValueC; }
+				else if (type == "vector2") { *(Vector2*)ptr = endValueV; }
+				return true;
+			}
+			if (type == "int") { *(int*)ptr = std::lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
+			else if (type == "float") { *(float*)ptr = std::lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
+			else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime));; }
+			else if (type == "vector2") { *(Vector2*)ptr = { std::lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), std::lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			return false;
+		}
+
+		Animation() = delete;
+		Animation(int* ptr, float time, int endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(float* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(Color* ptr, float time, Color endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(Vector2* ptr, float time, Vector2 endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+	};
+
+	Animation* Create(int* ptr, float time, int endValue, Function func=Linear, Ease ease=In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "int", func, ease);
+		ActiveAnimations.insert({ ptr, s});
+		return s;
+	}
+	Animation* Create(float* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "float", func, ease);
+		ActiveAnimations.insert({ ptr, s });
+		return s;
+	}
+	Animation* Create(Color* ptr, float time, Color endValue, Function func = Linear, Ease ease = In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "color", func, ease);
+		ActiveAnimations.insert({ ptr, s });
+		return s;
+	}
+	Animation* Create(Vector2* ptr, float time, Vector2 endValue, Function func = Linear, Ease ease = In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "vector2", func, ease);
+		ActiveAnimations.insert({ ptr, s });
+		return s;
+	}
+
+	void UpdateAnimations(float t) {
+		for (auto it = ActiveAnimations.begin(); it != ActiveAnimations.end();) {
+			if (it->second->Update(t)) {
+				Animation* sas = it->second;
+				it = ActiveAnimations.erase(it);
+				sas->Completed();
+				delete sas;
+			} else {
+				it++;
+			}
+		}
 	}
 };
 
@@ -135,14 +310,15 @@ Object2D* PreviousHigherObject = nullptr;
 Object2D* higherObject = nullptr;
 
 template<typename Z>
-void Delete(Z*& ptr) {
+void Delete(Z* ptr) {
 	if (!ptr) return;
 
 	if (ptr->Class == "ImageLabel") {
 		dynamic_cast<ImageLabel*>(ptr)->setImage("");
 	}
 	std::vector<Instance*> z = ptr->Children;
-	for (auto child : z) {
+	for (int i = 0; i < z.size(); i++) {
+		Instance* child = z[i];
 		Delete(child);
 	}
 
@@ -277,7 +453,7 @@ public:
 	bool isAncestorOf(Instance* other) const {
 		Instance* ptr = other;
 
-		while (ptr->Parent != nullptr) {
+		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == this) return true;
 			ptr = ptr->Parent;
 		}
@@ -285,10 +461,27 @@ public:
 		return false;
 	}
 
+	Instance* findFirstAncestorOfClass(std::string cls) {
+		Instance* ptr = this;
+
+		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
+			if (ptr->Parent->Class == cls) return ptr->Parent;
+			ptr = ptr->Parent;
+		}
+
+		return nullptr;
+	}
+
+	void deleteAllChildren() {
+		while (Children.size() > 0) {
+			Delete(Children[0]);
+		}
+	}
+
 	bool isDescendantOf(Instance* maybeAncestor) const {
 		const Instance* ptr = this;
 
-		while (ptr->Parent != nullptr) {
+		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == maybeAncestor) return true;
 			ptr = ptr->Parent;
 		}
@@ -422,16 +615,22 @@ class Object2D : virtual public Instance {
 	std::function<void()> functionForClick1;
 	std::function<void()> functionForClick2;
 
+	bool isMouseButton1Down = false;
+	bool isMouseButton2Down = false;
+
+	bool startedOnObject1 = false;
+	bool startedOnObject2 = false;
+
 protected:
 	bool RelativePCalculated = false;
 	bool RelativeSCalculated = false;
 	Vector2 RelativePosition{};
 	Vector2 RelativeSize{};
 
+public:
 	Vector2 RealSize{};
 	Vector2 RealPos{};
 
-public:
 	virtual void eventHandler() {
 		Vector2 mousePosition = GetMousePosition();
 		bool mouseOnObject = pointInObject(mousePosition);
@@ -622,11 +821,6 @@ public:
 	void SetMouse2HoldEnd(std::function<void()> f) { functionForMouse2HoldEnd = f; }
 
 	bool MouseEntered = false;
-	bool isMouseButton1Down = false;
-	bool isMouseButton2Down = false;
-
-	bool startedOnObject1 = false;
-	bool startedOnObject2 = false;
 
 	void Update() override {
 		RelativeSCalculated = false;
@@ -760,22 +954,204 @@ Font getFont(std::string name) {
 		return it->second;
 }
 
+struct Clip {
+	int x, y, w, h;
+};
+std::vector<Clip> clipStack;
+
+Clip Intersect(const Clip& a, const Clip& b) {
+	int x1 = std::max(a.x, b.x);
+	int y1 = std::max(a.y, b.y);
+	int x2 = std::min(a.x + a.w, b.x + b.w);
+	int y2 = std::min(a.y + a.h, b.y + b.h);
+	if (x2 <= x1 or y2 <= y1) return { 0, 0, 0, 0 };
+	return { x1, y1, x2 - x1, y2 - y1 };
+}
+
+void PushClip(Clip last) {
+	if (!clipStack.empty())
+		last = Intersect(clipStack.back(), last);
+
+	clipStack.push_back(last);
+	BeginScissorMode(last.x, last.y, last.w, last.h);
+}
+
+void PopClip() {
+	EndScissorMode();
+	clipStack.pop_back();
+	if (!clipStack.empty()) {
+		Clip last = clipStack.back();
+		BeginScissorMode(last.x, last.y, last.w, last.h);
+	}
+}
+
+class ScrollFrame : public Object2D {
+	constexpr static const char* DefaultName = "ScrollFrame";
+	constexpr static const char* DefaultClass = "ScrollFrame";
+public:
+	Vector2 CanvasSize = { 1,1 };
+	Vector2 CanvasPosition = { 0,0 };
+	float ScrollSpeed = 0.5;
+	bool CropDescendants = true;
+	Color SliderColor = { 15,15,15,255 };
+	float SliderTransparency = 0.5;
+	unsigned int SliderSize = 5;
+	char Direction = 'Y';
+	bool ScrollEnabled = true;
+
+	void Draw() {
+		Object2D::Draw();
+
+		bool pushed = false;
+		if (CropDescendants) {
+			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
+			pushed = true;
+		}
+
+		for (int i = 0; i < Children.size(); i++) {
+			Children[i]->Update();
+		}
+
+		if (pushed) PopClip();
+
+
+		if (SliderTransparency != 1 and SliderSize != 0) {
+
+			if (CanvasSize.y > 1) {
+				if (Direction == 'Y' or Direction == 'B') {
+					float sliderHeight = RealSize.y * (1.0f / CanvasSize.y);
+					float sliderY = RealPos.y + (RealSize.y - sliderHeight) * (CanvasPosition.y / (CanvasSize.y - 1));
+					Vector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
+					Vector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
+					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+				}
+			}
+
+			if (CanvasSize.x > 1) {
+				if (Direction == 'X' or Direction == 'B') {
+					float sliderWidth = RealSize.x * (1.0f / CanvasSize.x);
+					float sliderX = RealPos.x + (RealSize.x - sliderWidth) * (CanvasPosition.x / (CanvasSize.x - 1));
+					Vector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
+					Vector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
+					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+				}
+			}
+		}
+	}
+
+	void Update() override {
+		if (!Visible) return;
+		if (CanvasSize.x < 1) CanvasSize.x = 1; if (CanvasSize.y < 1) CanvasSize.y = 1;
+		if (CanvasPosition.x + 1 > CanvasSize.x) CanvasPosition.x = (CanvasSize.x - 1 > 0 ? CanvasSize.x - 1 : 0);
+		if (CanvasPosition.y + 1 > CanvasSize.y) CanvasPosition.y = (CanvasSize.y - 1 > 0 ? CanvasSize.y - 1 : 0);
+		if (Direction != 'X' and Direction != 'Y' and Direction != 'B') {
+			Direction = 'Y';
+		}
+		getRealObject2Dsize();
+		getRealObject2Dposition();
+		eventHandler();
+		if (updateChildrenZIndex) {
+			updateChildren(this);
+		}
+
+		if (CanvasPosition.x + 1 > CanvasSize.x) CanvasPosition.x = (CanvasSize.x - 1 > 0 ? CanvasSize.x - 1 : 0);
+		if (CanvasPosition.y + 1 > CanvasSize.y) CanvasPosition.y = (CanvasSize.y - 1 > 0 ? CanvasSize.y - 1 : 0);
+
+		if (pointInObject(GetMousePosition()) and ScrollEnabled) {
+			float WheelMove = GetMouseWheelMove();
+			if (WheelMove > 0) {
+				if (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
+					CanvasPosition.y -= ScrollSpeed;
+					if (CanvasPosition.y < 0) {
+						CanvasPosition.y = 0;
+					}
+				}
+				else if (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
+					CanvasPosition.x -= ScrollSpeed;
+					if (CanvasPosition.x < 0) {
+						CanvasPosition.x = 0;
+					}
+				}
+			}
+			else if (WheelMove < 0) {
+				if (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
+					CanvasPosition.y += ScrollSpeed;
+					if (CanvasPosition.y > CanvasSize.y - 1) {
+						CanvasPosition.y = CanvasSize.y - 1;
+					}
+				}
+				else if (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
+					CanvasPosition.x += ScrollSpeed;
+					if (CanvasPosition.x > CanvasSize.x - 1) {
+						CanvasPosition.x = CanvasSize.x - 1;
+					}
+				}
+			}
+		}
+
+		Draw();
+	}
+
+	ScrollFrame(bool a) : Instance(a), Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	ScrollFrame(Instance* p) : Instance(p), Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+
+	ScrollFrame() = delete;
+};
+Vector2 getCanvasPosition(Object2D* obj) {
+	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(obj);
+	if (scra) return scra->CanvasPosition;
+	return { 0,0 };
+}
+
 class TextLabel : virtual public Object2D {
 	constexpr static const char* DefaultName = "TextLabel";
 	constexpr static const char* DefaultClass = "TextLabel";
 
-	Vector3 textParams;
-	Vector2 lastRealSize;
-	Vector2 lastRealPos;
-	std::string lastText;
-	int lastTextSize;
-	TextAnchorEnum lastAnchor;
+	Vector3 textParams{};
+	Vector2 lastRealSize{};
+	std::string lastText{};
+	std::string lastFont = font;
+	RenderTexture2D cachedText{};
+	Vector2 newSize{};
+	Vector2 lastNewSize{};
+	Vector3 lastParams = textParams;
+	void updateTexture() {
+		textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
+		lastRealSize = RealSize;
+		lastText = Text;
+		lastFont = font;
+		lastParams = textParams;
+
+		newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, defaultSpacing);
+
+		if (lastNewSize.x < newSize.x or lastNewSize.y < newSize.y or lastNewSize.x == 0 or lastNewSize.y == 0) {
+			if (cachedText.id != 0) {
+				UnloadRenderTexture(cachedText);
+			}
+			cachedText = LoadRenderTexture(newSize.x*2, newSize.y*2);
+			lastNewSize = { newSize.x * 2, newSize.y * 2 };
+		}
+
+		bool hadClip = !clipStack.empty();
+		Clip current;
+		if (hadClip) current = clipStack.back();
+
+		if (hadClip) EndScissorMode();
+
+		BeginTextureMode(cachedText);
+		ClearBackground(BLANK);
+		DrawTextEx(getFont(font), Text.c_str(), { 0,0 }, textParams.z, defaultSpacing, {255,255,255,255});
+		EndTextureMode();
+		SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
+
+		if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+	}
 public:
 	std::string Text = "";
 	float TextTransparency = 0.0f;
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	Color TextColor = { 0,0,0,255 };
-	int TextSize = 10;
+	int TextSize = -1;
 	std::string font = "Arial";
 
 	void Draw() override {
@@ -786,36 +1162,46 @@ public:
 				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
 				return;
 			}
-
-			if (BackgroundTransparency != 1) {
-				DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
+			ScrollFrame* ancestor = nullptr; Instance* c = findFirstAncestorOfClass("ScrollFrame"); if (c) ancestor = dynamic_cast<ScrollFrame*>(c);
+			if (ancestor and ancestor->CropDescendants) {
+				if (RealPos.x + RealSize.x + BorderThickness < ancestor->RealPos.x or
+					RealPos.y + RealSize.y + BorderThickness < ancestor->RealPos.y or
+					RealPos.x + BorderThickness > ancestor->RealPos.x + ancestor->RealSize.x or
+					RealPos.y + BorderThickness > ancestor->RealPos.y + ancestor->RealSize.y) {
+					return;
+				}
 			}
 
-			if (BorderThickness > 0 and BorderTransparency != 1) {
-				DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
+			Object2D::Draw();
+			
+			if (lastText != Text or lastFont != font or lastParams.z != textParams.z or lastParams.x != textParams.x or lastParams.y != textParams.y) {
+				updateTexture();
+			} else {
+				if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
+					newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, defaultSpacing);
+					textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
+				}
 			}
-
-			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y
-				or lastRealPos.x != RealPos.x or lastRealPos.y != RealPos.y
-				or lastText != Text or lastTextSize != TextSize or lastAnchor != TextAnchor) {
-
-				textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
-				lastRealSize = RealSize;
-				lastRealPos = RealPos;
-				lastText = Text;
-				lastTextSize = TextSize;
-				lastAnchor = TextAnchor;
-			}
-
+			
 			if (textParams.z > 1) {	
-				DrawTextEx(getFont(font), Text.c_str(), { RealPos.x + textParams.x, RealPos.y + textParams.y }, textParams.z, defaultSpacing, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
+				if (cachedText.id == 0) {
+					updateTexture();
+				}
+				Rectangle sourceRec = { 0.0f, (float)(cachedText.texture.height - newSize.y), (float)newSize.x, -(float)newSize.y };
+				Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
+				Vector2 origin = { 0, 0 };
+				DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
 			}
 		}
 	}
 
 	TextLabel(bool a) : Instance(a), Object2D(a) { Name = DefaultName; Class = DefaultClass; };
 	TextLabel(Instance* p) : Instance(p), Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-
+	~TextLabel() {
+		if (cachedText.id != 0) {
+			UnloadRenderTexture(cachedText);
+		}
+	}
 	TextLabel() = delete;
 };
 
@@ -910,15 +1296,75 @@ class TextBox : virtual public Object2D {
 
 	float lastSize;
 
-	Vector3 textParams{};
-	std::string lastText;
-	std::string lastPlaceholder;
-	Vector2 lastWin;
-
-	RenderTexture2D cachedText{};
-	bool textCached = false;
-
 	std::vector<int> charOffsets;
+	Vector3 textParams{};
+	Vector2 lastRealSize{};
+	std::string lastText{};
+	int lastTextSize{};
+	TextAnchorEnum lastAnchor{};
+	Instance* lastParent = nullptr;
+	RenderTexture2D cachedText;
+	TextBox* lastFocused = nullptr;
+	std::string lastPlaceholder;
+	Vector2 newSize{};
+	std::string lastFont = font;
+
+	Vector2 lastNewSize{};
+	void updateTexture() {
+		if (Text != "") {
+			textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
+		}
+		else {
+			textParams = getTextCFrame(PlaceholderText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
+		}
+
+		lastRealSize = RealSize;
+		lastText = Text;
+		lastTextSize = TextSize;
+		lastAnchor = TextAnchor;
+		lastParent = Parent;
+		lastPlaceholder = PlaceholderText;
+		lastFocused = FocusedTextBox;
+		lastFont = font;
+
+		if (Text != "") {
+			newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, defaultSpacing);
+		} else {
+			if (CursorIndex == -1 or FocusedTextBox != this) {
+				newSize = MeasureTextEx(getFont(font), PlaceholderText.c_str(), textParams.z, defaultSpacing);
+			}
+		}
+
+		if (lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
+			if (cachedText.id != 0) {
+				UnloadRenderTexture(cachedText);
+			}
+
+			cachedText = LoadRenderTexture(newSize.x * 2, newSize.y * 2);
+			lastNewSize = { newSize.x * 2, newSize.y * 2 };
+		}
+		
+		bool hadClip = !clipStack.empty();
+		Clip current;
+		if (hadClip) current = clipStack.back();
+
+		if (hadClip) EndScissorMode();
+
+		BeginTextureMode(cachedText);
+		ClearBackground(BLANK);
+
+		if (Text != "") {
+			DrawTextEx(getFont(font), Text.c_str(), { 0,0 }, textParams.z, defaultSpacing, {255,255,255,255});
+		} else {
+			if (CursorIndex == -1 or FocusedTextBox != this) {
+				DrawTextEx(getFont(font), PlaceholderText.c_str(), { 0,0 }, textParams.z, defaultSpacing, {255,255,255,255});
+			}
+		}
+		
+		EndTextureMode();
+		SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
+		if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+	}
 public:
 	Color CursorColor = { 0,0,0,255 };
 	std::string PlaceholderText = "PlaceholderText";
@@ -928,10 +1374,11 @@ public:
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	int TextSize = 10;
 	int maxSymbols = 20;
-
+	float TextTransparency = 0;
+	std::string AllowedSymbols = "";
 	std::string font = "Arial";
 
-	void Draw(Vector3 textParams, Vector2 RealPos, Vector2 RealSize) {
+	void Draw() override {
 		if (!Visible) return;
 		if (RealPos.x + RealSize.x + BorderThickness < 0
 			or RealPos.x - RealSize.x - BorderThickness > winWidth
@@ -939,44 +1386,59 @@ public:
 			or RealPos.y - RealSize.y - BorderThickness > winHeight) {
 			return;
 		}
-
-		if (BackgroundTransparency != 1) {
-			DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
-		}
-
-		if (BorderThickness > 0)
-			DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
-
-		if (Text != "") {
-			if (!textCached or Text != lastText or lastSize != textParams.z) {
-				lastSize = textParams.z;
-				if (textCached) UnloadRenderTexture(cachedText);
-
-				Vector2 size = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, defaultSpacing);
-				cachedText = LoadRenderTexture(size.x + 10, size.y + 10);
-
-				BeginTextureMode(cachedText);
-
-				ClearBackground(BLANK);
-				DrawTextEx(getFont(font), Text.c_str(), { 0, 0 }, textParams.z, defaultSpacing, TextColor);
-
-				EndTextureMode();
-
-				lastText = Text;
-				textCached = true;
+		ScrollFrame* ancestor = nullptr; Instance* c = findFirstAncestorOfClass("ScrollFrame"); if (c) ancestor = dynamic_cast<ScrollFrame*>(c);
+		if (ancestor and ancestor->CropDescendants) {
+			if (RealPos.x + RealSize.x + BorderThickness < ancestor->RealPos.x or
+				RealPos.y + RealSize.y + BorderThickness < ancestor->RealPos.y or
+				RealPos.x + BorderThickness > ancestor->RealPos.x + ancestor->RealSize.x or
+				RealPos.y + BorderThickness > ancestor->RealPos.y + ancestor->RealSize.y) {
+				return;
 			}
-
-			DrawTextureRec(cachedText.texture, { 0, 0, (float)cachedText.texture.width, -(float)cachedText.texture.height }, { RealPos.x + textParams.x, RealPos.y + textParams.y }, WHITE);
 		}
-		else {
-			if (CursorVisible and FocusedTextBox == this) {
-				if (textParams.z > 3) {
-					float sizeY = MeasureTextEx(getFont(font), "a", textParams.z, defaultSpacing).y;
-					DrawLineEx({ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x, RealPos.y + textParams.y + 2 }, { RealPos.x + getTextOffset(TextAnchor).x * RealSize.x, RealPos.y + textParams.y + sizeY - 4 }, 3, CursorColor);
+
+		Object2D::Draw();
+
+		float ratioX = std::max(lastRealSize.x, RealSize.x) / std::min(lastRealSize.x, RealSize.x);
+		float ratioY = std::max(lastRealSize.y, RealSize.y) / std::min(lastRealSize.y, RealSize.y);
+		if (lastText != Text or lastTextSize != TextSize or lastAnchor != TextAnchor or lastFont != font or
+			lastParent != Parent or ratioX >= 1.1 or ratioY >= 1.1 or (FocusedTextBox == this and lastFocused != this) or (lastFocused == this and FocusedTextBox != this)) {
+			updateTexture();
+		} else {
+			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
+				if (Text == "") {
+					newSize = MeasureTextEx(getFont(font), PlaceholderText.c_str(), textParams.z, defaultSpacing);
+					textParams = getTextCFrame(PlaceholderText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
+				} else {
+					newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, defaultSpacing);
+					textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
 				}
 			}
-			else if (CursorIndex == -1 or FocusedTextBox != this) {
-				DrawTextEx(getFont(font), PlaceholderText.c_str(), { RealPos.x + textParams.x, RealPos.y + textParams.y }, textParams.z, defaultSpacing, PlaceholderTextColor);
+		}
+
+		if (textParams.z > 1) {
+			if (cachedText.id == 0) {
+				updateTexture();
+			}
+			Rectangle sourceRec = { 0.0f, (float)(cachedText.texture.height - newSize.y), (float)newSize.x, -(float)newSize.y };
+			Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
+			Vector2 origin = { 0, 0 };
+			
+			Color clr;
+			if (Text == "") {
+				clr = { PlaceholderTextColor.r, PlaceholderTextColor.g, PlaceholderTextColor.b, (unsigned char)(PlaceholderTextColor.a * (1 - TextTransparency)) };
+			} else {
+				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
+			}
+
+			DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, clr);
+		}
+
+		if (Text == "") {
+			if (CursorVisible and FocusedTextBox == this) {
+				if (textParams.z > 3) {
+					float sizeY = MeasureTextEx(getFont(font), " ", textParams.z, defaultSpacing).y;
+					DrawLineEx({ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x, RealPos.y + textParams.y + 2 }, { RealPos.x + getTextOffset(TextAnchor).x * RealSize.x, RealPos.y + textParams.y + sizeY - 4 }, 3, CursorColor);
+				}
 			}
 		}
 
@@ -1072,6 +1534,7 @@ public:
 				if (IsKeyDown(KEY_LEFT_SHIFT) or capsLock()) index += 1;
 
 				for (auto& key : KeysMapping) {
+					if (maxSymbols < charOffsets.size()) break;
 					if (IsKeyPressed(key.key)) {
 						const char* keyValue = nullptr;
 						switch (index) {
@@ -1082,6 +1545,17 @@ public:
 						default: keyValue = key.defaultEN;
 						}
 
+						if (AllowedSymbols != "") {
+							bool allowed = false;
+							for (char c : AllowedSymbols) {
+								if (c == *keyValue) {
+									allowed = true;
+									break;
+								}
+							}
+							if (not allowed) continue;
+						}
+						updateCharOffsets();
 						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : Text.size();
 						Text = Text.substr(0, bytePos) + std::string(keyValue) + Text.substr(bytePos);
 						CursorIndex += 1;
@@ -1162,30 +1636,19 @@ public:
 			}
 		}
 
-		if (
-			(textParams.x == 0 and textParams.y == 0 and textParams.z == 0)
-			or lastText != Text
-			or lastPlaceholder != PlaceholderText
-			or (lastWin.x != winWidth or lastWin.y != winHeight)
-			) {
-
-			lastText = Text;
-			lastPlaceholder = PlaceholderText;
-			lastWin = { winWidth * 1.0f, winHeight * 1.0f };
-
-			if (Text != "")
-				textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
-			else
-				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize);
-		}
-
-		Draw(textParams, RealPos, RealSize);
+		Draw();
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
 			child->Update();
 		}
 	};
+
+	~TextBox() {
+		if (cachedText.id != 0) {
+			UnloadRenderTexture(cachedText);
+		}
+	}
 
 	TextBox(bool a) : Instance(a), Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
 	TextBox(Instance* p) : Instance(p), Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; }
@@ -1219,9 +1682,7 @@ class ImageLabel : virtual public Object2D {
 			lastRealSize = realSize;
 		}
 	}
-
 	bool imageLoaded = false;
-
 public:
 	Image image;
 	ImageOverlayFormat Overlay = FIT;
@@ -1255,6 +1716,7 @@ public:
 
 	void Draw() override {
 		if (!Visible) return;
+		Object2D::Draw();
 
 		if (RealPos.x + RealSize.x + BorderThickness < 0
 			or RealPos.x - RealSize.x - BorderThickness > winWidth
@@ -1296,15 +1758,8 @@ public:
 			}
 		}
 		
-		if (BackgroundTransparency != 1) {
-			DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
-		}
-		
 		if (tex.id) {
 			DrawTexturePro(tex, srcRec, destRec, { 0,0 }, 0.0f, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
-		}
-		if (BorderThickness > 0) {
-			DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
 		}
 	}
 
@@ -1319,132 +1774,10 @@ public:
 	}
 };
 
-class ScrollFrame : public Object2D {
-	constexpr static const char* DefaultName = "ScrollFrame";
-	constexpr static const char* DefaultClass = "ScrollFrame";
-public:
-	Vector2 CanvasSize = { 1,1 };
-	Vector2 CanvasPosition = { 0,0 };
-	float ScrollSpeed = 0.5;
-	bool CropDescendants = true;
-	Color SliderColor = { 15,15,15,255 };
-	float SliderTransparency = 0.5;
-	unsigned int SliderSize = 5;
-	char Direction = 'Y';
-	bool ScrollEnabled = true;
-
-	void Draw() {
-		Object2D::Draw();
-
-		if (CropDescendants) {
-			BeginScissorMode(RealPos.x, RealPos.y, RealSize.x, RealSize.y);
-		}
-
-		for (int i = 0; i < Children.size(); i++) {
-			Instance* child = Children[i];
-			
-			child->Update();
-		}
-
-		if (CropDescendants) {
-			EndScissorMode();
-		}
-
-		if (SliderTransparency != 1 and SliderSize != 0) {
-
-			if (CanvasSize.y > 1) {
-				if (Direction == 'Y' or Direction == 'B') {
-					float sliderHeight = RealSize.y * (1.0f / CanvasSize.y);
-					float sliderY = RealPos.y + (RealSize.y - sliderHeight) * (CanvasPosition.y / (CanvasSize.y - 1));
-					Vector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
-					Vector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
-					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
-				}
-			}
-
-			if (CanvasSize.x > 1) {
-				if (Direction == 'X' or Direction == 'B') {
-					float sliderWidth = RealSize.x * (1.0f / CanvasSize.x);
-					float sliderX = RealPos.x + (RealSize.x - sliderWidth) * (CanvasPosition.x / (CanvasSize.x - 1));
-					Vector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
-					Vector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
-					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
-				}
-			}
-		}
-	}
-
-	void Update() override {
-		if (!Visible) return;
-		if (CanvasSize.x < 1) CanvasSize.x = 1; if (CanvasSize.y < 1) CanvasSize.y = 1;
-		if (CanvasPosition.x + 1 > CanvasSize.x) CanvasPosition.x = (CanvasSize.x - 1 > 0 ? CanvasSize.x - 1 : 0);
-		if (CanvasPosition.y + 1 > CanvasSize.y) CanvasPosition.y = (CanvasSize.y - 1 > 0 ? CanvasSize.y - 1 : 0);
-		if (Direction != 'X' and Direction != 'Y' and Direction != 'B') {
-			Direction = 'Y';
-		}
-		getRealObject2Dsize();
-		getRealObject2Dposition();
-		eventHandler();
-		if (updateChildrenZIndex) {
-			updateChildren(this);
-		}
-
-		if (CanvasPosition.x + 1 > CanvasSize.x) CanvasPosition.x = (CanvasSize.x - 1 > 0 ? CanvasSize.x - 1 : 0);
-		if (CanvasPosition.y + 1 > CanvasSize.y) CanvasPosition.y = (CanvasSize.y - 1 > 0 ? CanvasSize.y - 1 : 0);
-
-		if (pointInObject(GetMousePosition()) and ScrollEnabled) {
-			float WheelMove = GetMouseWheelMove();
-			if (WheelMove > 0) {
-				if (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
-					CanvasPosition.y -= ScrollSpeed;
-					if (CanvasPosition.y < 0) {
-						CanvasPosition.y = 0;
-					}
-				}
-				else if (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
-					CanvasPosition.x -= ScrollSpeed;
-					if (CanvasPosition.x < 0) {
-						CanvasPosition.x = 0;
-					}
-				}
-			}
-			else if (WheelMove < 0) {
-				if (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
-					CanvasPosition.y += ScrollSpeed;
-					if (CanvasPosition.y > CanvasSize.y - 1) {
-						CanvasPosition.y = CanvasSize.y - 1;
-					}
-				}
-				else if (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B')) {
-					CanvasPosition.x += ScrollSpeed;
-					if (CanvasPosition.x > CanvasSize.x - 1) {
-						CanvasPosition.x = CanvasSize.x - 1;
-					}
-				}
-			}
-		}
-
-		Draw();
-	}
-
-	ScrollFrame(bool a) : Instance(a), Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	ScrollFrame(Instance* p) : Instance(p), Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-
-	ScrollFrame() = delete;
-};
-Vector2 getCanvasPosition(Object2D* obj) {
-	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(obj);
-	if (scra) return scra->CanvasPosition;
-	return { 0,0 };
-}
-
 void DrawFrame(Instance* StartInstance) {
 	BeginDrawing();
-
 	ClearBackground({ 255,255,255,255 });
-
 	StartInstance->Update();
-
 	EndDrawing();
 }
 
@@ -1508,7 +1841,11 @@ namespace debug {
 	int currentFPSindex = 1;
 	bool lowGraphicsMode = false; // SOON
 
+	Object2D* treeFrame = nullptr;
+	Instance* currentInstance = nullptr;
+
 	void initDebug(Instance* s) {
+		if (debugMenu) return;
 		debugMenu = new Object2D(s);
 		debugMenu->Size = { 1,1 };
 		debugMenu->BackgroundTransparency = 0.9;
@@ -1751,7 +2088,56 @@ namespace debug {
 		}
 		textQueue.clear();
 
-		new ChangedSignal<int>(currentColor, [LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
+		/********************
+		* Objects hierarchy *
+		********************/
+
+		treeFrame = new Object2D(debugMenu);
+		treeFrame->Size = { 0.49, 0.87 };
+		treeFrame->Position = { 0.47, 0.03 };
+		treeFrame->BackgroundTransparency = 0.2;
+		treeFrame->BorderColor = DefaultDebugColor;
+		treeFrame->BorderThickness = 3;
+		treeFrame->Name = "treeFrame";
+		treeFrame->Active = true;
+		TextLabel* treeName = new TextLabel(treeFrame);
+		treeName->Name = "treeName";
+		treeName->Text = "Objects hierarchy";
+		treeName->TextSize = -1;
+		treeName->TextColor = DefaultDebugColor;
+		treeName->Position = { 0.5, 0 };
+		treeName->AnchorPosition = { 0.5, 0 };
+		treeName->Size = { 0.8, 0.055 };
+		treeName->TextAnchor = TextAnchorEnum::CENTER;
+		treeName->BackgroundTransparency = 1;
+		treeName->font = "rog";
+		Object2D* manageMenu = new Object2D(treeFrame);
+		manageMenu->Name = "manageMenu";
+		manageMenu->Position = { 0, 0.06 };
+		manageMenu->Size = { 1, 0.05 };
+		manageMenu->BorderThickness = 3;
+		manageMenu->BackgroundTransparency = 1;
+		manageMenu->BorderColor = DefaultDebugColor;
+		ScrollFrame* way = new ScrollFrame(manageMenu);
+		way->Name = "directory";
+		way->BackgroundTransparency = 1;
+		way->Position = { 0, 0 };
+		way->Size = { 1, 1 };
+		way->Direction = 'X';
+		way->SliderColor = { 255,255,255,255 };
+		ScrollFrame* treeScroll = new ScrollFrame(treeFrame);
+		treeScroll->Name = "treeScroll";
+		treeScroll->Position = {0, 0.12};
+		treeScroll->Size = {0.5, 0.88};
+		treeScroll->BackgroundTransparency = 1;
+		treeScroll->SliderColor = { 255,255,255,255 };
+		treeScroll->ScrollSpeed = 0.2;
+
+		/********************
+		*  Events Handler   *
+		********************/
+
+		new ChangedSignal<int>(currentColor, [treeScroll, way, manageMenu, treeName, LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
 			Colorright->TextColor = typeColor[currentColor];
 			ColorBlock->BackgroundColor = typeColor[currentColor];
 			Colorleft->TextColor = typeColor[currentColor];
@@ -1769,7 +2155,22 @@ namespace debug {
 			console->BorderColor = typeColor[currentColor];
 			LogsFrame->BorderColor = typeColor[currentColor];
 			LogsName->TextColor = typeColor[currentColor];
+			treeFrame->BorderColor = typeColor[currentColor];
+			treeName->TextColor = typeColor[currentColor];
+			manageMenu->BorderColor = typeColor[currentColor];
 			for (Instance* obj : console->Children) {
+				TextLabel* t = dynamic_cast<TextLabel*>(obj);
+				if (t) {
+					t->TextColor = typeColor[currentColor];
+				}
+			}
+			for (Instance* obj : way->Children) {
+				TextLabel* t = dynamic_cast<TextLabel*>(obj);
+				if (t) {
+					t->TextColor = typeColor[currentColor];
+				}
+			}
+			for (Instance* obj : treeScroll->Children) {
 				TextLabel* t = dynamic_cast<TextLabel*>(obj);
 				if (t) {
 					t->TextColor = typeColor[currentColor];
@@ -1780,6 +2181,74 @@ namespace debug {
 		new ChangedSignal<int>(currentFPSindex, [FPSquantity]() { SetTargetFPS(typeFPS[currentFPSindex]); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->Text = currentFPSindex == 2 ? "FULL" : s.str(); });
 		new ChangedSignal<bool>(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->Text = Animations ? " On " : " Off "; });
 		new ChangedSignal<bool>(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->Text = lowGraphicsMode ? " On " : " Off "; });
+	
+		new ChangedSignal<Instance*>(currentInstance, [way, treeScroll]() {
+			way->deleteAllChildren();
+			treeScroll->deleteAllChildren();
+
+			if (currentInstance) {
+				Instance* obj = currentInstance;
+				static std::vector<Instance*> objects;
+				objects.clear();
+				while (obj != nullptr) {
+					objects.push_back(obj);
+
+					if (obj->__ParentObject) break;
+					obj = obj->Parent;
+				}
+
+				for (int i = objects.size() - 1; i >= 0; i--) {
+					TextLabel* element = new TextLabel(way);
+					element->Name = objects[i]->Name;
+					element->BackgroundTransparency = 1;
+					element->TextColor = DefaultDebugColor;
+					element->Position = { (objects.size() - i - 1) * 0.25f, 0 };
+					element->Size = { 0.2, 0.9 };
+					element->Text = objects[i]->Name;
+					element->Active = true;
+
+					if (i != 0) {
+						TextLabel* element2 = new TextLabel(way);
+						element2->Name = ">";
+						element2->BackgroundTransparency = 1;
+						element2->TextColor = DefaultDebugColor;
+						element2->Position = { (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
+						element2->Size = { 0.05, 0.9 };
+						element2->Text = ">";
+					}
+
+					element->SetMouseClick1([i]() { currentInstance = objects[i]; });
+				}
+
+				way->CanvasSize.x = objects.size() * 0.25-0.05;
+				way->CanvasPosition.x = way->CanvasSize.x;
+
+				static std::vector<Instance*> objects2;
+				objects2.clear();
+
+				bool dec = false;
+
+				for (int i = 0; i < currentInstance->Children.size(); i++) {
+					if (currentInstance->Children[i]->Name == "debugMenu") { dec = true; continue; }
+					objects2.push_back(currentInstance->Children[i]);
+					TextLabel* element = new TextLabel(treeScroll);
+					element->Name = currentInstance->Children[i]->Name;
+					element->BackgroundTransparency = 1;
+					element->TextColor = DefaultDebugColor;
+					element->Position = { 0, (i-dec) * 0.05f };
+					element->Size = { 1, 0.05 };
+					std::ostringstream pupupupu; pupupupu << " > " << currentInstance->Children[i]->Name;
+					element->Text = pupupupu.str();
+					element->Active = true;
+					element->TextAnchor = TextAnchorEnum::W;
+					element->SetMouseClick1([i, dec]() { currentInstance = objects2[i-dec]; });
+				}
+
+				treeScroll->CanvasSize.y = (currentInstance->Children.size() - dec) * 0.05;
+				treeScroll->CanvasPosition.y = 0;
+			}
+		});
+		currentInstance = s;
 	}
 
 	void toggleDebug(Instance* s) {
@@ -1799,7 +2268,7 @@ void updateSignals() {
 	}
 }
 
-void start(Instance& StartInstance, Vector3 inf, const char* name, std::function<void()> f = []() {}, std::function<void(float)> f2 = [](float) {}) {
+void start(Instance& StartInstance, Vector3 inf, const char* name) {
 	SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 	SetTraceLogLevel(LOG_NONE);
 	SetTargetFPS(inf.z);
@@ -1822,7 +2291,9 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, std::function
 		winWidth = GetScreenWidth(); winHeight = GetScreenHeight();
 		updateSignals();
 		dt = GetFrameTime();
+		Animate::UpdateAnimations(dt);
 		Vector2 mousePosition = GetMousePosition();
+		Tasks::UpdateTasks(dt);
 
 		std::vector<Object2D*> onMouse;
 
@@ -1858,12 +2329,9 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, std::function
 		PreviousHigherObject = higherObject;
 		higherObject = dynamic_cast<Object2D*>(mostHigherActive(&StartInstance));
 
-		f();
-		f2(dt);
-
-
 		if (IsKeyPressed(KEY_F1)) { toggleFPS(&StartInstance); }
 		if (IsKeyPressed(KEY_F2)) { debug::toggleDebug(&StartInstance); }
+		if (IsKeyPressed(KEY_F11)) { ToggleFullscreen(); }
 
 
 		DrawFrame(&StartInstance);

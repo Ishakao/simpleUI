@@ -2005,7 +2005,7 @@ public:
 			if (pointInObject(mousePosition) and FocusedTextBox != this and higherObject == this and ClearOnClick) {
 				Text = "";
 			}
-			if (higherObject != this) {
+			if (higherObject != this and higherObject) {
 				if (higherObject->Class == TEXTBOX) {
 					FocusedTextBox = static_cast<TextBox*>(higherObject);
 				} else {

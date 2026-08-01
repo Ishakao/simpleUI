@@ -1,13 +1,17 @@
-//////////////////////////////////////////////////////////////////
-//																//
-// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI    //
-// Current Version 1.0.0										//
-//																//
-// Changed Logs:												//
-// New TextLabel optimization									//
-// New events system (more convinient and optimized)			//
-//																//
-//////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+//																	//
+// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI		//
+// Current Version 1.0.1											//
+//																	//
+// Changed Logs:													//
+// Better child event system										//
+// Text class for convinient management of text-objects		        //
+// Additional events for objects (like TEXT_CHANGED on text-objects //
+// Textures RAM & VRAM optimization								    //
+// A few CPU optimizations											//
+//																    //
+//////////////////////////////////////////////////////////////////////
+
 #pragma once
 #ifdef _WIN32
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -27,17 +31,100 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
+inline int winWidth = 0;
+inline int winHeight = 0;
+inline int defaultSpacing = 0;
+inline float dt = 0;
+inline Vector2 changeWindowSize = { 0,0 };
+inline bool changeWindowSizeB = false;
+inline int accurateFPS = 0;
+inline bool programRunning = true;
+Vector2 mousePosition;
+Vector2 mouseScreenPosition;
+Vector2 windowPosition;
+inline constexpr const char* BASIC_FONT_NAME = "Arial";
 inline std::unordered_map<std::string, Shader> Shaders;
 
+inline std::mutex ImagesLoadingMtx;
+inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
+inline std::unordered_map<std::string, Image> pendingImages;
+inline void loadImage(const std::string& name, const std::string& path) {
+	ImagesLoadingMtx.lock();
+
+	if (pendingImages.find(name) != pendingImages.end()) {
+		ImagesLoadingMtx.unlock();
+		std::cout << "Image: " << name << " already exists" << std::endl; 
+		return; 
+	}
+
+	Image img = LoadImage(path.c_str());
+	if (!img.data) {
+		ImagesLoadingMtx.unlock();
+		std::cout << "Image: " << name << " error while loading" << std::endl;
+		return;
+	}
+
+	pendingImages.insert({ name, img });
+	ImagesLoadingMtx.unlock();
+}
+
+inline void unloadImage(const std::string& name) {
+	ImagesLoadingMtx.lock();
+
+	auto it = loadedImages.find(name);
+	if (it != loadedImages.end()) {
+		UnloadImage(it->second.first);
+		UnloadTexture(it->second.second);
+		loadedImages.erase(it);
+	}
+
+	auto it1 = pendingImages.find(name);
+	if (it1 != pendingImages.end()) {
+		UnloadImage(it1->second);
+		pendingImages.erase(it1);
+	}
+
+	ImagesLoadingMtx.unlock();
+}
+
+inline std::pair<Image, Texture> getImage(const std::string& name) {
+	if (name == "") { return {}; }
+
+	ImagesLoadingMtx.lock();
+	auto it = loadedImages.find(name);
+	if (it != loadedImages.end()) {
+		ImagesLoadingMtx.unlock();
+		return it->second;
+	}
+
+	auto it1 = pendingImages.find(name);
+	if (it1 != pendingImages.end()) {
+		ImagesLoadingMtx.unlock();
+		return { it1->second, Texture{} };
+	}
+	ImagesLoadingMtx.unlock();
+
+	std::cout << "Image " << name << " was not found" << std::endl;
+	return {};
+}
+
 inline void loadNewShader(const std::string& name, const std::string& vs, const std::string& fs) {
+	auto it = Shaders.find(name);
+	if (it != Shaders.end()) {
+		std::cout << "Shader: " << name << " already exists" << std::endl;
+		return;
+	}
+
 	Shaders.emplace(name, LoadShader(vs.c_str(), fs.c_str()));
 }
 
 inline Shader getShader(const std::string& name) {
 	auto it = Shaders.find(name);
 	if (it == Shaders.end()) {
-		exit(99);
+		std::cout << "Shader: " << name << " was not found" << std::endl;
+		return Shaders.find("TextureRoundness")->second;
 	}
 	return it->second;
 }
@@ -59,14 +146,6 @@ inline float sui_lerp(float a, float b, float t) {
 	return a + (b - a) * t;
 }
 
-inline int winWidth = 0;
-inline int winHeight = 0;
-inline Vector2 changeWindowSize = { 0,0 };
-inline bool changeWindowSizeB = false;
-inline int accurateFPS = 0;
-inline bool programRunning = true;
-Vector2 mousePosition;
-
 inline std::unordered_map<std::string, Font> Fonts;
 inline std::vector<std::tuple<const char*, std::string, int>> queuedFonts;
 
@@ -87,8 +166,132 @@ inline void createFont(const char* name, std::string path, int size) {
 	}
 }
 
-inline int defaultSpacing = 0;
-inline float dt = 0;
+class SUI_Text {
+	std::string text;
+	bool changed = false;
+public:
+	bool isChanged() const {
+		return changed;
+	}
+
+	const std::string& operator!() const {
+		return text;
+	}
+
+	size_t size() const {
+		return text.size();
+	}
+
+	void restate() {
+		changed = false;
+	}
+
+	bool empty() const {
+		return text.empty();
+	}
+
+	const char* c_str() const {
+		return text.c_str();
+	}
+
+	std::string substr(size_t from, size_t count = ((size_t)0 - 1)) const {
+		return text.substr(from, count);
+	}
+
+	char operator[](size_t other) const {
+		return text[other];
+	}
+
+	const SUI_Text& operator=(const std::string& other) {
+		if (text.size() != other.size()) {
+			changed = true;
+		} else {
+			changed = text != other;
+		}
+
+		text = other;
+		return other;
+	}
+
+	const SUI_Text& operator=(const char* other) {
+		std::string st = other;
+
+		if (text.size() != st.size()) {
+			changed = true;
+		} else {
+			changed = text != st;
+		}
+
+		text = st;
+		return other;
+	}
+
+	const SUI_Text& operator=(const SUI_Text& other) {
+		if (text.size() != other.size()) {
+			changed = true;
+		} else {
+			changed = text != !other;
+		}
+
+		text = !other;
+		return other;
+	}
+
+	void operator+=(const std::string& other) {
+		text += other;
+
+		if (other.size()) {
+			changed = true;
+		}
+	}
+
+	bool operator==(const std::string& other) {
+		if (text.size() != other.size()) {
+			return false;
+		} else {
+			return text == other;
+		}
+	}
+
+	bool operator==(const char* other) {
+		return !strcmp(text.c_str(), other);
+	}
+
+	bool operator!=(const char* other) {
+		return strcmp(text.c_str(), other);
+	}
+
+	bool operator!=(const std::string& other) {
+		if (text.size() == other.size()) {
+			return text != other;
+		} else {
+			return true;
+		}
+	}
+
+	bool operator==(const SUI_Text& other) {
+		if (text.size() != other.size()) {
+			return false;
+		} else {
+			return text == !other;
+		}
+	}
+
+	SUI_Text(const SUI_Text& other) {
+		text = !other;
+		changed = true;
+	}
+
+	SUI_Text(const std::string& other) {
+		text = other;
+		changed = true;
+	}
+
+	SUI_Text(const char* other) {
+		text = other;
+		changed = true;
+	}
+};
 
 namespace Tasks {
 	class Task;
@@ -172,18 +375,24 @@ public:
 
 enum EventType {
 	TICK = 0,
+
 	MOUSE_ENTER = 10,
 	MOUSE_LEAVE = 11,
 	MOUSE_CLICK = 12,
 	MOUSE_HOLD_START = 13,
-	MOUSE_HOLD_END = 14
+	MOUSE_HOLD_END = 14,
+
+	CHILD_ADDED = 20,
+	CHILD_REMOVED = 21,
+
+	TEXT_CHANGED = 30
 };
 
 enum MouseButtonType {
 	NONE = -1,
-	LEFT = MOUSE_LEFT_BUTTON,
-	RIGHT = MOUSE_RIGHT_BUTTON,
-	MIDDLE = MOUSE_MIDDLE_BUTTON
+	LEFT = MOUSE_BUTTON_LEFT,
+	RIGHT = MOUSE_BUTTON_RIGHT,
+	MIDDLE = MOUSE_BUTTON_MIDDLE
 };
 
 namespace Animate {
@@ -426,6 +635,10 @@ class ScrollFrame;
 class TextureLabel;
 class LineEx;
 
+inline TextBox* FocusedTextBox = nullptr;
+inline Object2D* PreviousHigherObject = nullptr;
+inline Object2D* higherObject = nullptr;
+
 enum InstanceType {
 	INSTANCE = 0,
 	OBJECT2D,
@@ -445,11 +658,6 @@ enum InstanceType {
 	COLOR_VALUE,
 	FOLDER
 };
-
-
-inline TextBox* FocusedTextBox = nullptr;
-inline Object2D* PreviousHigherObject = nullptr;
-inline Object2D* higherObject = nullptr;
 
 template<typename Z>
 inline void Delete(Z* ptr) {
@@ -474,13 +682,37 @@ inline void Delete(Z* ptr) {
 
 inline void updateChildren(Instance*);
 
-class Instance {
-	std::function<void(Instance*)> callbackChildAdded = [](Instance*) {};
-	std::function<void(Instance*)> callbackChildRemoved = [](Instance*) {};
-	std::vector<std::pair<EventType, std::function<void(Instance*)>>> events;
+struct InstanceCallback {
+	std::function<void(Instance*, Instance*)> func;
 
-	void AddEvent(EventType t, std::function<void(Instance*)> f, MouseButtonType m = NONE) {
-		if (t != TICK) return;
+	InstanceCallback() = default;
+
+	template < typename F, typename = std::enable_if_t< !std::is_same_v<std::decay_t<F>, InstanceCallback>>>
+	InstanceCallback(F&& f) {
+		if constexpr (std::is_invocable_v<F, Instance*, Instance*>) {
+			func = std::forward<F>(f);
+		} else if constexpr (std::is_invocable_v<F, Instance*>) {
+			func = [f = std::forward<F>(f)](Instance* a, Instance*) mutable {
+				f(a);
+			};
+		}
+	}
+
+	void operator()(Instance* a, Instance* b = nullptr) const {
+		if (func) {
+			func(a, b);
+		}
+	}
+};
+
+class Instance {
+protected:
+	std::vector<Instance*> childsAddedInFrame;
+	std::vector<Instance*> childsRemovedInFrame;
+private:
+	std::vector<std::pair<EventType, InstanceCallback>> events;
+
+	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE) {
 		events.push_back({ t, f });
 	}
 public:
@@ -495,7 +727,7 @@ public:
 	bool __ParentObject{};
 
 	Instance(bool a) : __ParentObject(a) {};
-	Instance(Instance* p) : Parent(p) { if (p) { p->Children.push_back(this); p->callbackChildAdded(this); p->updateChildrenZIndex = true; } }
+	Instance(Instance* p) : Parent(p) { if (p) { p->Children.push_back(this); p->childsAddedInFrame.push_back(this); p->updateChildrenZIndex = true; } }
 	Instance() = delete;
 
 	virtual ~Instance() {}
@@ -505,8 +737,8 @@ public:
 
 		if (Parent != nullptr) {
 			std::vector<Instance*> arr;
-			for (Instance*& obj : static_cast<Instance*>(Parent)->Children) {
-				arr.push_back(static_cast<Instance*>(obj));
+			for (Instance* obj : Parent->Children) {
+				arr.push_back(obj);
 			}
 			for (int i = 0; i < arr.size(); i++) {
 				if (arr[i] == this) {
@@ -515,23 +747,15 @@ public:
 				}
 			}
 
-			Parent->callbackChildRemoved(this);
+			Parent->childsRemovedInFrame.push_back(this);
 		}
 
 		Parent = ptr;
 		if (ptr) {
 			ptr->Children.push_back(this);
 			ptr->updateChildrenZIndex = true;
-			ptr->callbackChildAdded(this);
+			ptr->childsAddedInFrame.push_back(this);
 		}
-	}
-
-	void OnChildAdded(std::function<void(Instance*)> callback) {
-		callbackChildAdded = callback;
-	}
-
-	void OnChildRemoved(std::function<void(Instance*)> callback) {
-		callbackChildRemoved = callback;
 	}
 
 	Instance* findChild(const std::string& name) {
@@ -654,11 +878,22 @@ public:
 	}
 
 	virtual void eventHandler() {
-		for (auto [type, func] : events) {
+		for (const auto& [type, func] : events) {
 			if (type == TICK) {
 				func(this);
+			} else if (type == CHILD_ADDED) {
+				for (Instance* obj : childsAddedInFrame) {
+					func(this, obj);
+				}
+			} else if (type == CHILD_REMOVED) {
+				for (Instance* obj : childsRemovedInFrame) {
+					func(this, obj);
+				}
 			}
 		}
+
+		childsAddedInFrame.clear();
+		childsRemovedInFrame.clear();
 	}
 
 	virtual void Update() {
@@ -818,7 +1053,7 @@ protected:
 	bool RelativeSCalculated = false;
 	Vector2 RelativePosition{};
 	Vector2 RelativeSize{};
-	std::vector<std::tuple<EventType, std::function<void(Object2D*)>, MouseButtonType>> events;
+	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
 	void SameUpdate() {
 		if (Active != lastActive or lastZIndex != ZIndex) {
@@ -831,67 +1066,7 @@ protected:
 		}
 	} 
 
-	void eventHandler() override {
-		bool mouseOnObject = pointInObject(mousePosition);
-		for (auto [type, func, mouse] : events) {
-			switch (type) {
-				case TICK: { 
-					func(this); 
-					break; 
-				} case MOUSE_ENTER: {
-					if (mouseOnObject) {
-						if (Visible and ((higherObject == this and PreviousHigherObject != this) or CanBeEnteredIfNotHigher)) {
-							MouseEntered = true;
-							func(this);
-						}
-					}
-					break;
-				} case MOUSE_LEAVE: {
-					if (!mouseOnObject) {
-						if (MouseEntered and (!Visible or higherObject != this)) {
-							MouseEntered = false;
-							func(this);
-						}
-					}
-					break;
-				} case MOUSE_CLICK: {
-					if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-						func(this);
-					}
-					break;
-				} case MOUSE_HOLD_START: {
-					if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-						if (mouse == LEFT) {
-							startedOnObject1 = true;
-						} else if (mouse == RIGHT) {
-							startedOnObject2 = true;
-						} else if (mouse == MIDDLE) {
-							startedOnObject3 = true;
-						}
-						func(this);
-					}
-					break;
-				} case MOUSE_HOLD_END: {
-					if (IsMouseButtonReleased(mouse)) {
-						if (mouse == LEFT) {
-							if (startedOnObject1) {
-								func(this);
-							}
-						} else if (mouse == RIGHT) {
-							if (startedOnObject2) {
-								func(this);
-							}
-						} else if (mouse == MIDDLE) {
-							if (startedOnObject3) {
-								func(this);
-							}
-						}
-					}
-					break;
-				}
-			}
-		}
-	}
+	void eventHandler();
 public:
 	Vector2 RealSize{};
 	Vector2 RealPos{};
@@ -926,12 +1101,12 @@ public:
 		Object2D* parent2D = nullptr;
 
 		while (current) {
-			parent2D = dynamic_cast<Object2D*>(current);
-			if (!parent2D) {
+			if (current->Class == INSTANCE or current->Class == LINEEX) {
 				if (current->Parent) { current = current->Parent; continue; }
 				parent2D = nullptr;
 				break;
 			}
+			parent2D = static_cast<Object2D*>(current);
 			if (parent2D->__ParentObject) { parent2D = nullptr; break; }
 			break;
 		}
@@ -964,9 +1139,9 @@ public:
 
 		Instance* current = Parent;
 		while (current) {
-			Object2D* obj = dynamic_cast<Object2D*>(current);
-			if (!obj) { current = current->Parent; continue; }
+			if (current->Class == INSTANCE or current->Class == LINEEX) { current = current->Parent; continue; }
 
+			Object2D* obj = static_cast<Object2D*>(current);
 			if (!obj->RelativeSCalculated) obj->getRealObject2Dsize();
 			if (!obj->RelativePCalculated and obj->Class != SCROLLFRAME) obj->getRealObject2Dposition();
 
@@ -1042,11 +1217,11 @@ public:
 	}
 
 	bool pointInObject(Vector2 pos) {
-		Vector2 mouse = GetMouseScreenPosition();
-		Vector2 windowPos = GetWindowPosition();
+		Vector2 mouse = mouseScreenPosition;
+		Vector2 windowPos = windowPosition;
 
-		int width = GetScreenWidth();
-		int height = GetScreenHeight();
+		int width = winWidth;
+		int height = winHeight;
 
 		if (!(mouse.x >= windowPos.x and
 			mouse.x <= windowPos.x + width and
@@ -1061,8 +1236,7 @@ public:
 					scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
 					return false;
 				}
-			}
-			else {
+			} else {
 				if (pos.x >= RealPos.x and pos.x <= RealPos.x + RealSize.x and pos.y >= RealPos.y and pos.y <= RealPos.y + RealSize.y) return true;
 			}
 		}
@@ -1074,7 +1248,7 @@ public:
 
 	bool MouseEntered = false;
 
-	void AddEvent(EventType t, std::function<void(Object2D*)> f, MouseButtonType m = NONE) {
+	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE) {
 		events.push_back({ t, f, m });
 	}
 
@@ -1088,6 +1262,7 @@ public:
 		if (updateChildrenZIndex) {
 			updateChildren(this);
 		}
+
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 		eventHandler();
@@ -1230,7 +1405,7 @@ inline Font getFont(const std::string& name) {
 	if (it != Fonts.end())
 		return it->second;
 
-	throw "Font not exist";
+	return Fonts.find(BASIC_FONT_NAME)->second;
 }
 
 struct Clip {
@@ -1447,28 +1622,40 @@ public:
 	ScrollFrame() = delete;
 };
 inline Vector2 getCanvasRealPos(Object2D* obj) {
-	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(obj);
-	if (scra) return 
-	{
-		scra->CanvasPosition.x * scra->RealSize.x + scra->CanvasPositionOFFSET.x,
-		scra->CanvasPosition.y * scra->RealSize.y + scra->CanvasPositionOFFSET.y
-	};
+	if (obj->Class == SCROLLFRAME) {
+		ScrollFrame* scra = static_cast<ScrollFrame*>(obj);
+		return
+		{
+			scra->CanvasPosition.x * scra->RealSize.x + scra->CanvasPositionOFFSET.x,
+			scra->CanvasPosition.y * scra->RealSize.y + scra->CanvasPositionOFFSET.y
+		};
+	}
+	
 	return { 0,0 };
 }
 
 inline Vector2 getScrollFrameRS(Instance* sc) {
-	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(sc);
-	if (scra) return scra->RealSize;
+	if (sc->Class == SCROLLFRAME) {
+		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
+		return scra->RealSize;
+	}
+
 	return { 0,0 };
 }
 inline Vector2 getScrollFrameRP(Instance* sc) {
-	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(sc);
-	if (scra) return scra->RealPos;
+	if (sc->Class == SCROLLFRAME) {
+		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
+		return scra->RealPos;
+	}
+
 	return { 0,0 };
 }
 inline bool isScrollFrameCropping(Instance* sc) {
-	ScrollFrame* scra = dynamic_cast<ScrollFrame*>(sc);
-	if (scra) return scra->CropDescendants;
+	if (sc->Class == SCROLLFRAME) {
+		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
+		return scra->CropDescendants;
+	}
+
 	return false;
 }
 
@@ -1481,10 +1668,6 @@ class TextLabel : public Object2D {
 	int lastMaxVisible = -1;
 	Vector3 textParams{};
 	Vector2 lastRealSize{};
-#ifndef TEXTLABEL_DIRTY_OPTIMIZATION
-	std::string lastText{};
-	std::string lastFont = "";
-#endif
 	RenderTexture2D cachedText{};
 	Vector2 newSize{};
 	Vector2 lastNewSize{};
@@ -1518,24 +1701,16 @@ class TextLabel : public Object2D {
 				visibleText = Text.substr(0, idx);
 				visibleText += "...";
 			}
-		}
-		else {
-			visibleText = Text;
+		} else {
+			visibleText = !Text;
 		}
 
-		textParams = getTextCFrame(visibleText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+		textParams = getTextCFrame(visibleText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 		lastRealSize = RealSize;
-#ifndef TEXTLABEL_DIRTY_OPTIMIZATION
-		lastText = Text;
-		lastFont = font;
-#else
-		TextChanged = false;
-		FontChanged = false;
-#endif
 		lastParams = textParams;
 		lastMaxVisible = MaxVisibleSymbols;
 
-		newSize = MeasureTextEx(getFont(font), visibleText.c_str(), textParams.z, Spacing);
+		newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
 
 		if (cachedText.id == 0 or lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
 			if (cachedText.id != 0) {
@@ -1557,18 +1732,16 @@ class TextLabel : public Object2D {
 
 			BeginTextureMode(cachedText);
 			ClearBackground(BLANK);
-			DrawTextEx(getFont(font), visibleText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+			DrawTextEx(getFont(!FontFace), visibleText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
 			EndTextureMode();
 			SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
 
 			if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
-	std::string Text = "";
-	bool TextChanged = true;
-	std::string font = "Arial";
-	bool FontChanged = true;
 public:
+	SUI_Text Text = "";
+	SUI_Text FontFace = BASIC_FONT_NAME;
 	float TextTransparency = 0.0f;
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	Color TextColor = { 0,0,0,255 };
@@ -1577,26 +1750,20 @@ public:
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
 
-	const std::string& GetText() const {
+	const SUI_Text& GetText() const {
 		return Text;
 	}
 
 	void SetText(const std::string& T) {
-		if (Text != T) {
-			TextChanged = true;
-			Text = T;
-		}
+		Text = T;
 	}
 
-	const std::string& GetFont() const {
-		return font;
+	const SUI_Text& GetFont() const {
+		return FontFace;
 	}
 
 	void SetFont(const std::string& F) {
-		if (font != F) {
-			FontChanged = true;
-			font = F;
-		}
+		FontFace = F;
 	}
 
 	void Draw() override {
@@ -1610,7 +1777,7 @@ public:
 
 			ScrollFrame* ancestor = nullptr;
 			Instance* c = findFirstAncestorOfClass(SCROLLFRAME);
-			if (c) ancestor = dynamic_cast<ScrollFrame*>(c);
+			if (c) ancestor = static_cast<ScrollFrame*>(c);
 			if (ancestor and ancestor->CropDescendants) {
 				if (RealPos.x + RealSize.x + BorderThickness < ancestor->RealPos.x or
 					RealPos.y + RealSize.y + BorderThickness < ancestor->RealPos.y or
@@ -1622,19 +1789,17 @@ public:
 
 			Object2D::Draw();
 
-#ifndef TEXTLABEL_DIRTY_OPTIMIZATION
-			bool dirtyCondition = lastText != Text or lastFont != font;
-#else
-			bool dirtyCondition = TextChanged or FontChanged;
-#endif
+			bool dirtyCondition = Text.isChanged() or FontFace.isChanged();
+			Text.restate();
+			FontFace.restate();
 
-			if (lastParams.z != textParams.z or cachedText.id == 0 or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
+			if (lastParams.z != textParams.z or (cachedText.id == 0 and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
 				updateTexture();
 			} else {
 				if (std::fabsf(lastRealSize.x - RealSize.x) >= TextTextureUpdateAspect or std::fabsf(lastRealSize.y - RealSize.y) >= TextTextureUpdateAspect) {
 					lastRealSize = RealSize;
-					newSize = MeasureTextEx(getFont(font), visibleText.c_str(), textParams.z, Spacing);
-					textParams = getTextCFrame(visibleText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+					newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
+					textParams = getTextCFrame(visibleText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 				}
 			}
 
@@ -1773,56 +1938,43 @@ class TextBox : public Object2D {
 
 	std::vector<int> charOffsets;
 	Vector3 textParams{};
-	std::string lastText{};
 	RenderTexture2D cachedText;
 	TextBox* lastFocused = nullptr;
-	std::string lastPlaceholder;
 	Vector2 newSize{};
 	Vector2 lastRealSize{};
-	std::string lastFont = "";
 	Vector3 lastParams = Vector3{};
 	char lastHideText = '\0';
 	Vector2 lastNewSize{};
 	TextBoxType lastType = TextResizing;
 	int lastCursorIndex = -1;
-
-	std::string Text = "";
 	float viewportPosition = 0;
-
-	std::function<void(Object2D*)> TextChanged;
 
 	void updateTextParams() {
 		if (Type == Viewported) {
 			textParams.y = 0;
 			textParams.x = 0;
 			textParams.z = RealSize.y;
-		}
-		else {
+		} else {
 			if (Text != "") {
-				textParams = getTextCFrame(Text.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-			}
-			else {
-				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(font), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+				textParams = getTextCFrame(Text.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+			} else {
+				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 			}
 		}
 	}
 	void updateTexture() {
 		updateTextParams();
-		lastText = Text;
-		lastPlaceholder = PlaceholderText;
 		lastFocused = FocusedTextBox;
-		lastFont = font;
 		lastParams = textParams;
 		lastRealSize = RealSize;
 		lastHideText = HideText;
 		lastType = Type;
 
 		if (Text != "") {
-			newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, Spacing);
-		}
-		else {
+			newSize = MeasureTextEx(getFont(!FontFace), Text.c_str(), textParams.z, Spacing);
+		} else {
 			if (CursorIndex == -1 or FocusedTextBox != this) {
-				newSize = MeasureTextEx(getFont(font), PlaceholderText.c_str(), textParams.z, Spacing);
+				newSize = MeasureTextEx(getFont(!FontFace), PlaceholderText.c_str(), textParams.z, Spacing);
 			}
 		}
 
@@ -1847,19 +1999,17 @@ class TextBox : public Object2D {
 		if (Text != "") {
 			std::string t;
 			if (HideText == '\0') {
-				t = Text;
-			}
-			else {
+				t = !Text;
+			} else {
 				for (int i = 0; i < Text.size(); i++) {
 					t += HideText;
 				}
 			}
 
-			DrawTextEx(getFont(font), t.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
-		}
-		else {
+			DrawTextEx(getFont(!FontFace), t.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+		} else {
 			if (CursorIndex == -1 or FocusedTextBox != this) {
-				DrawTextEx(getFont(font), PlaceholderText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+				DrawTextEx(getFont(!FontFace), PlaceholderText.c_str(), {0,0}, textParams.z, Spacing, {255,255,255,255});
 			}
 		}
 
@@ -1869,7 +2019,9 @@ class TextBox : public Object2D {
 	}
 public:
 	Color CursorColor = { 0,0,0,255 };
-	std::string PlaceholderText = "PlaceholderText";
+	SUI_Text Text = "";
+	SUI_Text FontFace = BASIC_FONT_NAME;
+	SUI_Text PlaceholderText = "PlaceholderText";
 	Color PlaceholderTextColor = { 150, 150, 150, 255 };
 	Color TextColor = { 0,0,0,255 };
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
@@ -1877,7 +2029,6 @@ public:
 	int maxSymbols = 20;
 	float TextTransparency = 0;
 	std::string AllowedSymbols = "";
-	std::string font = "Arial";
 	int Spacing = defaultSpacing;
 	char HideText = '\0';
 	bool ClearOnClick = true;
@@ -1905,24 +2056,27 @@ public:
 
 		Object2D::Draw();
 
-		if (lastPlaceholder != PlaceholderText or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or lastFont != font or ((FocusedTextBox == this and lastFocused != this) or (lastFocused == this and FocusedTextBox != this))) {
+		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged();
+
+		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or ((FocusedTextBox == this and lastFocused != this) or (lastFocused == this and FocusedTextBox != this))) {
 			updateTexture();
-		} else if (lastText != Text) {
+		} else if (Text.isChanged()) {
 			updateTexture();
-			if (TextChanged) {
-				TextChanged(this);
-			}
 		} else {
 			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
 				updateTextParams();
 				if (Text == "") {
-					newSize = MeasureTextEx(getFont(font), PlaceholderText.c_str(), textParams.z, Spacing);
+					newSize = MeasureTextEx(getFont(!FontFace), PlaceholderText.c_str(), textParams.z, Spacing);
 				}
 				else {
-					newSize = MeasureTextEx(getFont(font), Text.c_str(), textParams.z, Spacing);
+					newSize = MeasureTextEx(getFont(!FontFace), Text.c_str(), textParams.z, Spacing);
 				}
 			}
 		}
+
+		Text.restate();		
+		FontFace.restate();
+		PlaceholderText.restate();
 
 		if (textParams.z > 1) {
 			if (cachedText.id == 0) {
@@ -1949,7 +2103,7 @@ public:
 		if (Text == "") {
 			if (CursorVisible and FocusedTextBox == this) {
 				if (textParams.z > 3) {
-					float sizeY = MeasureTextEx(getFont(font), " ", textParams.z, Spacing).y;
+					float sizeY = MeasureTextEx(getFont(!FontFace), " ", textParams.z, Spacing).y;
 					DrawLineEx({ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - ((Type == Viewported) ? viewportPosition : 0), RealPos.y + textParams.y + 2 }, { RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - ((Type == Viewported) ? viewportPosition : 0), RealPos.y + textParams.y + sizeY - 4 }, CursorSize, CursorColor);
 				}
 			}
@@ -1965,29 +2119,18 @@ public:
 				}
 			}
 
-			Vector2 size = MeasureTextEx(getFont(font), textBeforeCursor.c_str(), textParams.z, Spacing);
+			Vector2 size = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
 
 			if (size.x == 0 and size.y == 0) {
-				size.y = MeasureTextEx(getFont(font), "a", textParams.z, Spacing).y;
+				size.y = MeasureTextEx(getFont(!FontFace), "a", textParams.z, Spacing).y;
 			}
 
 			DrawLineEx({ RealPos.x + textParams.x + size.x + 2 - ((Type == Viewported) ? viewportPosition : 0), RealPos.y + textParams.y + 2 }, { RealPos.x + textParams.x + size.x + 2 - ((Type == Viewported) ? viewportPosition : 0), RealPos.y + textParams.y + size.y - 4 }, CursorSize, CursorColor);
 		}
 	}
 
-	void Update() override {
-		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
-		if (!(FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
-
-		getRealObject2Dsize();
-		getRealObject2Dposition();
-		eventHandler();
-
-		SameUpdate();
-
-		if (updateChildrenZIndex) {
-			updateChildren(this);
-		}
+	void inputHandler() {
+		// CURSOR
 
 		if (FocusedTextBox == this and deleteText and ClearOnClick) {
 			Text = "";
@@ -1995,8 +2138,6 @@ public:
 			deleteText = false;
 			updateCharOffsets();
 		}
-
-		// CURSOR
 
 		CursorTime += dt;
 		if (CursorTime >= CursorCooldown) { CursorVisible = !CursorVisible; CursorTime = 0.0f; }
@@ -2008,10 +2149,15 @@ public:
 			if (higherObject != this and higherObject) {
 				if (higherObject->Class == TEXTBOX) {
 					FocusedTextBox = static_cast<TextBox*>(higherObject);
-				} else {
+				}
+				else {
 					FocusedTextBox = nullptr;
 				}
-			} else if (pointInObject(mousePosition) and higherObject == this) {
+			}
+			else if (not higherObject) {
+				FocusedTextBox = nullptr;
+			}
+			else if (pointInObject(mousePosition) and higherObject == this) {
 				CursorTime = 0.0f;
 				CursorVisible = true;
 				FocusedTextBox = this;
@@ -2023,7 +2169,7 @@ public:
 					}
 				}
 				else {
-					text = Text;
+					text = !Text;
 				}
 
 				updateTextParams();
@@ -2034,7 +2180,7 @@ public:
 					}
 				}
 				else {
-					textBeforeCursor = Text;
+					textBeforeCursor = !Text;
 				}
 
 				float textStartX = RealPos.x + textParams.x;
@@ -2043,8 +2189,8 @@ public:
 				CursorIndex = 0;
 				if (!text.empty()) {
 					for (int i = 1; i < charOffsets.size(); i++) {
-						float widthPrev = MeasureTextEx(getFont(font), text.substr(0, charOffsets[i - 1]).c_str(), textParams.z, Spacing).x;
-						float widthCurr = MeasureTextEx(getFont(font), text.substr(0, charOffsets[i]).c_str(), textParams.z, Spacing).x;
+						float widthPrev = MeasureTextEx(getFont(!FontFace), text.substr(0, charOffsets[i - 1]).c_str(), textParams.z, Spacing).x;
+						float widthCurr = MeasureTextEx(getFont(!FontFace), text.substr(0, charOffsets[i]).c_str(), textParams.z, Spacing).x;
 						if (clickX < (widthPrev + widthCurr) / 2.0f) {
 							CursorIndex = i - 1;
 							break;
@@ -2076,7 +2222,7 @@ public:
 						case 3: keyValue = key.shiftRU; break;
 						default: keyValue = key.defaultEN;
 						}
-					
+
 						if (AllowedSymbols != "") {
 							bool allowed = false;
 							for (char c : AllowedSymbols) {
@@ -2121,7 +2267,8 @@ public:
 								c == '/' or c == '\\' or c == '\'' or
 								c == '\"') {
 								start--;
-							} else {
+							}
+							else {
 								while (start > 0) {
 									c = Text[charOffsets[start - 1]];
 
@@ -2143,7 +2290,8 @@ public:
 
 						updateCharOffsets();
 					}
-				} else {
+				}
+				else {
 					if (CursorIndex > 0) {
 						Text = Text.substr(0, charOffsets[CursorIndex - 1]) + Text.substr(charOffsets[CursorIndex]);
 						CursorIndex--;
@@ -2186,7 +2334,8 @@ public:
 
 						CursorIndex--;
 					}
-				} else {
+				}
+				else {
 					CursorIndex--;
 				}
 
@@ -2218,7 +2367,8 @@ public:
 
 						CursorIndex++;
 					}
-				} else {
+				}
+				else {
 					CursorIndex++;
 				}
 
@@ -2229,6 +2379,24 @@ public:
 				CursorTime = 0.0f;
 			}
 		}
+	}
+
+	void Update() override {
+		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
+		if (!(FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
+
+		getRealObject2Dsize();
+		getRealObject2Dposition();
+
+		inputHandler();
+
+		eventHandler();
+
+		SameUpdate();
+
+		if (updateChildrenZIndex) {
+			updateChildren(this);
+		}
 
 		if (Type == Viewported) {
 			if (lastCursorIndex != CursorIndex) {
@@ -2236,9 +2404,10 @@ public:
 
 				if (Text.empty() or CursorIndex == -1) {
 					viewportPosition = 0.0f;
-				} else {
+				}
+				else {
 					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-					Vector2 textSize = MeasureTextEx(getFont(font), textBeforeCursor.c_str(), textParams.z, Spacing);
+					Vector2 textSize = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
 
 					float currentX = textSize.x;
 
@@ -2298,12 +2467,8 @@ public:
 		CursorIndex = t.size();
 	}
 
-	std::string GetText() const {
+	const SUI_Text& GetText() const {
 		return Text;
-	}
-
-	void OnTextChanged(std::function<void(Object2D*)> f) {
-		TextChanged = f;
 	}
 
 	TextBox* Clone() const override {
@@ -2338,9 +2503,11 @@ class ImageLabel : public Object2D {
 	constexpr static InstanceType DefaultClass = IMAGELABEL;
 
 	Texture2D tex{};
-	int lastId = -1;
-	bool imageOwner = false;
+	std::string currentPair;
+	bool isMemoryLoadedTex = false;
 
+	/* Previous version of ImageLabel textures system
+	
 	void updateTexture() {
 		if ((tex.id == 0 or lastId != tex.id) and image.data) {
 			if (tex.id != 0) {
@@ -2355,8 +2522,9 @@ class ImageLabel : public Object2D {
 			SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
 		}
 	}
+	
+	*/
 public:
-	Image image{};
 	ImageOverlayFormat Overlay = FIT;
 	float ImageTransparency = 0.0f;
 	Color ImageColor = { 255,255,255,255 };
@@ -2364,38 +2532,15 @@ public:
 	float Rotation = 0;
 	Vector2 Origin = { 0, 0 };
 
-	void setImage(std::string way = "") {
-		if (way == "" or way == "\n") {
-			imageOwner = false;
-			if (imageOwner and image.data) UnloadImage(image);
-			if (tex.id != 0) {
-				UnloadTexture(tex);
-				imageOwner = false;
-				tex.id = 0;
-			}
-			return;
-		}
-
-		if (imageOwner and image.data) UnloadImage(image);
-		imageOwner = true;
-		image = LoadImage(way.c_str());
-		if (tex.id != 0) {
+	void setImage(const std::string& name = "") {
+		if (isMemoryLoadedTex) {
+			isMemoryLoadedTex = false;
 			UnloadTexture(tex);
 		}
 
-		lastId = -1818489;
-	}
-
-	void setImage(Image im) {
-		if (imageOwner and image.data) UnloadImage(image);
-		imageOwner = false;
-		image = im;
-		if (tex.id != 0) {
-			UnloadTexture(tex);
-			tex.id = 0;
-		}
-
-		lastId = -1010101;
+		auto pair = getImage(name);
+		tex = pair.second;
+		currentPair = name;
 	}
 
 	void Draw() override {
@@ -2411,35 +2556,32 @@ public:
 
 		if (tex.id) {
 			Rectangle destRec = { RealPos.x + Origin.x, RealPos.y + Origin.y, RealSize.x, RealSize.y };
-			Rectangle srcRec = { 0, 0, image.width, image.height };
+			Rectangle srcRec = { 0, 0, tex.width, tex.height };
 
 			if (Overlay == FIT) {
-				float imageAspect = (float)image.width / image.height;
+				float imageAspect = (float)tex.width / tex.height;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
 					float scaledHeight = RealSize.x / imageAspect;
 					destRec.y += (RealSize.y - scaledHeight) / 2.0f;
 					destRec.height = scaledHeight;
-				}
-				else {
+				} else {
 					float scaledWidth = RealSize.y * imageAspect;
 					destRec.x += (RealSize.x - scaledWidth) / 2.0f;
 					destRec.width = scaledWidth;
 				}
-			}
-			else if (Overlay == CROP) {
-				float imageAspect = (float)image.width / image.height;
+			} else if (Overlay == CROP) {
+				float imageAspect = (float)tex.width / tex.height;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
-					float cropWidth = image.height * rectAspect;
-					srcRec.x = (image.width - cropWidth) / 2.0f;
+					float cropWidth = tex.height * rectAspect;
+					srcRec.x = (tex.width - cropWidth) / 2.0f;
 					srcRec.width = cropWidth;
-				}
-				else {
-					float cropHeight = image.width / rectAspect;
-					srcRec.y = (image.height - cropHeight) / 2.0f;
+				} else {
+					float cropHeight = tex.width / rectAspect;
+					srcRec.y = (tex.height - cropHeight) / 2.0f;
 					srcRec.height = cropHeight;
 				}
 			}
@@ -2473,65 +2615,43 @@ public:
 				BeginShaderMode(shader);
 				DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 				EndShaderMode();
-			}
-			else {
+			} else {
 				DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 			}
+		} else {
+			setImage(currentPair);
 		}
 	}
 
-	void UpdateWithType(const std::string& type, std::vector<unsigned char>& data) {
-		if (imageOwner and image.data) UnloadImage(image);
-
-		image = LoadImageFromMemory(type.c_str(), data.data(), data.size());
+	void UpdateFromMemory(const std::string& type, const std::vector<unsigned char>& data) {
+		Image image = LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (!image.data) {
-			std::cout << "LoadImageFromMemory FAILED" << std::endl;
+			std::cout << "UpdateFromMemory FAILED" << std::endl;
 		}
 
-		if (tex.id != 0 and imageOwner) UnloadTexture(tex);
+		if (tex.id != 0 and isMemoryLoadedTex) UnloadTexture(tex);
 	
-		imageOwner = true;
+		isMemoryLoadedTex = true;
 		tex = LoadTextureFromImage(image);
 		GenTextureMipmaps(&tex);
 		SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
 		SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
-	}
-
-	void Update() override {
-		RelativeSCalculated = false;
-		RelativePCalculated = false;
-		if (!Visible) return;
-
-		SameUpdate();
-
-		if (updateChildrenZIndex) {
-			updateChildren(this);
-		}
-
-		getRealObject2Dsize();
-		getRealObject2Dposition();
-		eventHandler();
-		updateTexture();
-		Draw();
-
-		for (int i = 0; i < Children.size(); i++) {
-			Instance* child = Children[i];
-			child->Update();
-		}
+		currentPair = "";
 	}
 
 	ImageLabel* Clone() const override {
 		ImageLabel* i = new ImageLabel(*this);
-		i->Parent = nullptr;
+		i->setParent(nullptr);
 		i->Children.clear();
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
 
-		i->imageOwner = false;
-		i->tex.id = 0;
-		i->setImage(this->image);
+		if (isMemoryLoadedTex) {
+			i->isMemoryLoadedTex = false;
+			i->tex.id = 0;
+		}
 
 		return i;
 	}
@@ -2542,8 +2662,7 @@ public:
 	ImageLabel() = delete;
 
 	~ImageLabel() {
-		if (imageOwner) UnloadImage(image);
-		if (tex.id != 0) UnloadTexture(tex);
+		if (tex.id != 0 and isMemoryLoadedTex) UnloadTexture(tex);
 	}
 };
 
@@ -2658,6 +2777,91 @@ public:
 		if (texture.id != 0 and owner) UnloadTexture(texture);
 	}
 };
+
+inline void Object2D::eventHandler() {
+	bool mouseOnObject = pointInObject(mousePosition);
+	for (const auto& [type, func, mouse] : events) {
+		switch (type) {
+			case TICK: {
+				func(this);
+				break;
+			} case MOUSE_ENTER: {
+				if (mouseOnObject) {
+					if (Visible and ((higherObject == this and PreviousHigherObject != this) or CanBeEnteredIfNotHigher)) {
+						MouseEntered = true;
+						func(this);
+					}
+				}
+				break;
+			} case MOUSE_LEAVE: {
+				if (MouseEntered and (!Visible or higherObject != this or !mouseOnObject)) {
+					MouseEntered = false;
+					func(this);
+				}
+				break;
+			} case MOUSE_CLICK: {
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+					func(this);
+				}
+				break;
+			} case MOUSE_HOLD_START: {
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+					if (mouse == LEFT) {
+						startedOnObject1 = true;
+					}
+					else if (mouse == RIGHT) {
+						startedOnObject2 = true;
+					}
+					else if (mouse == MIDDLE) {
+						startedOnObject3 = true;
+					}
+					func(this);
+				}
+				break;
+			} case MOUSE_HOLD_END: {
+				if (IsMouseButtonReleased(mouse)) {
+					if (mouse == LEFT) {
+						if (startedOnObject1) {
+							func(this);
+						}
+					} else if (mouse == RIGHT) {
+						if (startedOnObject2) {
+							func(this);
+						}
+					} else if (mouse == MIDDLE) {
+						if (startedOnObject3) {
+							func(this);
+						}
+					}
+				}
+				break;
+			} case CHILD_ADDED: {
+				for (Instance* obj : childsAddedInFrame) {
+					func(this, obj);
+				}
+				break;
+			} case CHILD_REMOVED: {
+				for (Instance* obj : childsRemovedInFrame) {
+					func(this, obj);
+				}
+				break;
+			} case TEXT_CHANGED: {
+				if (Class == TEXTLABEL) {
+					if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				} else if (Class == TEXTBOX) {
+					if (static_cast<TextBox*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				}
+			}
+		}
+	}
+
+	childsRemovedInFrame.clear();
+	childsAddedInFrame.clear();
+}
 
 inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, int quality = 60) {
     Image img = LoadImage(path.c_str());
@@ -2776,7 +2980,7 @@ inline namespace debug {
 		sas->SetText(text);
 		sas->BackgroundTransparency = 1;
 		sas->TextColor = typeColor[currentColor]; sas->TextSize = -1;
-		sas->SetFont("Arial");
+		sas->SetFont(BASIC_FONT_NAME);
 		sas->TextAnchor = TextAnchorEnum::W;
 		sas->setParent(console);
 	}
@@ -2856,7 +3060,7 @@ inline namespace debug {
 		AnimButton->SetFont("rog");
 		AnimButton->Name = "animButton";
 		AnimButton->Active = true;
-		AnimButton->AddEvent(MOUSE_CLICK, [](Object2D* t) {Animations = !Animations; }, LEFT);
+		AnimButton->AddEvent(MOUSE_CLICK, [](Instance* t) {Animations = !Animations; }, LEFT);
 		AnimButton->Roundness = 0.3;
 
 		TextLabel* LGMlabel = new TextLabel(SettingsFrame);
@@ -2881,7 +3085,7 @@ inline namespace debug {
 		LGMbutton->SetFont("rog");
 		LGMbutton->Name = "LGMbutton";
 		LGMbutton->Active = true;
-		LGMbutton->AddEvent(MOUSE_CLICK, [](Object2D* t) {lowGraphicsMode = !lowGraphicsMode; }, LEFT);
+		LGMbutton->AddEvent(MOUSE_CLICK, [](Instance* t) {lowGraphicsMode = !lowGraphicsMode; }, LEFT);
 		LGMbutton->Roundness = 0.3;
 
 		TextLabel* FPSlabel = new TextLabel(SettingsFrame);
@@ -2912,7 +3116,7 @@ inline namespace debug {
 		FPSleft->SetFont("rog");
 		FPSleft->Name = "FPSleft";
 		FPSleft->Active = true;
-		FPSleft->AddEvent(MOUSE_CLICK, [](Object2D* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
+		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
 		TextLabel* FPSquantity = new TextLabel(FPSframe);
 		FPSquantity->Size = { 0.5, 1 };
 		FPSquantity->BackgroundTransparency = 1;
@@ -2934,7 +3138,7 @@ inline namespace debug {
 		FPSright->SetFont("rog");
 		FPSright->Name = "FPSright";
 		FPSright->Active = true;
-		FPSright->AddEvent(MOUSE_CLICK, [](Object2D* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
+		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
 
 		TextLabel* Colorlabel = new TextLabel(SettingsFrame);
 		Colorlabel->Size = { 0.65, 0.2 };
@@ -2964,7 +3168,7 @@ inline namespace debug {
 		Colorleft->SetFont("rog");
 		Colorleft->Name = "Colorleft";
 		Colorleft->Active = true;
-		Colorleft->AddEvent(MOUSE_CLICK, [](Object2D* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
+		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
 		Object2D* ColorBlock = new TextLabel(Colorframe);
 		ColorBlock->Size = { 0.5, 0.8 };
 		ColorBlock->BackgroundColor = DefaultDebugColor;
@@ -2982,7 +3186,7 @@ inline namespace debug {
 		Colorright->SetFont("rog");
 		Colorright->Name = "Colorright";
 		Colorright->Active = true;
-		Colorright->AddEvent(MOUSE_CLICK, [](Object2D* t) { currentColor++; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
+		Colorright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor++; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
 
 		/******************
 		*       logs      *
@@ -3017,7 +3221,7 @@ inline namespace debug {
 		console->Position = { 0, 0.07 };
 		console->SliderColor = { 255,255,255,255 };
 		console->Name = "consoleLogs";
-		console->OnChildAdded([](Instance* child) {
+		console->AddEvent(CHILD_ADDED, [](Instance* child) {
 			int n = console->Children.size();
 			std::ostringstream s; s << n;
 			TextLabel* c = static_cast<TextLabel*>(child);
@@ -3026,7 +3230,7 @@ inline namespace debug {
 			c->Position = { 0, 0.05f * (n - 1) };
 			console->CanvasSize.y += 0.05 - (n > 20 ? 0 : 0.05);
 			console->CanvasPosition.y = console->CanvasSize.y - 1;
-			});
+		});
 		console->Active = true;
 		print("Debug inited");
 		for (int i = 0; i < textQueue.size(); i++) {
@@ -3128,7 +3332,7 @@ inline namespace debug {
 					}
 				}
 			}
-			});
+		});
 
 		new ChangedSignal<int>(currentFPSindex, [FPSquantity]() { SetTargetFPS((typeFPS[currentFPSindex] == 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : typeFPS[currentFPSindex]); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str())); });
 		new ChangedSignal<bool>(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->SetText(Animations ? " On " : " Off ");});
@@ -3169,7 +3373,7 @@ inline namespace debug {
 						element2->SetText(">");
 					}
 
-					element->AddEvent(MOUSE_CLICK, [i](Object2D* t) { currentInstance = objects[i]; }, LEFT);
+					element->AddEvent(MOUSE_CLICK, [i](Instance* t) { currentInstance = objects[i]; }, LEFT);
 				}
 
 				way->CanvasSize.x = objects.size() * 0.25 - 0.05;
@@ -3193,7 +3397,7 @@ inline namespace debug {
 					element->SetText(pupupupu.str());
 					element->Active = true;
 					element->TextAnchor = TextAnchorEnum::W;
-					element->AddEvent(MOUSE_CLICK, [i, dec](Object2D* t) { currentInstance = objects2[i - dec]; }, LEFT);
+					element->AddEvent(MOUSE_CLICK, [i, dec](Instance* t) { currentInstance = objects2[i - dec]; }, LEFT);
 				}
 
 				treeScroll->CanvasSize.y = (currentInstance->Children.size() - dec) * 0.05;
@@ -3234,6 +3438,9 @@ void SUI_SetMinimalWindowSize(int newX, int newY) {
 	windowMinimalSize = { (float)newX, (float)newY };
 }
 
+bool ALLOW_DEBUG = true;
+bool ALLOW_FPS = true;
+
 void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = 4) {
 	SetConfigFlags(flags);
 	SetTraceLogLevel(LOG_NONE);
@@ -3249,14 +3456,25 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	if (iconName != "") SetWindowIcon(LoadImage(iconName));
 
 	SetExitKey(KEY_NULL);
-	createFont("Arial", "Fonts/arial.ttf", 100);
-	createFont("rog", "Fonts/rogFont.otf", 50);
-	loadNewShader("TextureRoundness", "", "simpleUI Shaders/texture_roundness.frag");
+
+	createFont(BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
+	createFont("rog", "Fonts/rogFont.otf", 50); // Basic font 2
+	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader
 
 	for (auto& tup : queuedFonts) {
 		createFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));
 	}
 	queuedFonts.clear();
+
+	for (auto& pair : pendingImages) {
+		Texture tex = LoadTextureFromImage(pair.second);
+		GenTextureMipmaps(&tex);
+		SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
+		SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
+		loadedImages.insert({ pair.first, {pair.second, tex} });
+	}
+
+	pendingImages.clear();
 
 	while (programRunning and !WindowShouldClose()) {
 		if (IsWindowFullscreen()) ToggleFullscreen();
@@ -3265,6 +3483,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 			changeWindowSizeB = false;
 		}
 		mousePosition = GetMousePosition();
+		mouseScreenPosition = GetMouseScreenPosition();
+		windowPosition = GetWindowPosition();
 		winWidth = GetScreenWidth(); winHeight = GetScreenHeight();
 
 		static long middleFPS = 0;
@@ -3294,10 +3514,21 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 			for (auto it = parent->Children.rbegin(); it != parent->Children.rend(); ++it) {
 				Instance* child = *it;
-				auto obj = dynamic_cast<Object2D*>(child);
-				
+
 				int nextDepth = localDepth;
 				bool isTarget = false;
+
+				if (child->Class == INSTANCE or child->Class == LINEEX) { // experemental branch. if not working then delete
+					if (getTop(child, nextDepth)) {
+						foundInThisBranch = true;
+					}
+
+					if (foundInThisBranch) {
+						return true;
+					}
+				}
+
+				auto obj = static_cast<Object2D*>(child); // dynamic_cast if upper branch not working
 
 				if (obj) {
 					if (!obj->Visible) continue;
@@ -3331,8 +3562,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		PreviousHigherObject = higherObject;
 		higherObject = best;
 
-		if (IsKeyPressed(KEY_F1)) { toggleFPS(&StartInstance, {125, 180, 220, 255}); }
-		if (IsKeyPressed(KEY_F2)) { debug::toggleDebug(&StartInstance); }
+		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, {125, 180, 220, 255}); }
+		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }
 		if (IsKeyPressed(KEY_F3)) { std::cout << accurateFPS << std::endl; }
 
 		DrawFrame(&StartInstance);

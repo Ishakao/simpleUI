@@ -37,30 +37,32 @@ int main() {
 	TextLabel* Hello = new TextLabel(Root);
 	Hello->AnchorPosition = { 0.5, 0.5 };
 	Hello->Position = { 0.5, 0.5 };
-	Hello->PositionOFFSET = { -200, 0 };
+	Hello->PositionOFFSET = { -350, 0 };
 	Hello->SizeOFFSET = { 340, 80 };
-	Hello->SetFont("SegoeB");
-	Hello->SetText(" Hello ");
+	Hello->FontFace = "SegoeB";
+	Hello->Text = " Hello ";
 	Hello->Roundness = 0.2;
 	Hello->Active = true;
 	Hello->BorderThickness = 3;
 	Hello->TextColor = { 224, 244, 244, 255 };
 	Hello->BorderColor = { 0, 51, 25, 255 };
 	Hello->BackgroundColor = { 0, 204, 0, 255 };
-	Hello->AddEvent(MOUSE_ENTER, [Hello](Object2D* th) {
+	Hello->AddEvent(MOUSE_ENTER, [Hello](Instance* th) {
 		Animate::Create(&Hello->SizeOFFSET, 0.4, { 400, 100 }, Animate::Bounce, Animate::Out);
 	});
-	Hello->AddEvent(MOUSE_LEAVE, [Hello](Object2D* th) {
+	Hello->AddEvent(MOUSE_LEAVE, [Hello](Instance* th) {
 		Animate::Create(&Hello->SizeOFFSET, 0.4, { 340, 80 }, Animate::Bounce, Animate::Out);
 	});
+	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) {Hello->Text += "1";}, LEFT);
+	Hello->AddEvent(TEXT_CHANGED, [Hello](Instance* th) {std::cout << !Hello->Text << std::endl;}, LEFT);
 
 	TextBox* World = new TextBox(Root);
 	World->AnchorPosition = { 0.5, 0.5 };
 	World->Position = { 0.5, 0.5 };
 	World->PositionOFFSET = { 200, 0 };
 	World->SizeOFFSET = { 340, 80 };
-	World->font = "SegoeB";
-	World->SetText(" World ");
+	World->FontFace = "SegoeB";
+	World->Text = " World ";
 	World->PlaceholderText = " World ";
 	World->maxSymbols = 10;
 	World->CursorColor = { 0, 102, 102, 255 };
@@ -70,12 +72,17 @@ int main() {
 	World->TextColor = { 224, 244, 244, 255 };
 	World->BackgroundColor = { 0, 102, 204, 255 };
 	World->BorderColor = { 0, 102, 102, 255 };
-	World->AddEvent(MOUSE_ENTER, [World](Object2D* th) {
+	World->AddEvent(MOUSE_ENTER, [World](Instance* th) {
 		Animate::Create(&World->SizeOFFSET, 0.4, { 400, 100 }, Animate::Bounce, Animate::Out);
 	});
-	World->AddEvent(MOUSE_LEAVE, [World](Object2D* th) {
+	World->AddEvent(MOUSE_LEAVE, [World](Instance* th) {
 		Animate::Create(&World->SizeOFFSET, 0.4, { 340, 80 }, Animate::Bounce, Animate::Out);
 	});
+	World->AddEvent(CHILD_ADDED, [](Instance* th, Instance* child) {
+		std::cout << "Child added " << child->Name << std::endl;
+	});
+	World->AddEvent(TEXT_CHANGED, [World](Instance* th) { std::cout << !World->Text << std::endl; });
+	Hello->setParent(World);
 
 	ALLOW_FPS = true; // Allows to show FPS label on F1
 	ALLOW_DEBUG = true; // Allows to show debug menu on F2

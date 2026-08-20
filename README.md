@@ -1,7 +1,7 @@
 <h1>simpleUI</h1>
 
 <p>
-    <a href="https://github.com/Ishakao/simpleUI"><img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version"></a>
+    <a href="https://github.com/Ishakao/simpleUI"><img src="https://img.shields.io/badge/version-1.0.1-blue.svg" alt="Version"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
 </p>

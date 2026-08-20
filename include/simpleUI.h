@@ -1,16 +1,17 @@
-//////////////////////////////////////////////////////////////////////
-//																	//
-// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI		//
-// Current Version 1.0.1											//
-//																	//
-// Changed Logs:													//
-// Better child event system										//
-// Text class for convinient management of text-objects		        //
-// Additional events for objects (like TEXT_CHANGED on text-objects //
-// Textures RAM & VRAM optimization								    //
-// A few CPU optimizations											//
-//																    //
-//////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////
+//																							//
+// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI								//
+// Current Version 1.0.1																	//
+//																							//
+// Changed Logs:																			//
+// Better child event system																//
+// Text class for convinient management of text-objects										//
+// Additional events for objects (like TEXT_CHANGED on text-objects)						//
+// Textures RAM & VRAM optimization															//
+// A few CPU optimizations																	//
+// Spacial Grid optimization for ScrollFrame (millions of objects with thousands of FPS)    //
+//																							//
+//////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
 #ifdef _WIN32
@@ -26,6 +27,7 @@
 #include <sstream>
 #include <functional>
 #include <unordered_map>
+#include <set>
 #include <tuple>
 #include <algorithm>
 #include <cstdint>
@@ -33,19 +35,98 @@
 #include <fstream>
 #include <mutex>
 
+class Object2D;
+
+void updateObject2DVector(Object2D*);
+
+struct SpecialVector2 {
+	template <size_t Index>
+	struct num {
+		float n{};
+
+		SpecialVector2* getOwner() {
+			size_t offset = (Index == 0) ? offsetof(SpecialVector2, x) : offsetof(SpecialVector2, y);
+			return reinterpret_cast<SpecialVector2*>(reinterpret_cast<char*>(this) - offset);
+		}
+
+		operator float() const { return n; }
+
+		template <typename T>
+		num& operator=(T val) {
+			float new_val = static_cast<float>(val);
+			if (n != new_val) {
+				n = new_val;
+				SpecialVector2* owner = getOwner();
+				if (owner->alarmWhenChanged and owner->parentalObj) {
+					updateObject2DVector(owner->parentalObj);
+				}
+			}
+			return *this;
+		}
+
+		num& operator=(const num& other) {
+			return *this = other.n;
+		}
+
+		num& operator+=(float val) { return *this = (n + val); }
+		num& operator-=(float val) { return *this = (n - val); }
+		num& operator*=(float val) { return *this = (n * val); }
+		num& operator/=(float val) { return *this = (n / val); }
+	};
+
+	using num_x = num<0>;
+	using num_y = num<1>;
+
+	Object2D* parentalObj = nullptr;
+	bool alarmWhenChanged = true;
+
+	num_x x;
+	num_y y;
+
+	SpecialVector2() = default;
+
+	SpecialVector2(float x_val, float y_val, Object2D* parental = nullptr) : parentalObj(parental), x{ x_val }, y{ y_val } {}
+
+	SpecialVector2(const Vector2& other) : x{ other.x }, y{ other.y } {}
+
+	operator Vector2() const {
+		return { x.n, y.n };
+	}
+
+	SpecialVector2& operator=(const Vector2& other) {
+		if (alarmWhenChanged and (x.n != other.x or y.n != other.y)) {
+			bool prev = alarmWhenChanged;
+			alarmWhenChanged = false;
+			x = other.x;
+			y = other.y;
+			alarmWhenChanged = prev;
+
+			if (parentalObj) {
+				updateObject2DVector(parentalObj);
+			}
+		}
+		else {
+			x.n = other.x;
+			y.n = other.y;
+		}
+		return *this;
+	}
+};
+
 inline int winWidth = 0;
 inline int winHeight = 0;
 inline int defaultSpacing = 0;
 inline float dt = 0;
-inline Vector2 changeWindowSize = { 0,0 };
+inline SpecialVector2 changeWindowSize = { 0,0 };
 inline bool changeWindowSizeB = false;
 inline int accurateFPS = 0;
 inline bool programRunning = true;
-Vector2 mousePosition;
-Vector2 mouseScreenPosition;
-Vector2 windowPosition;
+SpecialVector2 mousePosition;
+SpecialVector2 mouseScreenPosition;
+SpecialVector2 windowPosition;
 inline constexpr const char* BASIC_FONT_NAME = "Arial";
 inline std::unordered_map<std::string, Shader> Shaders;
+inline long currentUniqueObjectID = 0;
 
 inline std::mutex ImagesLoadingMtx;
 inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
@@ -277,6 +358,10 @@ public:
 		}
 	}
 
+	operator std::string() {
+		return text;
+	}
+
 	SUI_Text(const SUI_Text& other) {
 		text = !other;
 		changed = true;
@@ -498,26 +583,34 @@ namespace Animate {
 		float endValueF{};
 		Color startValueC{};
 		Color endValueC{};
-		Vector2 startValueV{};
-		Vector2 endValueV{};
+		SpecialVector2::num_x startValueNX{};
+		SpecialVector2::num_x startValueNY{};
+		SpecialVector2::num_y endValueNX{};
+		SpecialVector2::num_y endValueNY{};
+		SpecialVector2 startValueV{};
+		SpecialVector2 endValueV{};
 
 		const char* type = "int";
 	public:
 		std::function<void(void)> Completed = []() {};
 
-		bool Update(float dt) {
+		bool Update() {
 			currentTime += dt;
 			if (currentTime >= endTime) {
 				if (type == "int") { *(int*)ptr = endValueI; }
 				else if (type == "float") { *(float*)ptr = endValueF; }
 				else if (type == "color") { *(Color*)ptr = endValueC; }
-				else if (type == "vector2") { *(Vector2*)ptr = endValueV; }
+				else if (type == "vector2") { *(SpecialVector2*)ptr = endValueV; }
+				else if (type == "numx") { *(SpecialVector2::num_x*)ptr = endValueNX; }
+				else if (type == "numy") { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
 			if (type == "int") { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
 			else if (type == "float") { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
-			else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime));; }
-			else if (type == "vector2") { *(Vector2*)ptr = { sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
+			else if (type == "vector2") { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == "numx") { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime));}
+			else if (type == "numy") { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime));}
 			return false;
 		}
 
@@ -525,7 +618,9 @@ namespace Animate {
 		Animation(int* ptr, float time, int endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 		Animation(float* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 		Animation(Color* ptr, float time, Color endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(Vector2* ptr, float time, Vector2 endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2* ptr, float time, SpecialVector2 endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_x* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_y* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 	};
 
 	Animation* Create(int* ptr, float time, int endValue, Function func = Linear, Ease ease = In) {
@@ -546,16 +641,28 @@ namespace Animate {
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(Vector2* ptr, float time, Vector2 endValue, Function func = Linear, Ease ease = In) {
+	Animation* Create(SpecialVector2* ptr, float time, SpecialVector2 endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "vector2", func, ease);
+		ActiveAnimations.insert({ ptr, s });
+		return s;
+	}
+	Animation* Create(SpecialVector2::num_x* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "numx", func, ease);
+		ActiveAnimations.insert({ ptr, s });
+		return s;
+	}
+	Animation* Create(SpecialVector2::num_y* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+		deleteCurrent((void*)ptr);
+		Animation* s = new Animation(ptr, time, endValue, "numy", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 
 	void UpdateAnimations(float t) {
 		for (auto it = ActiveAnimations.begin(); it != ActiveAnimations.end();) {
-			if (it->second->Update(t)) {
+			if (it->second->Update()) {
 				Animation* sas = it->second;
 				it = ActiveAnimations.erase(it);
 				sas->Completed();
@@ -580,7 +687,7 @@ enum class TextAnchorEnum {
 	CENTER = 8,
 };
 
-inline Vector2 getTextOffset(TextAnchorEnum anchor) {
+inline SpecialVector2 getTextOffset(TextAnchorEnum anchor) {
 	float offsetX{};
 	float offsetY{};
 
@@ -606,7 +713,7 @@ inline Vector3 getTextCFrame(const char* text, Font font, Rectangle rec, TextAnc
 	int endY{};
 	float endSize = 1;
 	float sizeMax = maxTextSize;
-	Vector2 textSize{};
+	SpecialVector2 textSize{};
 
 	while (endSize < sizeMax) {
 		float middle = (endSize + sizeMax + 1) / 2;
@@ -616,7 +723,7 @@ inline Vector3 getTextCFrame(const char* text, Font font, Rectangle rec, TextAnc
 	}
 
 	if (endSize > maxTextSize) endSize = maxTextSize;
-	Vector2 ofst = getTextOffset(anchor);
+	SpecialVector2 ofst = getTextOffset(anchor);
 	float offsetX = ofst.x;
 	float offsetY = ofst.y;
 
@@ -639,6 +746,9 @@ inline TextBox* FocusedTextBox = nullptr;
 inline Object2D* PreviousHigherObject = nullptr;
 inline Object2D* higherObject = nullptr;
 
+inline std::unordered_map<long, Instance*> deletedObjectsByID;
+inline std::unordered_map<Instance*, long> deletedObjectsByPtr;
+
 enum InstanceType {
 	INSTANCE = 0,
 	OBJECT2D,
@@ -648,6 +758,7 @@ enum InstanceType {
 	SCROLLFRAME,
 	TEXTURELABEL,
 	LINEEX,
+
 	STRING_VALUE,
 	INT_VALUE,
 	BOOL_VALUE,
@@ -656,16 +767,33 @@ enum InstanceType {
 	ADDRESS_VALUE,
 	VECTOR2_VALUE,
 	COLOR_VALUE,
+
 	FOLDER
 };
+
+Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
 
 template<typename Z>
 inline void Delete(Z* ptr) {
 	if (!ptr) return;
 
-	if (ptr->Class == IMAGELABEL) {
-		static_cast<ImageLabel*>(ptr)->setImage("");
+	if (ptr->Parent) {
+		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr});
+		deletedObjectsByID.insert({ptr->uniqueID, ptr});
+		deletedObjectsByPtr.insert({ptr, ptr->uniqueID});
+
+		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
+		if (it != ptr->Parent->childsAddedInFrame.end()) {
+			ptr->Parent->childsAddedInFrame.erase(it);
+		}
+
+		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
+
+		if (scrollChild) {
+			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+		}
 	}
+
 	std::vector<Instance*> z = ptr->Children;
 	for (int i = 0; i < z.size(); i++) {
 		Instance* child = z[i];
@@ -687,7 +815,7 @@ struct InstanceCallback {
 
 	InstanceCallback() = default;
 
-	template < typename F, typename = std::enable_if_t< !std::is_same_v<std::decay_t<F>, InstanceCallback>>>
+	template<typename F, typename=std::enable_if_t< !std::is_same_v<std::decay_t<F>, InstanceCallback>>>
 	InstanceCallback(F&& f) {
 		if constexpr (std::is_invocable_v<F, Instance*, Instance*>) {
 			func = std::forward<F>(f);
@@ -705,29 +833,48 @@ struct InstanceCallback {
 	}
 };
 
+size_t framesSinceStart = 0;
+
 class Instance {
 protected:
-	std::vector<Instance*> childsAddedInFrame;
-	std::vector<Instance*> childsRemovedInFrame;
+	size_t lastUpdateFrame = 0;
+public:
+	const long uniqueID = -1;
+	std::unordered_map<long, Instance*> childsAddedInFrame;
+	std::unordered_map<long, Instance*> childsRemovedInFrame;
 private:
 	std::vector<std::pair<EventType, InstanceCallback>> events;
 
-	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE) {
-		events.push_back({ t, f });
-	}
+	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 public:
+	bool hasEvent(EventType t) const {
+		for (auto& [type, _] : events) {
+			if (type == t) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	bool updateChildrenZIndex = true;
 
 	Instance* Parent = nullptr;
 	std::vector<Instance*> Children;
 
 	std::string Name = "Instance";
-	InstanceType Class = INSTANCE;
+	InstanceType Class;
 
 	bool __ParentObject{};
 
-	Instance(bool a) : __ParentObject(a) {};
-	Instance(Instance* p) : Parent(p) { if (p) { p->Children.push_back(this); p->childsAddedInFrame.push_back(this); p->updateChildrenZIndex = true; } }
+	Instance(bool a) : __ParentObject(true), uniqueID(currentUniqueObjectID++) {};
+	Instance(Instance* p) : Parent(p), uniqueID(currentUniqueObjectID++) {
+		if (p) { 
+			p->Children.push_back(this); 
+			p->childsAddedInFrame.insert({ p->uniqueID, this }); 
+			p->updateChildrenZIndex = true; 
+		}
+	}
 	Instance() = delete;
 
 	virtual ~Instance() {}
@@ -747,18 +894,20 @@ public:
 				}
 			}
 
-			Parent->childsRemovedInFrame.push_back(this);
+			if (Parent->childsRemovedInFrame.find(this->uniqueID) == Parent->childsRemovedInFrame.end()) {
+				Parent->childsRemovedInFrame.insert({ this->uniqueID, ptr });
+			}
 		}
 
 		Parent = ptr;
 		if (ptr) {
 			ptr->Children.push_back(this);
 			ptr->updateChildrenZIndex = true;
-			ptr->childsAddedInFrame.push_back(this);
+			ptr->childsAddedInFrame.insert({ this->uniqueID, this });
 		}
 	}
 
-	Instance* findChild(const std::string& name) {
+	Instance* findChild(const std::string& name) const {
 		for (auto obj : Children) {
 			if (obj->Name == name) {
 				return obj;
@@ -882,12 +1031,14 @@ public:
 			if (type == TICK) {
 				func(this);
 			} else if (type == CHILD_ADDED) {
-				for (Instance* obj : childsAddedInFrame) {
-					func(this, obj);
+				for (auto& [id, ptr] : childsAddedInFrame) {
+					if (childsRemovedInFrame.contains(id)) continue;
+					func(this, ptr);
 				}
 			} else if (type == CHILD_REMOVED) {
-				for (Instance* obj : childsRemovedInFrame) {
-					func(this, obj);
+				for (auto& [id, ptr] : childsRemovedInFrame) {
+					if (childsAddedInFrame.contains(id)) continue;
+					func(this, ptr);
 				}
 			}
 		}
@@ -897,6 +1048,9 @@ public:
 	}
 
 	virtual void Update() {
+		if (lastUpdateFrame == framesSinceStart) return;
+		lastUpdateFrame = framesSinceStart;
+
 		if (updateChildrenZIndex) {
 			updateChildren(this);
 		}
@@ -920,6 +1074,53 @@ public:
 		return i;
 	}
 };
+
+Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr) {
+	while (ptr->Parent != nullptr and !ptr->__ParentObject) {
+		if (ptr->Parent->Class == SCROLLFRAME) return ptr;
+		ptr = ptr->Parent;
+	}
+
+	return nullptr;
+}
+
+bool Is2DInheritor(Instance* obj) {
+	if (obj->Class == INSTANCE or
+		obj->Class == LINEEX or
+		obj->Class == STRING_VALUE or
+		obj->Class == BOOL_VALUE or
+		obj->Class == VECTOR2_VALUE or
+		obj->Class == INT_VALUE or
+		obj->Class == FLOAT_VALUE or
+		obj->Class == OBJECT_VALUE or
+		obj->Class == ADDRESS_VALUE or
+		obj->Class == COLOR_VALUE or
+		obj->Class == FOLDER
+		) {
+		return false;
+	}
+
+	return true;
+}
+
+bool Is2DInheritor(InstanceType type) {
+	if (type == INSTANCE or
+		type == LINEEX or
+		type == STRING_VALUE or
+		type == BOOL_VALUE or
+		type == VECTOR2_VALUE or
+		type == INT_VALUE or
+		type == FLOAT_VALUE or
+		type == OBJECT_VALUE or
+		type == ADDRESS_VALUE or
+		type == COLOR_VALUE or
+		type == FOLDER
+		) {
+		return false;
+	}
+
+	return true;
+}
 
 class StringValue : public Instance {
 	constexpr static const char* DefaultName = "StringValue";
@@ -998,7 +1199,7 @@ class Vector2Value : public Instance {
 	constexpr static const char* DefaultName = "Vector2Value";
 	constexpr static InstanceType DefaultClass = VECTOR2_VALUE;
 public:
-	Vector2 Value = { 0,0 };
+	SpecialVector2 Value = { 0,0 };
 
 	Vector2Value(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	Vector2Value(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
@@ -1029,18 +1230,20 @@ public:
 	Folder() = delete;
 };
 
-inline Vector2 getCanvasRealPos(Object2D*);
-inline Vector2 getScrollFrameRS(Instance*);
-inline Vector2 getScrollFrameRP(Instance*);
+inline SpecialVector2 getCanvasRealPos(Object2D*);
+inline SpecialVector2 getScrollFrameRS(Instance*);
+inline SpecialVector2 getScrollFrameRP(Instance*);
 inline bool isScrollFrameCropping(Instance*);
+
+enum SUI_EEC {
+	EEC_DEFAULT = 0,
+	EEC_EVERY_ENTER,
+	EEC_IF_DESCENDANT_HIGHER
+};
 
 class Object2D : public Instance {
 	constexpr static const char* DefaultName = "Object2D";
 	constexpr static InstanceType DefaultClass = OBJECT2D;
-
-	bool isMouseButton1Down = false;
-	bool isMouseButton2Down = false;
-	bool isMouseButton3Down = false;
 
 	bool startedOnObject1 = false;
 	bool startedOnObject2 = false;
@@ -1049,10 +1252,8 @@ class Object2D : public Instance {
 	bool lastActive = Active;
 	int lastZIndex = ZIndex;
 protected:
-	bool RelativePCalculated = false;
-	bool RelativeSCalculated = false;
-	Vector2 RelativePosition{};
-	Vector2 RelativeSize{};
+	SpecialVector2 RelativePosition{};
+	SpecialVector2 RelativeSize{};
 	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
 	void SameUpdate() {
@@ -1064,19 +1265,40 @@ protected:
 				Parent->updateChildrenZIndex = true;
 			}
 		}
+
+		childsRemovedInFrame.clear();
+		childsAddedInFrame.clear();
 	} 
 
 	void eventHandler();
+	void PosOrSizeChanged();
+	void updateAncestorWhichParentIsScroll();
 public:
-	Vector2 RealSize{};
-	Vector2 RealPos{};
-	bool CanBeEnteredIfNotHigher = false;
-	Vector2 PositionOFFSET = {};
-	Vector2 SizeOFFSET = {};
-	Vector2 AnchorPositionOFFSET = {};
-	Vector2 Position{};
-	Vector2 Size{};
-	Vector2 AnchorPosition{};
+	bool RelativePCalculated = false;
+	bool RelativeSCalculated = false;
+	void VectorChanged() {
+		PosOrSizeChanged();
+	}
+
+	bool hasEvent(EventType t) const {
+		for (auto& [type, _, __] : events) {
+			if (type == t) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	SpecialVector2 RealSize{0,0,this}; // Absolute size in pixels (not for changing from somewhere)
+	SpecialVector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
+	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
+	SpecialVector2 PositionOFFSET = { 0,0,this };
+	SpecialVector2 SizeOFFSET = {};
+	SpecialVector2 AnchorPositionOFFSET = { 0,0,this };
+	SpecialVector2 Position{ 0,0,this };
+	SpecialVector2 Size{};
+	SpecialVector2 AnchorPosition{ 0,0,this };
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 0,0,0,255 };
@@ -1093,15 +1315,13 @@ public:
 	bool Active = false;
 
 	void getRealObject2Dsize() {
-		Vector2 sizePx = {};
-
+		SpecialVector2 sizePx = {};
 		Object2D* self = this;
-
 		Instance* current = Parent;
 		Object2D* parent2D = nullptr;
 
 		while (current) {
-			if (current->Class == INSTANCE or current->Class == LINEEX) {
+			if (!Is2DInheritor(current)) {
 				if (current->Parent) { current = current->Parent; continue; }
 				parent2D = nullptr;
 				break;
@@ -1111,89 +1331,88 @@ public:
 			break;
 		}
 
-		Vector2 parentSizePx = parent2D ? parent2D->RealSize : Vector2{ (float)winWidth, (float)winHeight };
+		SpecialVector2 parentSizePx = parent2D ? parent2D->RealSize : SpecialVector2{ static_cast<float>(winWidth), static_cast<float>(winHeight) };
 
 		sizePx.x = parentSizePx.x * self->Size.x + self->SizeOFFSET.x;
 		sizePx.y = parentSizePx.y * self->Size.y + self->SizeOFFSET.y;
 
 		RelativeSCalculated = true;
 		RealSize = sizePx;
-		RelativeSize = { sizePx.x / winWidth, sizePx.y / winHeight };
+		RelativeSize = SpecialVector2{ sizePx.x / winWidth, sizePx.y / winHeight };
 	}
 
 	void getRealObject2Dposition() {
 		if (!RelativeSCalculated) getRealObject2Dsize();
 
-		Vector2 posPx = { 0.0f, 0.0f };
-		Vector2 sizePx = RealSize;
+		SpecialVector2 posPx = { 0.0f, 0.0f };
+		SpecialVector2 sizePx = RealSize;
 
-		Vector2 anchorPx = {
+		SpecialVector2 anchorPx = {
 			sizePx.x * AnchorPosition.x + AnchorPositionOFFSET.x,
 			sizePx.y * AnchorPosition.y + AnchorPositionOFFSET.y
 		};
 
-		Vector2 localPx = {
+		SpecialVector2 localPx = {
 			0.0f,
 			0.0f
 		};
 
 		Instance* current = Parent;
 		while (current) {
-			if (current->Class == INSTANCE or current->Class == LINEEX) { current = current->Parent; continue; }
+			if (!Is2DInheritor(current)) { current = current->Parent; continue; }
 
 			Object2D* obj = static_cast<Object2D*>(current);
 			if (!obj->RelativeSCalculated) obj->getRealObject2Dsize();
-			if (!obj->RelativePCalculated and obj->Class != SCROLLFRAME) obj->getRealObject2Dposition();
+			if (!obj->RelativePCalculated) obj->getRealObject2Dposition();
 
-			Vector2 parentSizePx = obj->RealSize;
+			SpecialVector2 parentSizePx = obj->RealSize;
 
-			Vector2 parentAnchorPx = {
+			SpecialVector2 parentAnchorPx = {
 				obj->RealSize.x * obj->AnchorPosition.x + obj->AnchorPositionOFFSET.x,
 				obj->RealSize.y * obj->AnchorPosition.y + obj->AnchorPositionOFFSET.y
 			};
 
-			Vector2 parentLocalPx = {
+			SpecialVector2 parentLocalPx = {
 				obj->Position.x * parentSizePx.x + obj->PositionOFFSET.x - parentAnchorPx.x,
 				obj->Position.y * parentSizePx.y + obj->PositionOFFSET.y - parentAnchorPx.y
 			};
 
-			Vector2 parentPosPx = obj->RealPos;
+			SpecialVector2 parentPosPx = obj->RealPos;
 			if (!obj->RelativePCalculated) parentPosPx = parentLocalPx;
 
-			Vector2 myLocalPx = {
+			SpecialVector2 myLocalPx = {
 				parentSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x,
 				parentSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y
 			};
 
 			if (obj->Class == SCROLLFRAME) {
-				Vector2 canvasPx = getCanvasRealPos(obj);
+				SpecialVector2 canvasPx = getCanvasRealPos(obj);
 				posPx.x = parentPosPx.x + myLocalPx.x - canvasPx.x;
 				posPx.y = parentPosPx.y + myLocalPx.y - canvasPx.y;
-			}
-			else {
+			} else {
 				posPx.x = parentPosPx.x + myLocalPx.x;
 				posPx.y = parentPosPx.y + myLocalPx.y;
 			}
 
-			RelativePosition = { posPx.x / winWidth, posPx.y / winHeight };
+			RelativePosition = SpecialVector2{ posPx.x / winWidth, posPx.y / winHeight };
 			RealPos = posPx;
 			RelativePCalculated = true;
 			return;
 		}
 
-		Vector2 rootSizePx = { (float)winWidth, (float)winHeight };
-		Vector2 rootLocalPx = {
+		SpecialVector2 rootSizePx = { (float)winWidth, (float)winHeight };
+		SpecialVector2 rootLocalPx = {
 			rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x,
 			rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y
 		};
 
 		RealPos = rootLocalPx;
-		RelativePosition = { RealPos.x / winWidth, RealPos.y / winHeight };
+		RelativePosition = SpecialVector2{ RealPos.x / winWidth, RealPos.y / winHeight };
 		RelativePCalculated = true;
 	}
 
-	Vector2 getMousePosition() {
-		Vector2 mousePos = mousePosition;
+	SpecialVector2 getMousePosition() {
+		SpecialVector2 mousePos = mousePosition;
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
 	}
 
@@ -1216,9 +1435,9 @@ public:
 		}
 	}
 
-	bool pointInObject(Vector2 pos) {
-		Vector2 mouse = mouseScreenPosition;
-		Vector2 windowPos = windowPosition;
+	bool pointInObject(SpecialVector2 pos) {
+		SpecialVector2 mouse = mouseScreenPosition;
+		SpecialVector2 windowPos = windowPosition;
 
 		int width = winWidth;
 		int height = winHeight;
@@ -1228,8 +1447,8 @@ public:
 			mouse.y >= windowPos.y and
 			mouse.y <= windowPos.y + height)) return false;
 		if (Parent and Parent->Class == SCROLLFRAME) {
-			Vector2 scrRS = getScrollFrameRS(Parent);
-			Vector2 scrRP = getScrollFrameRP(Parent);
+			SpecialVector2 scrRS = getScrollFrameRS(Parent);
+			SpecialVector2 scrRP = getScrollFrameRP(Parent);
 			bool cropping = isScrollFrameCropping(Parent);
 			if (cropping) {
 				if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
@@ -1248,11 +1467,12 @@ public:
 
 	bool MouseEntered = false;
 
-	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE) {
-		events.push_back({ t, f, m });
-	}
+	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE);
 
 	void Update() override {
+		if (lastUpdateFrame == framesSinceStart) return;
+		lastUpdateFrame = framesSinceStart;
+
 		RelativeSCalculated = false;
 		RelativePCalculated = false;
 		if (!Visible) return;
@@ -1285,19 +1505,34 @@ public:
 		return i;
 	}
 
-	Object2D(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	Object2D(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+	Object2D(bool a) : Instance(a) { 
+		Name = DefaultName; 
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	};
+
+	Object2D(Instance* p) : Instance(p) { 
+		Name = DefaultName; 
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	}
 
 	Object2D() = delete;
 };
+
+void updateObject2DVector(Object2D* o) {
+	o->VectorChanged();
+}
 
 class LineEx : public Instance { // it cannot contain Object2D inheritors inside itself  |  only necessary for drawing lines  | Unstable
 	constexpr static const char* DefaultName = "LineEx";
 	constexpr static InstanceType DefaultClass = LINEEX;
 
-	std::pair<Vector2, Vector2> getRealObject2Dposition() {
-		Vector2 pos1 = { Position1.x, Position1.y };
-		Vector2 pos2 = { Position2.x, Position2.y };
+	std::pair<SpecialVector2, SpecialVector2> getRealObject2Dposition() {
+		SpecialVector2 pos1 = { Position1.x, Position1.y };
+		SpecialVector2 pos2 = { Position2.x, Position2.y };
 		Instance* current = Parent;
 
 		while (current) {
@@ -1312,13 +1547,13 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 
 			if (obj->__ParentObject) break;
 
-			Vector2 parentPos = {
+			SpecialVector2 parentPos = {
 				obj->Position.x - obj->AnchorPosition.x * obj->Size.x,
 				obj->Position.y - obj->AnchorPosition.y * obj->Size.y
 			};
 
 			if (obj->Class == SCROLLFRAME) {
-				Vector2 CanvasPosition = getCanvasRealPos(obj);
+				SpecialVector2 CanvasPosition = getCanvasRealPos(obj);
 
 				pos1.x = parentPos.x + (pos1.x - CanvasPosition.x);
 				pos1.y = parentPos.y + (pos1.y - CanvasPosition.y);
@@ -1341,8 +1576,8 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 	}
 
 public:
-	Vector2 Position1{};
-	Vector2 Position2{};
+	SpecialVector2 Position1{};
+	SpecialVector2 Position2{};
 	Color LineColor{};
 	int Thickness = 5;
 	int ZIndex = 0;
@@ -1356,6 +1591,9 @@ public:
 	}
 
 	void Update() override {
+		if (lastUpdateFrame == framesSinceStart) return;
+		lastUpdateFrame = framesSinceStart;
+
 		eventHandler();
 		Draw();
 	}
@@ -1442,14 +1680,227 @@ inline void PopClip() {
 class ScrollFrame : public Object2D {
 	constexpr static const char* DefaultName = "ScrollFrame";
 	constexpr static InstanceType DefaultClass = SCROLLFRAME;
+	constexpr static unsigned int GridSectorSize = 512;
+
+	struct ScrollSector {
+		int X = 0;
+		int Y = 0;
+		std::unordered_map<long, Instance*> Objects;
+	};
+
+	std::unordered_map<int, std::unordered_map<int, ScrollSector*>> Grid;
+	std::unordered_map<long, std::vector<ScrollSector*>> SectorsOnObject;
+
+	std::vector<Instance*> Tick;
+	std::unordered_map<long, Instance*> isTick;
 public:
-	Vector2 CanvasSize = { 1,1 };
-	Vector2 CanvasPosition = { 0,0 };
-	Vector2 CanvasSizeOFFSET = { 0,0 };
-	Vector2 CanvasPositionOFFSET = { 0,0 };
-	Vector2 CanvasAbsoluteSize = {0,0};
-	Vector2 CanvasAbsolutePosition = {0,0};
-	float ScrollSpeed = 0.5;
+	std::vector<ScrollSector*> sectorsOnView;
+private:
+	void SectorsAddChild(Instance* child) {
+		if (!child) return;
+
+		UpdateSectors(child);
+
+		if (child->hasEvent(TICK)) {
+			Tick.push_back(child);
+			isTick.insert({ child->uniqueID, child });
+		}
+	}
+
+	void SectorsRemoveChild(long childID) {
+		if (childID == -1) return;
+
+		auto it4 = toUpdateSectors.find(childID);
+		if (it4 != toUpdateSectors.end()) {
+			toUpdateSectors.erase(it4);
+		}
+
+		auto it = SectorsOnObject.find(childID);
+		if (it != SectorsOnObject.end()) {
+			for (ScrollSector* sector : it->second) {
+				auto it2 = sector->Objects.find(childID);
+				if (it2 != sector->Objects.end()) {
+					sector->Objects.erase(it2);
+				}
+			}
+			SectorsOnObject.erase(it);
+		}
+
+		auto it2 = isTick.find(childID);
+		if (it2 != isTick.end()) {
+			Instance* ptr = it2->second;
+			isTick.erase(it2);
+			for (int i = 0; i < Tick.size(); i++) {
+				if (Tick[i] == ptr) {
+					Tick.erase(Tick.begin() + i);
+					break;
+				}
+			}
+		}
+	}
+
+	std::vector<std::pair<int, int>> getSectors(Instance* generalObj) const {
+		std::vector<std::pair<int, int>> sectors;
+
+		static std::function<void(Instance*, std::vector<std::pair<int, int>>&)> sectorsCalculate = [](Instance* obj, std::vector<std::pair<int, int>>& sect) {
+			if (Is2DInheritor(obj)) {
+				Object2D* casted = static_cast<Object2D*>(obj);
+				if (!casted->RelativeSCalculated) {
+					casted->getRealObject2Dsize();
+				}
+
+				SpecialVector2 pos = { casted->Position.x * casted->Size.x + casted->PositionOFFSET.x - (casted->BorderTransparency != 1 ? casted->BorderThickness : 0), casted->Position.y * casted->Size.y + casted->PositionOFFSET.y - (casted->BorderTransparency != 1 ? casted->BorderThickness : 0) };
+				SpecialVector2 lastpos = { pos.x + casted->RealSize.x + (casted->BorderTransparency != 1 ? casted->BorderThickness*2 : 0), pos.y + casted->RealSize.y + (casted->BorderTransparency != 1 ? casted->BorderThickness * 2 : 0) };
+
+
+				for (int i = pos.x / GridSectorSize; i <= lastpos.x / GridSectorSize; i++) {
+					for (int j = pos.y / GridSectorSize; j <= lastpos.y / GridSectorSize; j++) {
+						sect.push_back({ i, j });
+					}
+				}
+			}
+
+			for (Instance* child : obj->Children) {
+				sectorsCalculate(child, sect);
+			}
+		};
+
+		sectorsCalculate(generalObj, sectors);
+
+		return sectors;
+	}
+
+	void addObjToSector(Instance* obj, int x, int y) {
+		ScrollSector* sector = nullptr;
+		auto it1 = Grid.find(x);
+		bool founded = false;
+
+		if (it1 != Grid.end()) {
+			auto it2 = it1->second.find(y);
+			if (it2 != it1->second.end()) {
+				sector = it2->second;
+				founded = true;
+			}
+		} else {
+			Grid[x] = {};
+		}
+
+		if (not founded) {
+			sector = new ScrollSector();
+			sector->X = x;
+			sector->Y = y;
+
+			Grid[x][y] = sector;
+		}
+
+		sector->Objects.insert({obj->uniqueID, obj});
+
+		auto it3 = SectorsOnObject.find(obj->uniqueID);
+
+		if (it3 == SectorsOnObject.end()) {
+			SectorsOnObject[obj->uniqueID] = { sector };
+		} else {
+			SectorsOnObject[obj->uniqueID].push_back(sector);
+		}
+	}
+private:
+	SpecialVector2 lastFullSize{};
+	SpecialVector2 lastCanvasFullPosition{};
+
+	void checkAndUpdateCurrentSectors(bool force = false) {
+		SpecialVector2 fullSize = RealSize;
+		SpecialVector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y }; 
+		
+		if (force or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
+			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y) {
+			lastFullSize = fullSize;
+			lastCanvasFullPosition = fullPos;
+			sectorsOnView.clear();
+			SpecialVector2 pos = fullPos;
+			SpecialVector2 lastpos = { fullPos.x + fullSize.x, fullPos.y + fullSize.y };
+
+			Vector2 start = {
+				std::floor(pos.x / GridSectorSize),
+				std::floor(pos.y / GridSectorSize)
+			};
+
+			Vector2 end = {
+				std::floor(lastpos.x / GridSectorSize),
+				std::floor(lastpos.y / GridSectorSize)
+			};
+
+			for (int i = start.x; i <= end.x; i++) {
+				for (int j = start.y; j <= end.y; j++) {
+					ScrollSector* s = nullptr;
+					auto f = Grid.find(i);
+					if (f == Grid.end()) {
+						continue;
+					}
+
+					auto f2 = f->second.find(j);
+
+					if (f2 == f->second.end()) {
+						continue;
+					} else {
+						s = f2->second;
+					}
+
+					sectorsOnView.push_back(s);
+				}
+			}
+		}
+	}
+
+	std::unordered_map<long, Instance*> toUpdateSectors;
+	void secUpd(Instance* child) {
+		if (!child) return;
+		auto checkIt = SectorsOnObject.find(child->uniqueID);
+		if (checkIt == SectorsOnObject.end()) { // new object in Scroll
+			SectorsOnObject.insert({ child->uniqueID, {} });
+			std::vector<std::pair<int, int>> sectors = getSectors(child);
+
+			for (auto& [x, y] : sectors) {
+				addObjToSector(child, x, y);
+			}
+		} else { // updating current sector
+			for (ScrollSector* sector : checkIt->second) {
+				auto it2 = sector->Objects.find(child->uniqueID);
+				if (it2 != sector->Objects.end()) {
+					sector->Objects.erase(it2);
+				}
+			}
+			checkIt->second.clear();
+
+			std::vector<std::pair<int, int>> sectors = getSectors(child);
+
+			for (auto& [x, y] : sectors) {
+				addObjToSector(child, x, y);
+			}
+		}
+	}
+public:
+	void UpdateSectors(Instance* child) {
+		toUpdateSectors.insert({ child->uniqueID, child});
+	}
+
+	void UpdateObjectTickState(Instance* child) {
+		auto it = isTick.find(child->uniqueID);
+		bool hasTick = child->hasEvent(TICK);
+
+		if (hasTick and it == isTick.end()) {
+			isTick.insert({child->uniqueID, child});
+		} else if (!hasTick and it != isTick.end()) {
+			isTick.erase(it);
+		}
+	}
+
+	SpecialVector2 CanvasSize = { 0,0 };
+	SpecialVector2 CanvasPosition = { 0,0 };
+	SpecialVector2 CanvasSizeOFFSET = { 0,0 };
+	SpecialVector2 CanvasPositionOFFSET = { 0,0 };
+	SpecialVector2 CanvasAbsoluteSize = {0,0};
+	SpecialVector2 CanvasAbsolutePosition = {0,0};
+	float ScrollSpeed = 0.25;
 	float ScrollSpeedOFFSET = 0;
 	bool CropDescendants = true;
 	Color SliderColor = { 15,15,15,255 };
@@ -1459,7 +1910,7 @@ public:
 	bool ScrollEnabled = true;
 	bool Animated = false;
 
-	void Draw() {
+	void Draw(bool force=false) {
 		Object2D::Draw();
 
 		bool pushed = false;
@@ -1468,8 +1919,24 @@ public:
 			pushed = true;
 		}
 
-		for (int i = 0; i < Children.size(); i++) {
-			Children[i]->Update();
+		for (auto& [id, ptr] : toUpdateSectors) {
+			secUpd(ptr);
+		}
+
+		toUpdateSectors.clear();
+
+		for (ScrollSector* s : sectorsOnView) {
+			for (auto& [id, ptr] : s->Objects) {
+				ptr->Update();
+			}
+		}
+
+		for (Instance* s : Tick) {
+			s->Update();
+		}
+
+		if (force) {
+			checkAndUpdateCurrentSectors(force);
 		}
 
 		if (pushed) PopClip();
@@ -1477,7 +1944,7 @@ public:
 		if (SliderTransparency != 1 and SliderSize != 0) {
 			if (CanvasSize.y > 1 or CanvasSizeOFFSET.y > RealSize.y) {
 				if (Direction == 'Y' or Direction == 'B') {
-					float totalContentHeight = CanvasSizeOFFSET.y;
+					float totalContentHeight = CanvasSizeOFFSET.y + CanvasSize.y * RealSize.y;
 					if (totalContentHeight < RealSize.y) totalContentHeight = RealSize.y;
 
 					float sliderHeight = RealSize.y * (RealSize.y / totalContentHeight);
@@ -1491,15 +1958,15 @@ public:
 						sliderY += (RealSize.y - sliderHeight) * (currentScrollY / maxScrollY);
 					}
 
-					Vector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
-					Vector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
+					SpecialVector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
+					SpecialVector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
 					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
 				}
 			}
 
 			if (CanvasSize.x > 1 or CanvasSizeOFFSET.x > RealSize.x) {
 				if (Direction == 'X' or Direction == 'B') {
-					float totalContentWidth = CanvasSizeOFFSET.x;
+					float totalContentWidth = CanvasSizeOFFSET.x + CanvasSize.x * RealSize.x;
 					if (totalContentWidth < RealSize.x) totalContentWidth = RealSize.x;
 
 					float sliderWidth = RealSize.x * (RealSize.x / totalContentWidth);
@@ -1513,8 +1980,8 @@ public:
 						sliderX += (RealSize.x - sliderWidth) * (currentScrollX / maxScrollX);
 					}
 
-					Vector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
-					Vector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
+					SpecialVector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
+					SpecialVector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
 					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
 				}
 			}
@@ -1522,6 +1989,9 @@ public:
 	}
 
 	void Update() override {
+		if (lastUpdateFrame == framesSinceStart) return;
+		lastUpdateFrame = framesSinceStart;
+
 		if (!Visible) return;
 		if (CanvasSize.x < 0) CanvasSize.x = 0; if (CanvasSize.y < 0) CanvasSize.y = 0;
 		if (Direction != 'X' and Direction != 'Y' and Direction != 'B') {
@@ -1532,19 +2002,31 @@ public:
 		getRealObject2Dposition();
 		eventHandler();
 
+		bool force = false;
+
+		for (auto& [id, ptr] : childsAddedInFrame) {
+			SectorsAddChild(ptr);
+			force = true;
+		}
+
+		for (auto& [id, ptr] : childsRemovedInFrame) {
+			SectorsRemoveChild(id);
+			force = true;
+		}
+
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
 			updateChildren(this);
 		}
 
-		float maxScrollX = std::max(0.0f, CanvasSizeOFFSET.x - RealSize.x);
-		float maxScrollY = std::max(0.0f, CanvasSizeOFFSET.y - RealSize.y);
+		float maxScrollX = std::max(0.0f, (float)(CanvasSize.x * RealSize.x + CanvasSizeOFFSET.x - RealSize.x));
+		float maxScrollY = std::max(0.0f, (float)(CanvasSize.y * RealSize.y + CanvasSizeOFFSET.y - RealSize.y));
 
-		CanvasPositionOFFSET.x = std::max(0.0f, CanvasPositionOFFSET.x);
-		CanvasPositionOFFSET.y = std::max(0.0f, CanvasPositionOFFSET.y);
-		CanvasPosition.x = std::max(0.0f, CanvasPosition.x);
-		CanvasPosition.y = std::max(0.0f, CanvasPosition.y);
+		CanvasPositionOFFSET.x = std::max(0.0f, (float)CanvasPositionOFFSET.x);
+		CanvasPositionOFFSET.y = std::max(0.0f, (float)CanvasPositionOFFSET.y);
+		CanvasPosition.x = std::max(0.0f, (float)CanvasPosition.x);
+		CanvasPosition.y = std::max(0.0f, (float)CanvasPosition.y);
 
 		float currentScrollX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
 		if (currentScrollX > maxScrollX) {
@@ -1558,7 +2040,19 @@ public:
 			CanvasPositionOFFSET.y = maxScrollY - (RealSize.y * CanvasPosition.y);
 		}
 
-		if ((higherObject == this or (higherObject != this and CanBeEnteredIfNotHigher and pointInObject(mousePosition))) and ScrollEnabled) {
+		bool entered = false;
+
+		bool enterAllowed = (
+			EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+			(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+				EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+			);
+
+		if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+			entered = true;
+		}
+
+		if (entered and ScrollEnabled) {
 			float WheelMove = GetMouseWheelMove();
 			if (WheelMove != 0) {
 				bool isY = (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
@@ -1602,7 +2096,8 @@ public:
 			}
 		}
 
-		Draw();
+		checkAndUpdateCurrentSectors();
+		Draw(force);
 	}
 
 	ScrollFrame* Clone() const override {
@@ -1615,13 +2110,30 @@ public:
 
 		return i;
 	}
+	
+	~ScrollFrame() {
+		for (auto& _ : Grid) {
+			for (auto& [_, s] : _.second) {
+				delete s;
+			}
+		}
+	}
 
-	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true;  };
+	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; }
 
 	ScrollFrame() = delete;
 };
-inline Vector2 getCanvasRealPos(Object2D* obj) {
+
+inline void Object2D::updateAncestorWhichParentIsScroll() {
+	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
+
+	if (scrollChild) {
+		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+	}
+}
+
+inline SpecialVector2 getCanvasRealPos(Object2D* obj) {
 	if (obj->Class == SCROLLFRAME) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(obj);
 		return
@@ -1630,11 +2142,10 @@ inline Vector2 getCanvasRealPos(Object2D* obj) {
 			scra->CanvasPosition.y * scra->RealSize.y + scra->CanvasPositionOFFSET.y
 		};
 	}
-	
 	return { 0,0 };
 }
 
-inline Vector2 getScrollFrameRS(Instance* sc) {
+inline SpecialVector2 getScrollFrameRS(Instance* sc) {
 	if (sc->Class == SCROLLFRAME) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
 		return scra->RealSize;
@@ -1642,7 +2153,7 @@ inline Vector2 getScrollFrameRS(Instance* sc) {
 
 	return { 0,0 };
 }
-inline Vector2 getScrollFrameRP(Instance* sc) {
+inline SpecialVector2 getScrollFrameRP(Instance* sc) {
 	if (sc->Class == SCROLLFRAME) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
 		return scra->RealPos;
@@ -1667,10 +2178,10 @@ class TextLabel : public Object2D {
 	std::string visibleText = "";
 	int lastMaxVisible = -1;
 	Vector3 textParams{};
-	Vector2 lastRealSize{};
+	SpecialVector2 lastRealSize{};
 	RenderTexture2D cachedText{};
-	Vector2 newSize{};
-	Vector2 lastNewSize{};
+	SpecialVector2 newSize{};
+	SpecialVector2 lastNewSize{};
 	Vector3 lastParams = Vector3{};
 	std::vector<int> charOffsets;
 
@@ -1719,7 +2230,7 @@ class TextLabel : public Object2D {
 			
 			if (Text.size()) {
 				cachedText = LoadRenderTexture(newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect);
-				lastNewSize = { newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
+				lastNewSize = SpecialVector2{ newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
 			}
 		}
 
@@ -1809,17 +2320,18 @@ public:
 				}
 				Rectangle sourceRec = { 0.0f, (float)(cachedText.texture.height - newSize.y), (float)newSize.x, -(float)newSize.y };
 				Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
-				Vector2 origin = { 0, 0 };
+				SpecialVector2 origin = { 0, 0 };
 
 				DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
 			}
 		}
 	}
-
+	
 	TextLabel* Clone() const override {
 		TextLabel* i = new TextLabel(*this);
 		i->Parent = nullptr;
 		i->Children.clear();
+
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -1940,11 +2452,11 @@ class TextBox : public Object2D {
 	Vector3 textParams{};
 	RenderTexture2D cachedText;
 	TextBox* lastFocused = nullptr;
-	Vector2 newSize{};
-	Vector2 lastRealSize{};
+	SpecialVector2 newSize{};
+	SpecialVector2 lastRealSize{};
 	Vector3 lastParams = Vector3{};
 	char lastHideText = '\0';
-	Vector2 lastNewSize{};
+	SpecialVector2 lastNewSize{};
 	TextBoxType lastType = TextResizing;
 	int lastCursorIndex = -1;
 	float viewportPosition = 0;
@@ -1984,7 +2496,7 @@ class TextBox : public Object2D {
 			}
 
 			cachedText = LoadRenderTexture(newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect);
-			lastNewSize = { newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
+			lastNewSize = SpecialVector2{ newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
 		}
 
 		bool hadClip = !clipStack.empty();
@@ -2074,20 +2586,16 @@ public:
 			}
 		}
 
-		Text.restate();		
-		FontFace.restate();
-		PlaceholderText.restate();
-
 		if (textParams.z > 1) {
 			if (cachedText.id == 0) {
 				updateTexture();
 			}
 
-			Vector2 sizeToDraw = (Type == Viewported) ? RealSize : newSize;
+			SpecialVector2 sizeToDraw = (Type == Viewported) ? RealSize : newSize;
 
 			Rectangle sourceRec = { (Type == Viewported) ? viewportPosition : 0.0f, (cachedText.texture.height - sizeToDraw.y), sizeToDraw.x, -sizeToDraw.y };
 			Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, sizeToDraw.x, sizeToDraw.y };
-			Vector2 origin = { 0, 0 };
+			SpecialVector2 origin = { 0, 0 };
 
 			Color clr;
 			if (Text == "") {
@@ -2119,7 +2627,7 @@ public:
 				}
 			}
 
-			Vector2 size = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
+			SpecialVector2 size = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
 
 			if (size.x == 0 and size.y == 0) {
 				size.y = MeasureTextEx(getFont(!FontFace), "a", textParams.z, Spacing).y;
@@ -2382,6 +2890,9 @@ public:
 	}
 
 	void Update() override {
+		if (lastUpdateFrame == framesSinceStart) return;
+		lastUpdateFrame = framesSinceStart;
+
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
 		if (!(FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
 
@@ -2407,7 +2918,7 @@ public:
 				}
 				else {
 					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-					Vector2 textSize = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
+					SpecialVector2 textSize = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
 
 					float currentX = textSize.x;
 
@@ -2425,6 +2936,10 @@ public:
 		}
 
 		Draw();
+
+		Text.restate();
+		FontFace.restate();
+		PlaceholderText.restate();
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
@@ -2530,7 +3045,7 @@ public:
 	Color ImageColor = { 255,255,255,255 };
 	bool RoundImage = false;
 	float Rotation = 0;
-	Vector2 Origin = { 0, 0 };
+	SpecialVector2 Origin = { 0, 0 };
 
 	void setImage(const std::string& name = "") {
 		if (isMemoryLoadedTex) {
@@ -2688,7 +3203,7 @@ class TextureLabel : public Object2D {
 public:
 	float Rotation = 0;
 	Color TextureColor = { 255,255,255,255 };
-	Vector2 Origin = { 0, 0 };
+	SpecialVector2 Origin = { 0, 0 };
 
 	void Draw() override {
 		if (Visible) {
@@ -2778,23 +3293,77 @@ public:
 	}
 };
 
+inline void Object2D::PosOrSizeChanged() {
+	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
+
+	if (scrollChild) {
+		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+	}
+}
+
+inline void Object2D::AddEvent(EventType t, InstanceCallback f, MouseButtonType m) {
+	events.push_back({ t, f, m });
+
+	Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
+
+	if (asc) {
+		static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
+	}
+}
+
+inline void Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType m = NONE) {
+	events.push_back({ t, f });
+
+	Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
+
+	if (asc) {
+		static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
+	}
+}
+
 inline void Object2D::eventHandler() {
 	bool mouseOnObject = pointInObject(mousePosition);
+	bool hasStartHold1 = false;
+	bool hasStartHold2 = false;
+	bool hasStartHold3 = false;
+
+	std::function<void(Instance*)> mouseReleased1;
+	std::function<void(Instance*)> mouseReleased2;
+	std::function<void(Instance*)> mouseReleased3;
+
 	for (const auto& [type, func, mouse] : events) {
 		switch (type) {
 			case TICK: {
 				func(this);
 				break;
 			} case MOUSE_ENTER: {
+				bool entered = false;
+
 				if (mouseOnObject) {
-					if (Visible and ((higherObject == this and PreviousHigherObject != this) or CanBeEnteredIfNotHigher)) {
-						MouseEntered = true;
-						func(this);
+					bool enterAllowed = (
+						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject : 
+						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+					);
+					
+					if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+						entered = true;
 					}
+				}
+
+				if (entered and !MouseEntered) {
+					MouseEntered = true;
+					func(this);
 				}
 				break;
 			} case MOUSE_LEAVE: {
-				if (MouseEntered and (!Visible or higherObject != this or !mouseOnObject)) {
+				bool enterAllowed = (
+					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+				);
+
+				if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
 					MouseEntered = false;
 					func(this);
 				}
@@ -2817,32 +3386,39 @@ inline void Object2D::eventHandler() {
 					}
 					func(this);
 				}
+
+				if (mouse == LEFT) {
+					hasStartHold1 = true;
+				}
+				else if (mouse == RIGHT) {
+					hasStartHold2 = true;
+				}
+				else if (mouse == MIDDLE) {
+					hasStartHold3 = true;
+				}
+
 				break;
 			} case MOUSE_HOLD_END: {
 				if (IsMouseButtonReleased(mouse)) {
 					if (mouse == LEFT) {
-						if (startedOnObject1) {
-							func(this);
-						}
+						mouseReleased1 = func;
 					} else if (mouse == RIGHT) {
-						if (startedOnObject2) {
-							func(this);
-						}
+						mouseReleased2 = func;
 					} else if (mouse == MIDDLE) {
-						if (startedOnObject3) {
-							func(this);
-						}
+						mouseReleased3 = func;
 					}
 				}
 				break;
 			} case CHILD_ADDED: {
-				for (Instance* obj : childsAddedInFrame) {
-					func(this, obj);
+				for (auto& [id, ptr] : childsAddedInFrame) {
+					if (childsRemovedInFrame.contains(id)) continue;
+					func(this, ptr);
 				}
 				break;
 			} case CHILD_REMOVED: {
-				for (Instance* obj : childsRemovedInFrame) {
-					func(this, obj);
+				for (auto& [id, ptr] : childsRemovedInFrame) {
+					if (childsAddedInFrame.contains(id)) continue;
+					func(this, ptr);
 				}
 				break;
 			} case TEXT_CHANGED: {
@@ -2855,12 +3431,42 @@ inline void Object2D::eventHandler() {
 						func(this);
 					}
 				}
+				break;
 			}
 		}
 	}
 
-	childsRemovedInFrame.clear();
-	childsAddedInFrame.clear();
+	if (not hasStartHold1 and IsMouseButtonPressed(LEFT) and mouseOnObject and higherObject == this) {
+		startedOnObject1 = true;
+	}
+
+	if (not hasStartHold2 and IsMouseButtonPressed(RIGHT) and mouseOnObject and higherObject == this) {
+		startedOnObject2 = true;
+	}
+
+	if (not hasStartHold3 and IsMouseButtonPressed(MIDDLE) and mouseOnObject and higherObject == this) {
+		startedOnObject3 = true;
+	}
+
+	if (mouseReleased1 and mouseOnObject and startedOnObject1) {
+		mouseReleased1(this);
+	}
+	if (mouseReleased2 and mouseOnObject and startedOnObject2) {
+		mouseReleased2(this);
+	}
+	if (mouseReleased3 and mouseOnObject and startedOnObject3) {
+		mouseReleased3(this);
+	}
+
+	if (IsMouseButtonReleased(LEFT)) {
+		startedOnObject1 = false;
+	}
+	if (IsMouseButtonReleased(RIGHT)) {
+		startedOnObject2 = false;
+	}
+	if (IsMouseButtonReleased(MIDDLE)) {
+		startedOnObject3 = false;
+	}
 }
 
 inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, int quality = 60) {
@@ -2938,8 +3544,8 @@ inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
 		});
 		labelFPS->Name = "FPS_LABEL";
 		labelFPS->Active = false;
-		labelFPS->Size = { 0.15, 0.1 };
-		labelFPS->Position = { 0.85, 0 };
+		labelFPS->Size = SpecialVector2{ 0.15, 0.1 };
+		labelFPS->Position = SpecialVector2{ 0.85, 0 };
 		labelFPS->TextAnchor = TextAnchorEnum::NE;
 		labelFPS->ZIndex = 1000;
 		labelFPS->TextColor = { 0,0,0,255 };
@@ -2996,7 +3602,7 @@ inline namespace debug {
 	void initDebug(Instance* s) {
 		if (debugMenu) return;
 		debugMenu = new Object2D(s);
-		debugMenu->Size = { 1,1 };
+		debugMenu->Size = SpecialVector2{ 1,1 };
 		debugMenu->BackgroundTransparency = 0.9;
 		debugMenu->BackgroundColor = DefaultDebugColor;
 		debugMenu->Visible = false;
@@ -3008,8 +3614,8 @@ inline namespace debug {
 		lowerName->SetText("(F2) Debug Menu");
 		lowerName->TextSize = -1;
 		lowerName->TextColor = DefaultDebugColor;
-		lowerName->Position = { 0.03, 0.9 };
-		lowerName->Size = { 0.24, 0.1 };
+		lowerName->Position = SpecialVector2{ 0.03f, 0.9f };
+		lowerName->Size = SpecialVector2{ 0.24, 0.1 };
 		lowerName->TextAnchor = TextAnchorEnum::SE;
 		lowerName->BackgroundTransparency = 1;
 		lowerName->SetFont("rog");
@@ -3019,8 +3625,8 @@ inline namespace debug {
 		************************/
 
 		Object2D* SettingsFrame = new Object2D(debugMenu);
-		SettingsFrame->Size = { 0.4, 0.25 };
-		SettingsFrame->Position = { 0.04, 0.03 };
+		SettingsFrame->Size = SpecialVector2{ 0.4, 0.25 };
+		SettingsFrame->Position = SpecialVector2{ 0.04, 0.03 };
 		SettingsFrame->BackgroundTransparency = 0.2;
 		SettingsFrame->BorderColor = DefaultDebugColor;
 		SettingsFrame->BorderThickness = 3;
@@ -3031,17 +3637,17 @@ inline namespace debug {
 		SettingsName->SetText("Settings");
 		SettingsName->TextSize = -1;
 		SettingsName->TextColor = DefaultDebugColor;
-		SettingsName->Position = { 0.5, 0 };
-		SettingsName->AnchorPosition = { 0.5, 0 };
-		SettingsName->Size = { 0.8, 0.1 };
+		SettingsName->Position = SpecialVector2{ 0.5, 0 };
+		SettingsName->AnchorPosition = SpecialVector2{ 0.5, 0 };
+		SettingsName->Size = SpecialVector2{ 0.8, 0.1 };
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
 		SettingsName->SetFont("rog");
 
 		TextLabel* AnimLabel = new TextLabel(SettingsFrame);
-		AnimLabel->Size = { 0.7, 0.2 };
+		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
 		AnimLabel->BackgroundTransparency = 1;
-		AnimLabel->Position = { 0, 0.1 };
+		AnimLabel->Position = SpecialVector2{ 0, 0.1 };
 		AnimLabel->SetText(" Animations");
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
 		AnimLabel->TextSize = -1;
@@ -3050,9 +3656,9 @@ inline namespace debug {
 		AnimLabel->Name = "animLabel";
 
 		TextLabel* AnimButton = new TextLabel(SettingsFrame);
-		AnimButton->Size = { 0.19, 0.15 };
+		AnimButton->Size = SpecialVector2{ 0.19, 0.15 };
 		AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
-		AnimButton->Position = { 0.8, 0.125 };
+		AnimButton->Position = SpecialVector2{ 0.8, 0.125 };
 		AnimButton->SetText(Animations ? " On " : " Off ");
 		AnimButton->TextAnchor = TextAnchorEnum::W;
 		AnimButton->TextSize = -1;
@@ -3064,9 +3670,9 @@ inline namespace debug {
 		AnimButton->Roundness = 0.3;
 
 		TextLabel* LGMlabel = new TextLabel(SettingsFrame);
-		LGMlabel->Size = { 0.7, 0.2 };
+		LGMlabel->Size = SpecialVector2{ 0.7, 0.2 };
 		LGMlabel->BackgroundTransparency = 1;
-		LGMlabel->Position = { 0, 0.3 };
+		LGMlabel->Position = SpecialVector2{ 0, 0.3 };
 		LGMlabel->SetText(" Low Graphics Mode");
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
 		LGMlabel->TextSize = -1;
@@ -3075,9 +3681,9 @@ inline namespace debug {
 		LGMlabel->Name = "LGMlabel";
 
 		TextLabel* LGMbutton = new TextLabel(SettingsFrame);
-		LGMbutton->Size = { 0.19, 0.15 };
+		LGMbutton->Size = SpecialVector2{ 0.19, 0.15 };
 		LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
-		LGMbutton->Position = { 0.8, 0.325 };
+		LGMbutton->Position = SpecialVector2{ 0.8, 0.325 };
 		LGMbutton->SetText(lowGraphicsMode ? " On " : " Off ");
 		LGMbutton->TextAnchor = TextAnchorEnum::W;
 		LGMbutton->TextSize = -1;
@@ -3089,9 +3695,9 @@ inline namespace debug {
 		LGMbutton->Roundness = 0.3;
 
 		TextLabel* FPSlabel = new TextLabel(SettingsFrame);
-		FPSlabel->Size = { 0.65, 0.2 };
+		FPSlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		FPSlabel->BackgroundTransparency = 1;
-		FPSlabel->Position = { 0, 0.5 };
+		FPSlabel->Position = SpecialVector2{ 0, 0.5 };
 		FPSlabel->SetText(" FPS mode");
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
 		FPSlabel->TextSize = -1;
@@ -3100,15 +3706,15 @@ inline namespace debug {
 		FPSlabel->Name = "FPSlabel";
 
 		Object2D* FPSframe = new TextLabel(SettingsFrame);
-		FPSframe->Size = { 0.3, 0.2 };
+		FPSframe->Size = SpecialVector2{ 0.3, 0.2 };
 		FPSframe->BackgroundTransparency = 1;
 		FPSframe->Roundness = 0.3;
-		FPSframe->Position = { 0.7, 0.5 };
+		FPSframe->Position = SpecialVector2{ 0.7, 0.5 };
 		FPSframe->Name = "FPSlabel";
 		TextLabel* FPSleft = new TextLabel(FPSframe);
-		FPSleft->Size = { 0.25, 0.6 };
+		FPSleft->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSleft->BackgroundTransparency = 1;
-		FPSleft->Position = { 0.0, 0.2 };
+		FPSleft->Position = SpecialVector2{ 0.0, 0.2 };
 		FPSleft->SetText("<");
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
 		FPSleft->TextSize = -1;
@@ -3118,9 +3724,9 @@ inline namespace debug {
 		FPSleft->Active = true;
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
 		TextLabel* FPSquantity = new TextLabel(FPSframe);
-		FPSquantity->Size = { 0.5, 1 };
+		FPSquantity->Size = SpecialVector2{ 0.5, 1 };
 		FPSquantity->BackgroundTransparency = 1;
-		FPSquantity->Position = { 0.25, 0 };
+		FPSquantity->Position = SpecialVector2{ 0.25, 0 };
 		std::ostringstream st; st << " " << typeFPS[currentFPSindex] << " "; 
 		FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str()));
 		FPSquantity->TextSize = -1;
@@ -3128,9 +3734,9 @@ inline namespace debug {
 		FPSquantity->SetFont("rog");
 		FPSquantity->Name = "FPSquantity";
 		TextLabel* FPSright = new TextLabel(FPSframe);
-		FPSright->Size = { 0.25, 0.6 };
+		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSright->BackgroundTransparency = 1;
-		FPSright->Position = { 0.75, 0.2 };
+		FPSright->Position = SpecialVector2{ 0.75, 0.2 };
 		FPSright->SetText(">");
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
 		FPSright->TextSize = -1;
@@ -3141,9 +3747,9 @@ inline namespace debug {
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
 
 		TextLabel* Colorlabel = new TextLabel(SettingsFrame);
-		Colorlabel->Size = { 0.65, 0.2 };
+		Colorlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		Colorlabel->BackgroundTransparency = 1;
-		Colorlabel->Position = { 0, 0.7 };
+		Colorlabel->Position = SpecialVector2{ 0, 0.7 };
 		Colorlabel->SetText(" Menu color");
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
 		Colorlabel->TextSize = -1;
@@ -3152,15 +3758,15 @@ inline namespace debug {
 		Colorlabel->Name = "Colorlabel";
 
 		Object2D* Colorframe = new TextLabel(SettingsFrame);
-		Colorframe->Size = { 0.3, 0.2 };
+		Colorframe->Size = SpecialVector2{ 0.3, 0.2 };
 		Colorframe->BackgroundTransparency = 1;
 		Colorframe->Roundness = 0.3;
-		Colorframe->Position = { 0.7, 0.7 };
+		Colorframe->Position = SpecialVector2{ 0.7, 0.7 };
 		Colorframe->Name = "Colorframe";
 		TextLabel* Colorleft = new TextLabel(Colorframe);
-		Colorleft->Size = { 0.25, 0.6 };
+		Colorleft->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorleft->BackgroundTransparency = 1;
-		Colorleft->Position = { 0.0, 0.2 };
+		Colorleft->Position = SpecialVector2{ 0.0, 0.2 };
 		Colorleft->SetText("<");
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
 		Colorleft->TextSize = -1;
@@ -3170,15 +3776,15 @@ inline namespace debug {
 		Colorleft->Active = true;
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
 		Object2D* ColorBlock = new TextLabel(Colorframe);
-		ColorBlock->Size = { 0.5, 0.8 };
+		ColorBlock->Size = SpecialVector2{ 0.5, 0.8 };
 		ColorBlock->BackgroundColor = DefaultDebugColor;
-		ColorBlock->Position = { 0.25, 0.1 };
+		ColorBlock->Position = SpecialVector2{ 0.25, 0.1 };
 		ColorBlock->Roundness = 0.3;
 		ColorBlock->Name = "ColorBlock";
 		TextLabel* Colorright = new TextLabel(Colorframe);
-		Colorright->Size = { 0.25, 0.6 };
+		Colorright->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorright->BackgroundTransparency = 1;
-		Colorright->Position = { 0.75, 0.2 };
+		Colorright->Position = SpecialVector2{ 0.75, 0.2 };
 		Colorright->SetText(">");
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
 		Colorright->TextSize = -1;
@@ -3193,8 +3799,8 @@ inline namespace debug {
 		******************/
 
 		Object2D* LogsFrame = new Object2D(debugMenu);
-		LogsFrame->Size = { 0.4, 0.6 };
-		LogsFrame->Position = { 0.04, 0.3 };
+		LogsFrame->Size = SpecialVector2{ 0.4, 0.6 };
+		LogsFrame->Position = SpecialVector2{ 0.04, 0.3 };
 		LogsFrame->BackgroundTransparency = 0.2;
 		LogsFrame->BorderColor = DefaultDebugColor;
 		LogsFrame->BorderThickness = 3;
@@ -3205,9 +3811,9 @@ inline namespace debug {
 		LogsName->SetText("Logs");
 		LogsName->TextSize = -1;
 		LogsName->TextColor = DefaultDebugColor;
-		LogsName->Position = { 0.5, 0 };
-		LogsName->AnchorPosition = { 0.5, 0 };
-		LogsName->Size = { 0.8, 0.055 };
+		LogsName->Position = SpecialVector2{ 0.5, 0 };
+		LogsName->AnchorPosition = SpecialVector2{ 0.5, 0 };
+		LogsName->Size = SpecialVector2{ 0.8, 0.055 };
 		LogsName->TextAnchor = TextAnchorEnum::CENTER;
 		LogsName->BackgroundTransparency = 1;
 		LogsName->SetFont("rog");
@@ -3217,8 +3823,8 @@ inline namespace debug {
 		console->BackgroundTransparency = 0.1;
 		console->BorderThickness = 3;
 		console->BorderColor = DefaultDebugColor;
-		console->Size = { 1, 0.93 };
-		console->Position = { 0, 0.07 };
+		console->Size = SpecialVector2{ 1, 0.93 };
+		console->Position = SpecialVector2{ 0, 0.07 };
 		console->SliderColor = { 255,255,255,255 };
 		console->Name = "consoleLogs";
 		console->AddEvent(CHILD_ADDED, [](Instance* child) {
@@ -3226,8 +3832,8 @@ inline namespace debug {
 			std::ostringstream s; s << n;
 			TextLabel* c = static_cast<TextLabel*>(child);
 			c->Name = s.str();
-			c->Size = { 1, 0.05 };
-			c->Position = { 0, 0.05f * (n - 1) };
+			c->Size = SpecialVector2{ 1, 0.05 };
+			c->Position = SpecialVector2{ 0, 0.05f * (n - 1) };
 			console->CanvasSize.y += 0.05 - (n > 20 ? 0 : 0.05);
 			console->CanvasPosition.y = console->CanvasSize.y - 1;
 		});
@@ -3243,8 +3849,8 @@ inline namespace debug {
 		********************/
 
 		treeFrame = new Object2D(debugMenu);
-		treeFrame->Size = { 0.49, 0.87 };
-		treeFrame->Position = { 0.47, 0.03 };
+		treeFrame->Size = SpecialVector2{ 0.49, 0.87 };
+		treeFrame->Position = SpecialVector2{ 0.47, 0.03 };
 		treeFrame->BackgroundTransparency = 0.2;
 		treeFrame->BorderColor = DefaultDebugColor;
 		treeFrame->BorderThickness = 3;
@@ -3255,30 +3861,30 @@ inline namespace debug {
 		treeName->SetText("Objects hierarchy");
 		treeName->TextSize = -1;
 		treeName->TextColor = DefaultDebugColor;
-		treeName->Position = { 0.5, 0 };
-		treeName->AnchorPosition = { 0.5, 0 };
-		treeName->Size = { 0.8, 0.055 };
+		treeName->Position = SpecialVector2{ 0.5, 0 };
+		treeName->AnchorPosition = SpecialVector2{ 0.5, 0 };
+		treeName->Size = SpecialVector2{ 0.8, 0.055 };
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
 		treeName->SetFont("rog");
 		Object2D* manageMenu = new Object2D(treeFrame);
 		manageMenu->Name = "manageMenu";
-		manageMenu->Position = { 0, 0.06 };
-		manageMenu->Size = { 1, 0.05 };
+		manageMenu->Position = SpecialVector2{ 0, 0.06 };
+		manageMenu->Size = SpecialVector2{ 1, 0.05 };
 		manageMenu->BorderThickness = 3;
 		manageMenu->BackgroundTransparency = 1;
 		manageMenu->BorderColor = DefaultDebugColor;
 		ScrollFrame* way = new ScrollFrame(manageMenu);
 		way->Name = "directory";
 		way->BackgroundTransparency = 1;
-		way->Position = { 0, 0 };
-		way->Size = { 1, 1 };
+		way->Position = SpecialVector2{ 0, 0 };
+		way->Size = SpecialVector2{ 1, 1 };
 		way->Direction = 'X';
 		way->SliderColor = { 255,255,255,255 };
 		ScrollFrame* treeScroll = new ScrollFrame(treeFrame);
 		treeScroll->Name = "treeScroll";
-		treeScroll->Position = { 0, 0.12 };
-		treeScroll->Size = { 0.5, 0.88 };
+		treeScroll->Position = SpecialVector2{ 0, 0.12 };
+		treeScroll->Size = SpecialVector2{ 0.5, 0.88 };
 		treeScroll->BackgroundTransparency = 1;
 		treeScroll->SliderColor = { 255,255,255,255 };
 		treeScroll->ScrollSpeed = 0.2;
@@ -3358,8 +3964,8 @@ inline namespace debug {
 					element->Name = objects[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = DefaultDebugColor;
-					element->Position = { (objects.size() - i - 1) * 0.25f, 0 };
-					element->Size = { 0.2, 0.9 };
+					element->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f, 0 };
+					element->Size = SpecialVector2{ 0.2, 0.9 };
 					element->SetText(objects[i]->Name);
 					element->Active = true;
 
@@ -3368,8 +3974,8 @@ inline namespace debug {
 						element2->Name = ">";
 						element2->BackgroundTransparency = 1;
 						element2->TextColor = DefaultDebugColor;
-						element2->Position = { (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
-						element2->Size = { 0.05, 0.9 };
+						element2->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
+						element2->Size = SpecialVector2{ 0.05, 0.9 };
 						element2->SetText(">");
 					}
 
@@ -3391,8 +3997,8 @@ inline namespace debug {
 					element->Name = currentInstance->Children[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = DefaultDebugColor;
-					element->Position = { 0, (i - dec) * 0.05f };
-					element->Size = { 1, 0.05 };
+					element->Position = SpecialVector2{ 0, (i - dec) * 0.05f };
+					element->Size = SpecialVector2{ 1, 0.05 };
 					std::ostringstream pupupupu; pupupupu << " > " << currentInstance->Children[i]->Name;
 					element->SetText(pupupupu.str());
 					element->Active = true;
@@ -3424,7 +4030,7 @@ inline void updateSignals() {
 }
 
 void SUI_SetWindowSize(int newW, int newH) {
-	changeWindowSize = { (float)newW, (float)newH };
+	changeWindowSize = SpecialVector2{ (float)newW, (float)newH };
 	changeWindowSizeB = true;
 }
 
@@ -3432,14 +4038,123 @@ void SUI_SetWindowPosition(int newX, int newY) {
 	SetWindowPosition(newX, newY);
 }
 
-inline Vector2 windowMinimalSize = { 0,0 };
+inline SpecialVector2 windowMinimalSize = { 0,0 };
 
 void SUI_SetMinimalWindowSize(int newX, int newY) {
-	windowMinimalSize = { (float)newX, (float)newY };
+	windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
 }
 
 bool ALLOW_DEBUG = true;
 bool ALLOW_FPS = true;
+
+void UpdateHigher(Instance* StartInstance) {
+	Object2D* best = nullptr;
+	int maxDepth = -1;
+
+	std::function<bool(Instance*, int)> getTop = [&getTop, &best, &maxDepth](Instance* parent, int localDepth) -> bool {
+		bool foundInThisBranch = false;
+
+		if (parent->Class == SCROLLFRAME) {
+			ScrollFrame* scroll = static_cast<ScrollFrame*>(parent);
+
+			for (auto sector : scroll->sectorsOnView) {
+				for (auto& [id, child] : sector->Objects) {
+					int nextDepth = localDepth;
+					bool isTarget = false;
+
+					if (scroll->childsRemovedInFrame.contains(id)) continue;
+
+					if (!Is2DInheritor(child)) { // experemental branch. if not working then delete
+						if (getTop(child, nextDepth)) {
+							foundInThisBranch = true;
+						}
+
+						if (foundInThisBranch) {
+							return true;
+						}
+					} else {
+						auto obj = static_cast<Object2D*>(child);
+
+						if (obj) {
+							if (!obj->Visible) continue;
+							nextDepth = localDepth + 1;
+							if (obj->Active and obj->pointInObject(mousePosition)) {
+								isTarget = true;
+							}
+						}
+
+						if (getTop(child, nextDepth)) {
+							foundInThisBranch = true;
+						}
+
+						if (isTarget) {
+							if (nextDepth > maxDepth or (nextDepth == maxDepth and (!best or obj->ZIndex > best->ZIndex))) {
+								best = obj;
+								maxDepth = nextDepth;
+								foundInThisBranch = true;
+							}
+						}
+
+						if (foundInThisBranch) {
+							return true;
+						}
+					}
+				}
+			}
+		} else {
+			for (auto it = parent->Children.rbegin(); it != parent->Children.rend(); it++) {
+				Instance* child = *it;
+
+				int nextDepth = localDepth;
+				bool isTarget = false;
+
+				if (!Is2DInheritor(child)) { // experemental branch. if not working then delete
+					if (getTop(child, nextDepth)) {
+						foundInThisBranch = true;
+					}
+
+					if (foundInThisBranch) {
+						return true;
+					}
+				}
+
+				auto obj = static_cast<Object2D*>(child);
+
+				if (obj) {
+					if (!obj->Visible) continue;
+					nextDepth = localDepth + 1;
+					if (obj->Active and obj->pointInObject(mousePosition)) {
+						isTarget = true;
+					}
+				}
+
+				if (getTop(child, nextDepth)) {
+					foundInThisBranch = true;
+				}
+
+				if (isTarget) {
+					if (nextDepth > maxDepth or (nextDepth == maxDepth and (!best or obj->ZIndex > best->ZIndex))) {
+						best = obj;
+						maxDepth = nextDepth;
+						foundInThisBranch = true;
+					}
+				}
+
+				if (foundInThisBranch) {
+					return true;
+				}
+			}
+		}
+
+
+
+		return foundInThisBranch;
+	};
+
+	getTop(StartInstance, 0);
+	PreviousHigherObject = higherObject;
+	higherObject = best;
+}
 
 void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = 4) {
 	SetConfigFlags(flags);
@@ -3452,7 +4167,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	if (windowMinimalSize.x != 0 and windowMinimalSize.y != 0) {
 		SetWindowMinSize(windowMinimalSize.x, windowMinimalSize.y);
 	}
-	SetTargetFPS((inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z);
+	int targetFPS = (inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z;
+	SetTargetFPS(targetFPS);
 	if (iconName != "") SetWindowIcon(LoadImage(iconName));
 
 	SetExitKey(KEY_NULL);
@@ -3482,6 +4198,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 			SetWindowSize(changeWindowSize.x, changeWindowSize.y);
 			changeWindowSizeB = false;
 		}
+
 		mousePosition = GetMousePosition();
 		mouseScreenPosition = GetMouseScreenPosition();
 		windowPosition = GetWindowPosition();
@@ -3506,69 +4223,19 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		Animate::UpdateAnimations(dt);
 		Tasks::UpdateTasks(dt);
 
-		Object2D* best = nullptr;
-		int maxDepth = -1;
-
-		std::function<bool(Instance*, int)> getTop = [&getTop, &best, &maxDepth](Instance* parent, int localDepth) -> bool {
-			bool foundInThisBranch = false;
-
-			for (auto it = parent->Children.rbegin(); it != parent->Children.rend(); ++it) {
-				Instance* child = *it;
-
-				int nextDepth = localDepth;
-				bool isTarget = false;
-
-				if (child->Class == INSTANCE or child->Class == LINEEX) { // experemental branch. if not working then delete
-					if (getTop(child, nextDepth)) {
-						foundInThisBranch = true;
-					}
-
-					if (foundInThisBranch) {
-						return true;
-					}
-				}
-
-				auto obj = static_cast<Object2D*>(child); // dynamic_cast if upper branch not working
-
-				if (obj) {
-					if (!obj->Visible) continue;
-					nextDepth = localDepth + 1;
-					if (obj->Active and obj->pointInObject(mousePosition)) {
-						isTarget = true;
-					}
-				}
-
-				if (getTop(child, nextDepth)) {
-					foundInThisBranch = true;
-				}
-
-				if (isTarget) {
-					if (nextDepth > maxDepth or (nextDepth == maxDepth and (!best or obj->ZIndex > best->ZIndex))) {
-						best = obj;
-						maxDepth = nextDepth;
-						foundInThisBranch = true;
-					}
-				}
-
-				if (foundInThisBranch) {
-					return true;
-				}
-			}
-
-			return foundInThisBranch;
-		};
-
-		getTop(&StartInstance, 0);
-		PreviousHigherObject = higherObject;
-		higherObject = best;
+		UpdateHigher(&StartInstance);
 
 		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, {125, 180, 220, 255}); }
 		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }
 		if (IsKeyPressed(KEY_F3)) { std::cout << accurateFPS << std::endl; }
 
+		framesSinceStart += 1;
+
 		DrawFrame(&StartInstance);
 	}
 
+	/*
+	
 	for (int i = 0; i < StartInstance.Children.size();) {
 		Instance* child = StartInstance.Children[i];
 		Delete(child);
@@ -3579,6 +4246,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	}
 
 	Fonts.clear();
+
+	*/
 
 	CloseWindow();
 }

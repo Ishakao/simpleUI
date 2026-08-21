@@ -1,17 +1,24 @@
-//////////////////////////////////////////////////////////////////////////////////////////////
-//																							//
-// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI								//
-// Current Version 1.0.1																	//
-//																							//
-// Changed Logs:																			//
-// Better child event system																//
-// Text class for convinient management of text-objects										//
-// Additional events for objects (like TEXT_CHANGED on text-objects)						//
-// Textures RAM & VRAM optimization															//
-// A few CPU optimizations																	//
-// Spacial Grid optimization for ScrollFrame (millions of objects with thousands of FPS)    //
-//																							//
-//////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//																												//
+// simpleUI by Ishakao | https://github.com/Ishakao/simpleUI													//
+// Current Version 1.0.1																						//
+//																												//
+// Description:																									//
+// simpleUI is a library for simple creating a beautiful and fast user interfaces.								//
+// Based on raylib v5.5 by raysan5 (www.raylib.com | https://github.com/raysan5)								//
+// simpleUI interfaces are based on a hierarchical structure of objects for convinient objects management		//	
+//																												//
+//      ! IF YOU NEED SOME RAYLIB FUNCTIONS/STRUCTURES USE RAYLIB_FUNCTIONAL:: NAMESPACE TO USE THEM !          //
+//																												//
+// Changed Logs:																								//
+// Better child event system																					//
+// Text class for management TextLabel and TextBox (TEXT_CHANGED events optimization)							//
+// Additional events for objects (like TEXT_CHANGED on text-objects)											//
+// Textures RAM & VRAM optimization																				//
+// A few CPU optimizations																						//
+// Spacial Grid optimization for ScrollFrame (millions of objects with thousands of FPS)					    //
+//																												//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
 #ifdef _WIN32
@@ -19,7 +26,171 @@
 #endif
 #define _CRT_SECURE_NO_WARNINGS
 #include <stb_image_write.h>
+
+namespace RAYLIB_FUNCTIONAL {
 #include <raylib.h>
+}
+
+using RAYLIB_FUNCTIONAL::Vector2;
+using RAYLIB_FUNCTIONAL::Shader;
+using RAYLIB_FUNCTIONAL::Image;
+using RAYLIB_FUNCTIONAL::Texture;
+using RAYLIB_FUNCTIONAL::Color;
+using RAYLIB_FUNCTIONAL::Font;
+using RAYLIB_FUNCTIONAL::Rectangle;
+using RAYLIB_FUNCTIONAL::Vector3;
+using RAYLIB_FUNCTIONAL::RenderTexture2D;
+using RAYLIB_FUNCTIONAL::Texture2D;
+
+using RAYLIB_FUNCTIONAL::SetMouseCursor;
+using RAYLIB_FUNCTIONAL::SetTargetFPS;
+using RAYLIB_FUNCTIONAL::SetWindowPosition;
+using RAYLIB_FUNCTIONAL::SetExitKey;
+using RAYLIB_FUNCTIONAL::SetWindowMinSize;
+using RAYLIB_FUNCTIONAL::SetConfigFlags;
+using RAYLIB_FUNCTIONAL::SetTraceLogLevel;
+using RAYLIB_FUNCTIONAL::SetWindowSize;
+using RAYLIB_FUNCTIONAL::InitWindow;
+using RAYLIB_FUNCTIONAL::CloseWindow;
+using RAYLIB_FUNCTIONAL::GetWindowPosition;
+using RAYLIB_FUNCTIONAL::GetScreenWidth;
+using RAYLIB_FUNCTIONAL::GetScreenHeight;
+using RAYLIB_FUNCTIONAL::GetFrameTime;
+using RAYLIB_FUNCTIONAL::GetMousePosition;
+using RAYLIB_FUNCTIONAL::GetMonitorRefreshRate;
+using RAYLIB_FUNCTIONAL::GetCurrentMonitor;
+using RAYLIB_FUNCTIONAL::GetMouseWheelMove;
+using RAYLIB_FUNCTIONAL::IsKeyDown;
+using RAYLIB_FUNCTIONAL::IsKeyPressed;
+using RAYLIB_FUNCTIONAL::IsMouseButtonPressed;
+using RAYLIB_FUNCTIONAL::IsMouseButtonReleased;
+using RAYLIB_FUNCTIONAL::IsWindowMaximized;
+using RAYLIB_FUNCTIONAL::IsWindowReady;
+using RAYLIB_FUNCTIONAL::IsWindowFullscreen;
+using RAYLIB_FUNCTIONAL::WindowShouldClose;
+using RAYLIB_FUNCTIONAL::ToggleFullscreen;
+using RAYLIB_FUNCTIONAL::MaximizeWindow;
+using RAYLIB_FUNCTIONAL::MinimizeWindow;
+using RAYLIB_FUNCTIONAL::RestoreWindow;
+
+using RAYLIB_FUNCTIONAL::GenTextureMipmaps;
+using RAYLIB_FUNCTIONAL::SetTextureFilter;
+using RAYLIB_FUNCTIONAL::SetTextureWrap;
+
+using RAYLIB_FUNCTIONAL::LoadImage;
+using RAYLIB_FUNCTIONAL::LoadImageFromMemory;
+using RAYLIB_FUNCTIONAL::LoadTextureFromImage;
+using RAYLIB_FUNCTIONAL::LoadShader;
+using RAYLIB_FUNCTIONAL::LoadCodepoints;
+using RAYLIB_FUNCTIONAL::LoadFontEx;
+using RAYLIB_FUNCTIONAL::LoadRenderTexture;
+
+using RAYLIB_FUNCTIONAL::DrawRectangleRounded;
+using RAYLIB_FUNCTIONAL::DrawRectangleRoundedLinesEx;
+using RAYLIB_FUNCTIONAL::DrawTexturePro;
+using RAYLIB_FUNCTIONAL::DrawLineEx;
+using RAYLIB_FUNCTIONAL::ClearBackground;
+using RAYLIB_FUNCTIONAL::BeginScissorMode;
+using RAYLIB_FUNCTIONAL::EndScissorMode;
+using RAYLIB_FUNCTIONAL::BeginTextureMode;
+using RAYLIB_FUNCTIONAL::EndTextureMode;
+using RAYLIB_FUNCTIONAL::BeginShaderMode;
+using RAYLIB_FUNCTIONAL::EndShaderMode;
+using RAYLIB_FUNCTIONAL::BeginDrawing;
+using RAYLIB_FUNCTIONAL::EndDrawing;
+
+using RAYLIB_FUNCTIONAL::TEXTURE_FILTER_TRILINEAR;
+using RAYLIB_FUNCTIONAL::TEXTURE_WRAP_CLAMP;
+
+using RAYLIB_FUNCTIONAL::FLAG_WINDOW_UNDECORATED;
+using RAYLIB_FUNCTIONAL::FLAG_WINDOW_RESIZABLE;
+
+using RAYLIB_FUNCTIONAL::PIXELFORMAT_UNCOMPRESSED_R8G8B8;
+using RAYLIB_FUNCTIONAL::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+using RAYLIB_FUNCTIONAL::MOUSE_BUTTON_LEFT;
+using RAYLIB_FUNCTIONAL::MOUSE_BUTTON_RIGHT;
+using RAYLIB_FUNCTIONAL::MOUSE_BUTTON_MIDDLE;
+
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_DEFAULT;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_ARROW;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_CROSSHAIR;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_POINTING_HAND;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_RESIZE_ALL;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_NOT_ALLOWED;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_RESIZE_EW;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_RESIZE_NWSE;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_RESIZE_NESW;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_RESIZE_NS;
+using RAYLIB_FUNCTIONAL::MOUSE_CURSOR_IBEAM;
+
+using RAYLIB_FUNCTIONAL::LOG_NONE;
+
+using RAYLIB_FUNCTIONAL::KeyboardKey;
+using RAYLIB_FUNCTIONAL::KEY_LEFT_SHIFT;
+using RAYLIB_FUNCTIONAL::KEY_ONE;
+using RAYLIB_FUNCTIONAL::KEY_TWO;
+using RAYLIB_FUNCTIONAL::KEY_THREE;
+using RAYLIB_FUNCTIONAL::KEY_FOUR;
+using RAYLIB_FUNCTIONAL::KEY_FIVE;
+using RAYLIB_FUNCTIONAL::KEY_SIX;
+using RAYLIB_FUNCTIONAL::KEY_SEVEN;
+using RAYLIB_FUNCTIONAL::KEY_EIGHT;
+using RAYLIB_FUNCTIONAL::KEY_NINE;
+using RAYLIB_FUNCTIONAL::KEY_ZERO;
+using RAYLIB_FUNCTIONAL::KEY_Q;
+using RAYLIB_FUNCTIONAL::KEY_W;
+using RAYLIB_FUNCTIONAL::KEY_E;
+using RAYLIB_FUNCTIONAL::KEY_R;
+using RAYLIB_FUNCTIONAL::KEY_T;
+using RAYLIB_FUNCTIONAL::KEY_Y;
+using RAYLIB_FUNCTIONAL::KEY_U;
+using RAYLIB_FUNCTIONAL::KEY_I;
+using RAYLIB_FUNCTIONAL::KEY_O;
+using RAYLIB_FUNCTIONAL::KEY_P;
+using RAYLIB_FUNCTIONAL::KEY_A;
+using RAYLIB_FUNCTIONAL::KEY_S;
+using RAYLIB_FUNCTIONAL::KEY_D;
+using RAYLIB_FUNCTIONAL::KEY_F;
+using RAYLIB_FUNCTIONAL::KEY_G;
+using RAYLIB_FUNCTIONAL::KEY_H;
+using RAYLIB_FUNCTIONAL::KEY_J;
+using RAYLIB_FUNCTIONAL::KEY_K;
+using RAYLIB_FUNCTIONAL::KEY_L;
+using RAYLIB_FUNCTIONAL::KEY_SEMICOLON;
+using RAYLIB_FUNCTIONAL::KEY_APOSTROPHE;
+using RAYLIB_FUNCTIONAL::KEY_Z;
+using RAYLIB_FUNCTIONAL::KEY_X;
+using RAYLIB_FUNCTIONAL::KEY_C;
+using RAYLIB_FUNCTIONAL::KEY_V;
+using RAYLIB_FUNCTIONAL::KEY_B;
+using RAYLIB_FUNCTIONAL::KEY_N;
+using RAYLIB_FUNCTIONAL::KEY_M;
+using RAYLIB_FUNCTIONAL::KEY_COMMA;
+using RAYLIB_FUNCTIONAL::KEY_PERIOD;
+using RAYLIB_FUNCTIONAL::KEY_SLASH;
+using RAYLIB_FUNCTIONAL::KEY_SPACE;
+using RAYLIB_FUNCTIONAL::KEY_MINUS;
+using RAYLIB_FUNCTIONAL::KEY_EQUAL;
+using RAYLIB_FUNCTIONAL::KEY_LEFT_BRACKET;
+using RAYLIB_FUNCTIONAL::KEY_RIGHT_BRACKET;
+using RAYLIB_FUNCTIONAL::KEY_BACKSLASH;
+using RAYLIB_FUNCTIONAL::KEY_GRAVE;
+using RAYLIB_FUNCTIONAL::KEY_BACKSPACE;
+using RAYLIB_FUNCTIONAL::KEY_LEFT_CONTROL;
+using RAYLIB_FUNCTIONAL::KEY_DELETE;
+using RAYLIB_FUNCTIONAL::KEY_LEFT;
+using RAYLIB_FUNCTIONAL::KEY_RIGHT;
+using RAYLIB_FUNCTIONAL::KEY_DOWN;
+using RAYLIB_FUNCTIONAL::KEY_UP;
+using RAYLIB_FUNCTIONAL::KEY_NULL;
+using RAYLIB_FUNCTIONAL::KEY_F1;
+using RAYLIB_FUNCTIONAL::KEY_F2;
+using RAYLIB_FUNCTIONAL::KEY_F3;
+
+using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_FLOAT;
+using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC4;
+
 #include "SUIutils.h"
 #include <iostream>
 #include <vector>
@@ -95,11 +266,10 @@ struct SpecialVector2 {
 
 	SpecialVector2& operator=(const Vector2& other) {
 		if (alarmWhenChanged and (x.n != other.x or y.n != other.y)) {
-			bool prev = alarmWhenChanged;
 			alarmWhenChanged = false;
 			x = other.x;
 			y = other.y;
-			alarmWhenChanged = prev;
+			alarmWhenChanged = true;
 
 			if (parentalObj) {
 				updateObject2DVector(parentalObj);
@@ -125,8 +295,10 @@ SpecialVector2 mousePosition;
 SpecialVector2 mouseScreenPosition;
 SpecialVector2 windowPosition;
 inline constexpr const char* BASIC_FONT_NAME = "Arial";
+inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
 inline std::unordered_map<std::string, Shader> Shaders;
 inline long currentUniqueObjectID = 0;
+bool sceneDirty = false; // true in frame where any object size or position changed
 
 inline std::mutex ImagesLoadingMtx;
 inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
@@ -380,7 +552,7 @@ public:
 
 namespace Tasks {
 	class Task;
-
+	std::mutex TasksMutex;
 	std::vector<Task*> ActiveTasks;
 
 	class Task {
@@ -389,33 +561,43 @@ namespace Tasks {
 		std::function<void(void)> Callback{};
 
 		void Cancel() {
+			TasksMutex.lock();
 			auto obj = find(ActiveTasks.begin(), ActiveTasks.end(), this);
 			if (obj != ActiveTasks.end()) {
 				ActiveTasks.erase(obj);
 			}
+			TasksMutex.unlock();
 			delete this;
 		}
 
-		Task(float TimeInSeconds, std::function<void(void)> f) : TimeLeft(TimeInSeconds), Callback(f) { ActiveTasks.push_back(this); }
-		~Task() {
-			auto obj = find(ActiveTasks.begin(), ActiveTasks.end(), this);
-			if (obj != ActiveTasks.end()) {
-				ActiveTasks.erase(obj);
-			}
-		}
+		Task(float TimeInSeconds, std::function<void(void)> f) : TimeLeft(TimeInSeconds), Callback(f) {  }
+		~Task() {}
 	};
 
-	void UpdateTasks(float dt) {
-		std::vector<Task*> z = ActiveTasks;
+	Task* Create(float TimeInSeconds, std::function<void(void)> f) {
+		Task* t = new Task(TimeInSeconds, f);
 
-		for (int i = 0; z.size() > 0;) {
-			z[i]->TimeLeft -= dt;
-			if (z[i]->TimeLeft <= 0) {
-				z[i]->Callback();
-				delete z[i];
+		TasksMutex.lock();
+		ActiveTasks.push_back(t);
+		TasksMutex.unlock();
+
+		return t;
+	}
+
+	void UpdateTasks(float dt) {
+		TasksMutex.lock();
+		for (int i = 0; i < ActiveTasks.size();) {
+			if (ActiveTasks[i]->TimeLeft <= 0) {
+				ActiveTasks[i]->Callback();
+				delete ActiveTasks[i];
+
+				ActiveTasks.erase(ActiveTasks.begin() + i);
+			} else {
+				ActiveTasks[i]->TimeLeft -= dt;
+				i++;
 			}
-			z.erase(z.begin() + i);
 		}
+		TasksMutex.unlock();
 	}
 }
 
@@ -447,6 +629,7 @@ public:
 		if (z != ActiveSignals.end()) ActiveSignals.erase(z);
 		delete this;
 	}
+
 	ChangedSignal() = delete;
 	ChangedSignal(T& p, std::function<void(void)> func) : SignalPTR(&p), Callback(func), SignalClass(typeid(T).name()) {
 		ActiveSignals.push_back(this);
@@ -520,7 +703,7 @@ namespace Animate {
 		}
 
 		if (f == Exponential) {
-			const float k = 6.0f;
+			const float k = 3.0f;
 
 			if (e == In) {
 				return (expf(k * t) - 1.0f) / (expf(k) - 1.0f);
@@ -881,6 +1064,8 @@ public:
 
 	void setParent(Instance* ptr) {
 		if (ptr == this) return;
+
+		sceneDirty = true;
 
 		if (Parent != nullptr) {
 			std::vector<Instance*> arr;
@@ -2361,7 +2546,7 @@ struct KeyMapping {
 	const char* shiftRU;
 };
 
-inline constexpr KeyMapping KeysMapping[49] = {
+inline constexpr KeyMapping KeysMapping[49] = { // in future will be replaced by OS API input or file with more languages support
 	{ KEY_ONE,   "1", "!", "1", "!" },
 	{ KEY_TWO,   "2", "@", "2", "\"" },
 	{ KEY_THREE, "3", "#", "3", "№" },
@@ -3294,6 +3479,7 @@ public:
 };
 
 inline void Object2D::PosOrSizeChanged() {
+	sceneDirty = true;
 	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
 
 	if (scrollChild) {
@@ -3618,7 +3804,7 @@ inline namespace debug {
 		lowerName->Size = SpecialVector2{ 0.24, 0.1 };
 		lowerName->TextAnchor = TextAnchorEnum::SE;
 		lowerName->BackgroundTransparency = 1;
-		lowerName->SetFont("rog");
+		lowerName->SetFont(DEBUG_MENU_FONT_NAME);
 
 		/************************
 		*       Settings        *
@@ -3642,7 +3828,7 @@ inline namespace debug {
 		SettingsName->Size = SpecialVector2{ 0.8, 0.1 };
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
-		SettingsName->SetFont("rog");
+		SettingsName->SetFont(DEBUG_MENU_FONT_NAME);
 
 		TextLabel* AnimLabel = new TextLabel(SettingsFrame);
 		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
@@ -3652,7 +3838,7 @@ inline namespace debug {
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
 		AnimLabel->TextSize = -1;
 		AnimLabel->TextColor = DefaultDebugColor;
-		AnimLabel->SetFont("rog");
+		AnimLabel->SetFont(DEBUG_MENU_FONT_NAME);
 		AnimLabel->Name = "animLabel";
 
 		TextLabel* AnimButton = new TextLabel(SettingsFrame);
@@ -3663,7 +3849,7 @@ inline namespace debug {
 		AnimButton->TextAnchor = TextAnchorEnum::W;
 		AnimButton->TextSize = -1;
 		AnimButton->TextColor = { 0,0,0,255 };
-		AnimButton->SetFont("rog");
+		AnimButton->SetFont(DEBUG_MENU_FONT_NAME);
 		AnimButton->Name = "animButton";
 		AnimButton->Active = true;
 		AnimButton->AddEvent(MOUSE_CLICK, [](Instance* t) {Animations = !Animations; }, LEFT);
@@ -3677,7 +3863,7 @@ inline namespace debug {
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
 		LGMlabel->TextSize = -1;
 		LGMlabel->TextColor = DefaultDebugColor;
-		LGMlabel->SetFont("rog");
+		LGMlabel->SetFont(DEBUG_MENU_FONT_NAME);
 		LGMlabel->Name = "LGMlabel";
 
 		TextLabel* LGMbutton = new TextLabel(SettingsFrame);
@@ -3688,7 +3874,7 @@ inline namespace debug {
 		LGMbutton->TextAnchor = TextAnchorEnum::W;
 		LGMbutton->TextSize = -1;
 		LGMbutton->TextColor = { 0,0,0,255 };
-		LGMbutton->SetFont("rog");
+		LGMbutton->SetFont(DEBUG_MENU_FONT_NAME);
 		LGMbutton->Name = "LGMbutton";
 		LGMbutton->Active = true;
 		LGMbutton->AddEvent(MOUSE_CLICK, [](Instance* t) {lowGraphicsMode = !lowGraphicsMode; }, LEFT);
@@ -3702,7 +3888,7 @@ inline namespace debug {
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
 		FPSlabel->TextSize = -1;
 		FPSlabel->TextColor = DefaultDebugColor;
-		FPSlabel->SetFont("rog");
+		FPSlabel->SetFont(DEBUG_MENU_FONT_NAME);
 		FPSlabel->Name = "FPSlabel";
 
 		Object2D* FPSframe = new TextLabel(SettingsFrame);
@@ -3719,7 +3905,7 @@ inline namespace debug {
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
 		FPSleft->TextSize = -1;
 		FPSleft->TextColor = DefaultDebugColor;
-		FPSleft->SetFont("rog");
+		FPSleft->SetFont(DEBUG_MENU_FONT_NAME);
 		FPSleft->Name = "FPSleft";
 		FPSleft->Active = true;
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
@@ -3731,7 +3917,7 @@ inline namespace debug {
 		FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str()));
 		FPSquantity->TextSize = -1;
 		FPSquantity->TextColor = DefaultDebugColor;
-		FPSquantity->SetFont("rog");
+		FPSquantity->SetFont(DEBUG_MENU_FONT_NAME);
 		FPSquantity->Name = "FPSquantity";
 		TextLabel* FPSright = new TextLabel(FPSframe);
 		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
@@ -3741,7 +3927,7 @@ inline namespace debug {
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
 		FPSright->TextSize = -1;
 		FPSright->TextColor = DefaultDebugColor;
-		FPSright->SetFont("rog");
+		FPSright->SetFont(DEBUG_MENU_FONT_NAME);
 		FPSright->Name = "FPSright";
 		FPSright->Active = true;
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, LEFT);
@@ -3754,7 +3940,7 @@ inline namespace debug {
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
 		Colorlabel->TextSize = -1;
 		Colorlabel->TextColor = DefaultDebugColor;
-		Colorlabel->SetFont("rog");
+		Colorlabel->SetFont(DEBUG_MENU_FONT_NAME);
 		Colorlabel->Name = "Colorlabel";
 
 		Object2D* Colorframe = new TextLabel(SettingsFrame);
@@ -3771,7 +3957,7 @@ inline namespace debug {
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
 		Colorleft->TextSize = -1;
 		Colorleft->TextColor = DefaultDebugColor;
-		Colorleft->SetFont("rog");
+		Colorleft->SetFont(DEBUG_MENU_FONT_NAME);
 		Colorleft->Name = "Colorleft";
 		Colorleft->Active = true;
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
@@ -3789,7 +3975,7 @@ inline namespace debug {
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
 		Colorright->TextSize = -1;
 		Colorright->TextColor = DefaultDebugColor;
-		Colorright->SetFont("rog");
+		Colorright->SetFont(DEBUG_MENU_FONT_NAME);
 		Colorright->Name = "Colorright";
 		Colorright->Active = true;
 		Colorright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor++; currentColor += 9; currentColor = currentColor % 9; }, LEFT);
@@ -3816,7 +4002,7 @@ inline namespace debug {
 		LogsName->Size = SpecialVector2{ 0.8, 0.055 };
 		LogsName->TextAnchor = TextAnchorEnum::CENTER;
 		LogsName->BackgroundTransparency = 1;
-		LogsName->SetFont("rog");
+		LogsName->SetFont(DEBUG_MENU_FONT_NAME);
 
 		console = new ScrollFrame(LogsFrame);
 		console->BackgroundColor = { 0,0,0,255 };
@@ -3866,7 +4052,7 @@ inline namespace debug {
 		treeName->Size = SpecialVector2{ 0.8, 0.055 };
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
-		treeName->SetFont("rog");
+		treeName->SetFont(DEBUG_MENU_FONT_NAME);
 		Object2D* manageMenu = new Object2D(treeFrame);
 		manageMenu->Name = "manageMenu";
 		manageMenu->Position = SpecialVector2{ 0, 0.06 };
@@ -4174,7 +4360,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	SetExitKey(KEY_NULL);
 
 	createFont(BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
-	createFont("rog", "Fonts/rogFont.otf", 50); // Basic font 2
+	createFont(DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
 	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader
 
 	for (auto& tup : queuedFonts) {
@@ -4199,6 +4385,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 			changeWindowSizeB = false;
 		}
 
+		static Vector2 previousMousePosition = {};
 		mousePosition = GetMousePosition();
 		mouseScreenPosition = GetMouseScreenPosition();
 		windowPosition = GetWindowPosition();
@@ -4223,7 +4410,10 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		Animate::UpdateAnimations(dt);
 		Tasks::UpdateTasks(dt);
 
-		UpdateHigher(&StartInstance);
+		if (previousMousePosition.x != mousePosition.x or previousMousePosition.y != mousePosition.y or sceneDirty) {
+			previousMousePosition = mousePosition;
+			UpdateHigher(&StartInstance);
+		}
 
 		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, {125, 180, 220, 255}); }
 		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }

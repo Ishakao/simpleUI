@@ -25,7 +25,7 @@
 
 #pragma once
 
-#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, !ToggleSwitcher, !CheckBox, !MultiCheckBox, !ComboBox, !ProgressBar, !DropdownBox)
+#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !MultiCheckBox, !ComboBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
 #ifdef _WIN32
@@ -975,7 +975,7 @@ inline std::unordered_map<Instance*, long> deletedObjectsByPtr;
 enum InstanceType : int {
 	INSTANCE = 0,
 
-	OBJECT2D,
+	OBJECT2D = 10,
 	TEXTLABEL,
 	TEXTBOX,
 	IMAGELABEL,
@@ -983,7 +983,7 @@ enum InstanceType : int {
 	TEXTURELABEL,
 	LINEEX,
 
-	STRING_VALUE,
+	STRING_VALUE = 30,
 	INT_VALUE,
 	BOOL_VALUE,
 	FLOAT_VALUE,
@@ -992,15 +992,18 @@ enum InstanceType : int {
 	VECTOR2_VALUE,
 	COLOR_VALUE,
 
-	FOLDER,
+	FOLDER = 40,
 
 	// Additional classes from SUIextension.h
-	GRAPHBUILDER,
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+	GRAPHBUILDER = 100,
 	TOGGLESWITCHER,
 	CHECKBOX,
 	MULTICHECKBOX,
 	COMBOBOX,
+	DROPBOX,
 	PROGRESSBAR
+#endif
 };
 
 Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
@@ -1076,10 +1079,9 @@ public:
 	const long uniqueID = -1;
 	std::unordered_map<long, Instance*> childsAddedInFrame;
 	std::unordered_map<long, Instance*> childsRemovedInFrame;
+	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 private:
 	std::vector<std::pair<EventType, InstanceCallback>> events;
-
-	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 public:
 	bool hasEvent(EventType t) const {
 		for (auto& [type, _] : events) {
@@ -1530,7 +1532,7 @@ public:
 	SpecialVector2 AnchorPosition{ 0,0,this };
 
 	float BackgroundTransparency{};
-	Color BackgroundColor = { 0,0,0,255 };
+	Color BackgroundColor = { 255,255,255,255 };
 	bool Visible = true;
 
 	float Roundness = 0.0f;
@@ -1698,7 +1700,7 @@ public:
 		return false;
 	}
 
-	bool MouseEntered = false;
+	bool MouseEntered = false; // works with MOUSE_ENTER MOUSE_LEAVE events
 
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE);
 
@@ -4108,6 +4110,7 @@ inline namespace debug {
 		TextLabel* lowerName = new TextLabel(debugMenu);
 		lowerName->Name = "debugName";
 		lowerName->SetText("(F2) Debug Menu");
+		lowerName->BackgroundColor = { 0,0,0,255 };
 		lowerName->TextSize = -1;
 		lowerName->TextColor = DefaultDebugColor;
 		lowerName->Position = SpecialVector2{ 0.03f, 0.9f };
@@ -4125,6 +4128,7 @@ inline namespace debug {
 		SettingsFrame->Position = SpecialVector2{ 0.04, 0.03 };
 		SettingsFrame->BackgroundTransparency = 0.2;
 		SettingsFrame->BorderColor = DefaultDebugColor;
+		SettingsFrame->BackgroundColor = { 0,0,0,255 };
 		SettingsFrame->BorderThickness = 3;
 		SettingsFrame->Name = "SettingsFrame";
 
@@ -4138,11 +4142,13 @@ inline namespace debug {
 		SettingsName->Size = SpecialVector2{ 0.8, 0.1 };
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
+		SettingsName->BackgroundColor = { 0,0,0,255 };
 		SettingsName->SetFont(DEBUG_MENU_FONT_NAME);
 
 		TextLabel* AnimLabel = new TextLabel(SettingsFrame);
 		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
 		AnimLabel->BackgroundTransparency = 1;
+		AnimLabel->BackgroundColor = { 0,0,0,255 };
 		AnimLabel->Position = SpecialVector2{ 0, 0.1 };
 		AnimLabel->SetText(" Animations");
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
@@ -4168,6 +4174,7 @@ inline namespace debug {
 		TextLabel* LGMlabel = new TextLabel(SettingsFrame);
 		LGMlabel->Size = SpecialVector2{ 0.7, 0.2 };
 		LGMlabel->BackgroundTransparency = 1;
+		LGMlabel->BackgroundColor = { 0,0,0,255 };
 		LGMlabel->Position = SpecialVector2{ 0, 0.3 };
 		LGMlabel->SetText(" Low Graphics Mode");
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
@@ -4193,6 +4200,7 @@ inline namespace debug {
 		TextLabel* FPSlabel = new TextLabel(SettingsFrame);
 		FPSlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		FPSlabel->BackgroundTransparency = 1;
+		FPSlabel->BackgroundColor = { 0,0,0,255 };
 		FPSlabel->Position = SpecialVector2{ 0, 0.5 };
 		FPSlabel->SetText(" FPS mode");
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
@@ -4204,12 +4212,14 @@ inline namespace debug {
 		Object2D* FPSframe = new TextLabel(SettingsFrame);
 		FPSframe->Size = SpecialVector2{ 0.3, 0.2 };
 		FPSframe->BackgroundTransparency = 1;
+		FPSframe->BackgroundColor = { 0,0,0,255 };
 		FPSframe->Roundness = 0.3;
 		FPSframe->Position = SpecialVector2{ 0.7, 0.5 };
 		FPSframe->Name = "FPSlabel";
 		TextLabel* FPSleft = new TextLabel(FPSframe);
 		FPSleft->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSleft->BackgroundTransparency = 1;
+		FPSleft->BackgroundColor = { 0,0,0,255 };
 		FPSleft->Position = SpecialVector2{ 0.0, 0.2 };
 		FPSleft->SetText("<");
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
@@ -4222,6 +4232,7 @@ inline namespace debug {
 		TextLabel* FPSquantity = new TextLabel(FPSframe);
 		FPSquantity->Size = SpecialVector2{ 0.5, 1 };
 		FPSquantity->BackgroundTransparency = 1;
+		FPSquantity->BackgroundColor = { 0,0,0,255 };
 		FPSquantity->Position = SpecialVector2{ 0.25, 0 };
 		std::ostringstream st; st << " " << typeFPS[currentFPSindex] << " ";
 		FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str()));
@@ -4232,6 +4243,7 @@ inline namespace debug {
 		TextLabel* FPSright = new TextLabel(FPSframe);
 		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSright->BackgroundTransparency = 1;
+		FPSright->BackgroundColor = { 0,0,0,255 };
 		FPSright->Position = SpecialVector2{ 0.75, 0.2 };
 		FPSright->SetText(">");
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
@@ -4245,6 +4257,7 @@ inline namespace debug {
 		TextLabel* Colorlabel = new TextLabel(SettingsFrame);
 		Colorlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		Colorlabel->BackgroundTransparency = 1;
+		Colorlabel->BackgroundColor = { 0,0,0,255 };
 		Colorlabel->Position = SpecialVector2{ 0, 0.7 };
 		Colorlabel->SetText(" Menu color");
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
@@ -4256,12 +4269,14 @@ inline namespace debug {
 		Object2D* Colorframe = new TextLabel(SettingsFrame);
 		Colorframe->Size = SpecialVector2{ 0.3, 0.2 };
 		Colorframe->BackgroundTransparency = 1;
+		Colorframe->BackgroundColor = { 0,0,0,255 };
 		Colorframe->Roundness = 0.3;
 		Colorframe->Position = SpecialVector2{ 0.7, 0.7 };
 		Colorframe->Name = "Colorframe";
 		TextLabel* Colorleft = new TextLabel(Colorframe);
 		Colorleft->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorleft->BackgroundTransparency = 1;
+		Colorleft->BackgroundColor = { 0,0,0,255 };
 		Colorleft->Position = SpecialVector2{ 0.0, 0.2 };
 		Colorleft->SetText("<");
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
@@ -4280,6 +4295,7 @@ inline namespace debug {
 		TextLabel* Colorright = new TextLabel(Colorframe);
 		Colorright->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorright->BackgroundTransparency = 1;
+		Colorright->BackgroundColor = { 0,0,0,255 };
 		Colorright->Position = SpecialVector2{ 0.75, 0.2 };
 		Colorright->SetText(">");
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
@@ -4298,6 +4314,7 @@ inline namespace debug {
 		LogsFrame->Size = SpecialVector2{ 0.4, 0.6 };
 		LogsFrame->Position = SpecialVector2{ 0.04, 0.3 };
 		LogsFrame->BackgroundTransparency = 0.2;
+		LogsFrame->BackgroundColor = { 0,0,0,255 };
 		LogsFrame->BorderColor = DefaultDebugColor;
 		LogsFrame->BorderThickness = 3;
 		LogsFrame->Name = "LogsFrame";
@@ -4338,6 +4355,7 @@ inline namespace debug {
 		treeFrame->Size = SpecialVector2{ 0.49, 0.87 };
 		treeFrame->Position = SpecialVector2{ 0.47, 0.03 };
 		treeFrame->BackgroundTransparency = 0.2;
+		treeFrame->BackgroundColor = { 0,0,0,255 };
 		treeFrame->BorderColor = DefaultDebugColor;
 		treeFrame->BorderThickness = 3;
 		treeFrame->Name = "treeFrame";

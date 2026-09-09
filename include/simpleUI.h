@@ -25,13 +25,17 @@
 
 #pragma once
 
+#define _CRT_SECURE_NO_WARNINGS
+#include <cstdarg>
+#include <cstring>
+
 #define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !MultiCheckBox, !ComboBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
 #ifdef _WIN32
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #endif
-#define _CRT_SECURE_NO_WARNINGS
+
 #include <stb_image_write.h>
 
 namespace RAYLIB_FUNCTIONAL {

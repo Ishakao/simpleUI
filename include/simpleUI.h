@@ -36,10 +36,11 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #endif
 
-#include <stb_image_write.h>
+#include "stb_image_write.h"
 
 namespace RAYLIB_FUNCTIONAL {
 #include <raylib.h>
+#include <rlgl.h>
 }
 
 using RAYLIB_FUNCTIONAL::Vector2;
@@ -50,6 +51,7 @@ using RAYLIB_FUNCTIONAL::Color;
 using RAYLIB_FUNCTIONAL::Font;
 using RAYLIB_FUNCTIONAL::Rectangle;
 using RAYLIB_FUNCTIONAL::Vector3;
+using RAYLIB_FUNCTIONAL::Vector4;
 using RAYLIB_FUNCTIONAL::RenderTexture2D;
 using RAYLIB_FUNCTIONAL::Texture2D;
 
@@ -99,8 +101,8 @@ using RAYLIB_FUNCTIONAL::LoadCodepoints;
 using RAYLIB_FUNCTIONAL::LoadFontEx;
 using RAYLIB_FUNCTIONAL::LoadRenderTexture;
 
-using RAYLIB_FUNCTIONAL::DrawRectangleRounded;
-using RAYLIB_FUNCTIONAL::DrawRectangleRoundedLinesEx;
+using RAYLIB_FUNCTIONAL::DrawRectangle;
+using RAYLIB_FUNCTIONAL::DrawRectangleLinesEx;
 using RAYLIB_FUNCTIONAL::DrawTexturePro;
 using RAYLIB_FUNCTIONAL::DrawLineEx;
 using RAYLIB_FUNCTIONAL::ClearBackground;
@@ -159,6 +161,7 @@ using RAYLIB_FUNCTIONAL::KEY_ENTER;
 
 using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_FLOAT;
 using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC4;
+using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC2;
 
 #include "SUIutils.h" 
 #include <iostream>
@@ -1036,6 +1039,13 @@ inline void Delete(Z* ptr) {
 		if (scrollChild) {
 			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
 		}
+
+		for (int i = 0; i < ptr->Parent->Children.size(); i++) {
+			if (ptr->Parent->Children[i] == ptr) {
+				ptr->Parent->Children.erase(ptr->Parent->Children.begin() + i);
+				break;
+			}
+		}
 	}
 
 	std::vector<Instance*> z = ptr->Children;
@@ -1266,6 +1276,9 @@ public:
 		}
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 
 		if (Parent and Parent->changedPosOrSizeFrame) changedPosOrSizeFrame = true;
 
@@ -1438,6 +1451,120 @@ enum SUI_EEC {
 	EEC_EVERY_ENTER,
 	EEC_IF_DESCENDANT_HIGHER
 };
+
+void DrawBackgroundRound(Vector2 RealPos, Vector2 RealSize, Color BackgroundColor, float BackgroundTransparency, float Roundness) {
+	if (BackgroundTransparency != 1) {
+		static bool roundShaderLoaded = false;
+		static Shader shader;
+
+		static float lastRoundness = -1;
+		static Vector2 lastSize = { 0,0 };
+		static Vector4 lastColor = { 0,0,0,1 };
+		static Color lastColorDefault = { 1,2,3,4 };
+
+		static int roundnessPointer = -1;
+		static int lastSizePointer = -1;
+		static int colorPointer = -1;
+
+		if (!roundShaderLoaded) {
+			shader = getShader("RectangleRoundness");
+			lastSizePointer = GetShaderLocation(shader, "rectSize");
+			roundnessPointer = GetShaderLocation(shader, "roundness");
+			colorPointer = GetShaderLocation(shader, "color");
+			roundShaderLoaded = true;
+		}
+
+		if (Roundness != lastRoundness) {
+			lastRoundness = Roundness;
+			SetShaderValue(shader, roundnessPointer, &lastRoundness, SHADER_UNIFORM_FLOAT);
+		}
+
+		if (RealSize.x != lastSize.x or RealSize.y != lastSize.y) {
+			lastSize = { RealSize.x, RealSize.y };
+			SetShaderValue(shader, lastSizePointer, &lastSize, SHADER_UNIFORM_VEC2);
+		}
+
+		if (lastColorDefault.r != BackgroundColor.r or lastColorDefault.g != BackgroundColor.g or
+			lastColorDefault.b != BackgroundColor.b or lastColorDefault.a != (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency))) {
+			lastColorDefault = { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) };
+			lastColor = { lastColorDefault.r / 255.0f, lastColorDefault.g / 255.0f, lastColorDefault.b / 255.0f, lastColorDefault.a / 255.0f };
+			SetShaderValue(shader, colorPointer, &lastColor, SHADER_UNIFORM_VEC4);
+		}
+
+		BeginShaderMode(shader);
+
+		RAYLIB_FUNCTIONAL::rlBegin(RL_QUADS);
+		RAYLIB_FUNCTIONAL::rlColor4ub(255, 255, 255, 255);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y + RealSize.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y + RealSize.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y);
+		RAYLIB_FUNCTIONAL::rlEnd();
+
+		EndShaderMode();
+	}
+}
+
+void DrawLinesRound(Vector2 RealPos, Vector2 RealSize, Color BorderColor, float BorderTransparency, int BorderThickness, float Roundness) {
+	if (BorderThickness > 0 and BorderTransparency != 1) {
+		static bool roundLinesShaderLoaded = false;
+		static Shader shader;
+
+		static float lastRoundness = -1;
+		static Vector2 lastSize = { 0,0 };
+		static Vector4 lastColor = { 0,0,0,1 };
+		static float lastBorderThickness = 0;
+		static Color lastColorDefault = { 1,2,3,4 };
+
+		static int roundnessPointer = -1;
+		static int lastSizePointer = -1;
+		static int borderThicknessPointer = -1;
+		static int colorPointer = -1;
+
+		if (!roundLinesShaderLoaded) {
+			shader = getShader("RectangleLinesRoundness");
+			lastSizePointer = GetShaderLocation(shader, "rectSize");
+			roundnessPointer = GetShaderLocation(shader, "roundness");
+			borderThicknessPointer = GetShaderLocation(shader, "borderThickness");
+			colorPointer = GetShaderLocation(shader, "color");
+			roundLinesShaderLoaded = true;
+		}
+
+		if (Roundness != lastRoundness) {
+			lastRoundness = Roundness;
+			SetShaderValue(shader, roundnessPointer, &lastRoundness, SHADER_UNIFORM_FLOAT);
+		}
+
+		if ((float)BorderThickness != lastBorderThickness) {
+			lastBorderThickness = (float)BorderThickness;
+			SetShaderValue(shader, borderThicknessPointer, &lastBorderThickness, SHADER_UNIFORM_FLOAT);
+		}
+
+		if (RealSize.x != lastSize.x or RealSize.y != lastSize.y) {
+			lastSize = { RealSize.x, RealSize.y };
+			SetShaderValue(shader, lastSizePointer, &lastSize, SHADER_UNIFORM_VEC2);
+		}
+
+		if (lastColorDefault.r != BorderColor.r or lastColorDefault.g != BorderColor.g or
+			lastColorDefault.b != BorderColor.b or lastColorDefault.a != (unsigned char)(BorderColor.a * (1 - BorderTransparency))) {
+			lastColorDefault = { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) };
+			lastColor = { lastColorDefault.r / 255.0f, lastColorDefault.g / 255.0f, lastColorDefault.b / 255.0f, lastColorDefault.a / 255.0f };
+			SetShaderValue(shader, colorPointer, &lastColor, SHADER_UNIFORM_VEC4);
+		}
+
+		BeginShaderMode(shader);
+
+		RAYLIB_FUNCTIONAL::rlBegin(RL_QUADS);
+		RAYLIB_FUNCTIONAL::rlColor4ub(255, 255, 255, 255);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y + RealSize.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y + RealSize.y);
+		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y);
+		RAYLIB_FUNCTIONAL::rlEnd();
+
+		EndShaderMode();
+	}
+}
 
 class Object2D : public Instance {
 	constexpr static const char* DefaultName = "Object2D";
@@ -1629,27 +1756,22 @@ public:
 	virtual void Draw() {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
-			if (BackgroundTransparency == 0) {
-				if (BorderThickness > 0) {
-					DrawRectangleRounded({ RealPos.x - BorderThickness, RealPos.y - BorderThickness, RealSize.x + BorderThickness * 2, RealSize.y + BorderThickness * 2 }, Roundness, Segments, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
-				}
-
-				if (BackgroundTransparency != 1) {
-					DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
-				}
+			if (Roundness != 0) {
+				DrawBackgroundRound(RealPos, RealSize, BackgroundColor, BackgroundTransparency, Roundness);
+				DrawLinesRound(RealPos, RealSize, BorderColor, BorderTransparency, BorderThickness, Roundness);
 			} else {
 				if (BackgroundTransparency != 1) {
-					DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
+					DrawRectangle(RealPos.x, RealPos.y, RealSize.x, RealSize.y, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
 				}
 
-				if (BorderThickness > 0) {
-					DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
+				if (BorderThickness > 0 and BorderTransparency != 1) {
+					DrawRectangleLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
 				}
 			}
 		}
@@ -1704,6 +1826,9 @@ public:
 		}
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 		Draw();
@@ -1816,6 +1941,9 @@ public:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 		Draw();
 	}
 
@@ -2168,6 +2296,9 @@ public:
 
 		for (ScrollSector* s : sectorsOnView) {
 			for (auto& [id, ptr] : s->Objects) {
+				if (deletedObjectsByID.size() and deletedObjectsByID.contains(id)) {
+					continue;
+				}
 				ptr->Update();
 			}
 		}
@@ -2240,6 +2371,9 @@ public:
 		}
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 
@@ -2528,9 +2662,9 @@ public:
 	void Draw() override {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -2774,9 +2908,9 @@ public:
 	void Draw() override {
 		if (!Visible) return;
 		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+			or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 			return;
 		}
 
@@ -3372,6 +3506,9 @@ public:
 		inputHandler();
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 
@@ -3598,24 +3735,30 @@ public:
 				static float lastRoundness = 0;
 				static Rectangle lastObjectData = { 0,0,0,0 };
 				static Rectangle lastImageData = { 0,0,0,0 };
+				static int roundnessPointer = -1;
+				static int objectDataPointer = -1;
+				static int imageDataPointer = -1;
 				if (!roundShaderLoaded) {
 					shader = getShader("TextureRoundness");
+					roundnessPointer = GetShaderLocation(shader, "roundness");
+					objectDataPointer = GetShaderLocation(shader, "objectData");
+					imageDataPointer = GetShaderLocation(shader, "imageData");
 					roundShaderLoaded = true;
 				}
 
 				if (Roundness != lastRoundness) {
 					lastRoundness = Roundness;
-					SetShaderValue(shader, GetShaderLocation(shader, "roundness"), &Roundness, SHADER_UNIFORM_FLOAT);
+					SetShaderValue(shader, roundnessPointer, &Roundness, SHADER_UNIFORM_FLOAT);
 				}
 
 				if (destRec.width != lastObjectData.width or destRec.height != lastObjectData.height) {
 					lastObjectData = destRec;
-					SetShaderValue(shader, GetShaderLocation(shader, "objectData"), &destRec, SHADER_UNIFORM_VEC4);
+					SetShaderValue(shader, objectDataPointer, &destRec, SHADER_UNIFORM_VEC4);
 				}
 				if (srcRec.x != lastImageData.x or srcRec.y != lastImageData.y or
 					srcRec.width != lastImageData.width or srcRec.height != lastImageData.height) {
 					lastImageData = srcRec;
-					SetShaderValue(shader, GetShaderLocation(shader, "imageData"), &srcRec, SHADER_UNIFORM_VEC4);
+					SetShaderValue(shader, imageDataPointer, &srcRec, SHADER_UNIFORM_VEC4);
 				}
 
 				BeginShaderMode(shader);
@@ -4563,7 +4706,7 @@ inline namespace debug {
 				treeScroll->CanvasSize.y = (currentInstance->Children.size() - dec) * 0.05;
 				treeScroll->CanvasPosition.y = 0;
 			}
-			});
+		});
 		currentInstance = s;
 	}
 
@@ -4731,7 +4874,9 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
 	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
-	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader
+	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader 1
+	loadNewShader("RectangleRoundness", "", "include/simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
+	loadNewShader("RectangleLinesRoundness", "", "include/simpleUI Shaders/rectangle_lines_roundness.frag"); // Basic shader 3
 
 	for (auto& tup : queuedFonts) {
 		createFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));

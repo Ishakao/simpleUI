@@ -387,7 +387,7 @@ public:
 	size_t ColumnarDisplayID = 0; // ID of sequence which will be shown on graph (only on columnar graph)
 
 	OffsetScale SizeOfLeftInfo = { 0, 0 }; // Size by x { offset, scale } of minimal and maximal values on graph. Set {0, 0} or leave it default to not display values
-	SUI_Text FontFace = BASIC_FONT_NAME; // FontFace of left info values
+	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME; // FontFace of left info values
 	Color TextColor = { 255,255,255,255 }; // Color of left info values;
 	bool AutoColorForColumnar = true; // Color of left info will be with current displayed graph (columnar only)
 	bool IndependentValuesX = false; // true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
@@ -396,9 +396,9 @@ public:
 	void Draw() override {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > winWidth
+				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -502,8 +502,10 @@ public:
 
 	GraphBuilder* Clone() const override {
 		GraphBuilder* i = new GraphBuilder(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		i->cachedTexture.id = 0;
 		i->cachedMin.id = 0;
 		i->cachedMax.id = 0;
@@ -551,7 +553,7 @@ class ToggleSwitcher : public Object2D {
 	}
 
 	void checkClick() {
-		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(mousePosition)) {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 			bool canBePressed = (
 				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
@@ -570,8 +572,8 @@ class ToggleSwitcher : public Object2D {
 					float cx = RealBallPosX + SliderBorderThickness + halfSize;
 					float cy = RealPos.y + SliderBorderThickness + halfSize;
 
-					float dx = std::abs(mousePosition.x - cx);
-					float dy = std::abs(mousePosition.y - cy);
+					float dx = std::abs(SIMPLEUI_GLOBAL::mousePosition.x - cx);
+					float dy = std::abs(SIMPLEUI_GLOBAL::mousePosition.y - cy);
 
 					float diffX = dx - halfSize + r;
 					float diffY = dy - halfSize + r;
@@ -613,9 +615,9 @@ public:
 	void Draw() override {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > winWidth
+				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -631,8 +633,8 @@ public:
 	}
 
 	void Update() override {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		RelativeSCalculated = false;
 		RelativePCalculated = false;
@@ -656,6 +658,19 @@ public:
 			Instance* child = Children[i];
 			child->Update();
 		}
+	}
+
+	ToggleSwitcher* Clone() const override {
+		ToggleSwitcher* i = new ToggleSwitcher(*this);
+		i->UpdateAllVectorPointers();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		i->Parent = nullptr;
+		i->Children.clear();
+		for (Instance* c : Children) {
+			c->Clone()->setParent(i);
+		}
+
+		return i;
 	}
 	
 	ToggleSwitcher(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };

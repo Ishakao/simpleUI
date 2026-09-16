@@ -475,7 +475,7 @@ public:
 			*/
 
 			Rectangle sourceRec = { 0.0f, (float)(cachedTexture.texture.height - textureSize.y), (float)textureSize.x, -(float)textureSize.y };
-			Rectangle destRec = { RealPos.x + leftSizeFull.x, RealPos.y, (float)RealSize.x - leftSizeFull.x, (float)RealSize.y };
+			Rectangle destRec = { RealPos.x + leftSizeFull.x + 1 + BorderThickness, RealPos.y + 1 + BorderThickness, (float)RealSize.x - leftSizeFull.x - 2 - BorderThickness, (float)RealSize.y - 2 - BorderThickness };
 
 			Rectangle sourceRecMin = { 0.0f, (float)(cachedMin.texture.height - textureSizeMin.y), (float)textureSizeMin.x, -(float)textureSizeMin.y };
 			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
@@ -624,10 +624,20 @@ public:
 			Object2D::Draw();
 
 			float RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
-			DrawRectangleRounded({ RealBallPosX + SliderBorderThickness, RealPos.y + SliderBorderThickness, RealSize.y - SliderBorderThickness * 2, RealSize.y - SliderBorderThickness * 2 }, Roundness, Segments, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
-			
-			if (SliderBorderThickness) {
-				DrawRectangleRoundedLinesEx({ RealBallPosX + SliderBorderThickness, RealPos.y + SliderBorderThickness, RealSize.y - SliderBorderThickness * 2, RealSize.y - SliderBorderThickness * 2 }, Roundness, Segments, SliderBorderThickness,{ SliderBorderColor.r, SliderBorderColor.g, SliderBorderColor.b, (unsigned char)(SliderBorderColor.a * (1 - SliderBorderTransparency)) });
+			Vector2 RealPos1 = { RealBallPosX, std::ceil(RealPos.y)};
+			Vector2 RealSize1 = { RealSize.y, RealSize.y };
+
+			if (Roundness != 0) {
+				DrawBackgroundRound(RealPos1, RealSize1, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, SliderTransparency, Roundness);
+				DrawLinesRound(RealPos1, RealSize1, { SliderBorderColor.r, SliderBorderColor.g, SliderBorderColor.b, (unsigned char)(SliderBorderColor.a * (1 - SliderBorderTransparency)) }, SliderBorderTransparency, SliderBorderThickness, Roundness);
+			} else {
+				if (SliderTransparency != 1) {
+					DrawRectangle(RealPos1.x, RealPos1.y, RealSize1.x, RealSize1.y, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+				}
+
+				if (SliderBorderThickness > 0 and SliderBorderTransparency != 1) {
+					DrawRectangleLinesEx({ RealPos1.x, RealPos1.y, RealSize1.x, RealSize1.y }, SliderBorderThickness, { SliderBorderColor.r, SliderBorderColor.g, SliderBorderColor.b, (unsigned char)(SliderBorderColor.a * (1 - SliderBorderTransparency)) });
+				}
 			}
 		}
 	}
@@ -647,6 +657,9 @@ public:
 		}
 
 		eventHandler();
+		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+			return;
+		}
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 

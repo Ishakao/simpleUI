@@ -186,7 +186,7 @@ template<typename T>
 inline constexpr bool is_streamable_v = is_streamable<T>::value;
 
 template<typename T>
-void SIMPLEUI_THROW_WITH_INFO(const T& v, long line, const char* file) {
+void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	if constexpr (is_streamable_v<T>) {
 		std::cerr << "Throw: _" << v << "_ on line " << __LINE__ << " (" << __FILE__ << ")" << std::endl;
 	} else {
@@ -274,7 +274,7 @@ struct SpecialVector2 {
 		return { x.n, y.n };
 	}
 
-	SpecialVector2& operator=(const Vector2& other) {
+	SpecialVector2& operator=(const SpecialVector2& other) {
 		if (alarmWhenChanged and (x.n != other.x or y.n != other.y)) {
 			alarmWhenChanged = false;
 			x = other.x;
@@ -293,101 +293,106 @@ struct SpecialVector2 {
 	}
 };
 
-inline int winWidth = 0;
-inline int winHeight = 0;
-inline int defaultSpacing = 0;
-inline float dt = 0;
-inline SpecialVector2 changeWindowSize = { 0,0 };
-inline bool changeWindowSizeB = false;
-inline int accurateFPS = 0;
-inline bool programRunning = true;
-SpecialVector2 mousePosition;
-SpecialVector2 mouseScreenPosition;
-SpecialVector2 windowPosition;
-inline constexpr const char* BASIC_FONT_NAME = "Arial";
-inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
-inline std::unordered_map<std::string, Shader> Shaders;
-inline long currentUniqueObjectID = 0;
-bool sceneDirty = false; // true in frame where any object size or position changed
+namespace SIMPLEUI_GLOBAL {
+	inline int winWidth = 0;
+	inline int winHeight = 0;
+	inline int defaultSpacing = 0;
+	inline float dt = 0;
+	inline SpecialVector2 changeWindowSize = { 0,0 };
+	inline bool changeWindowSizeB = false;
+	inline long accurateFPS = 0;
+	inline bool programRunning = true;
+	SpecialVector2 mousePosition;
+	SpecialVector2 mouseScreenPosition;
+	SpecialVector2 windowPosition;
+	inline constexpr const char* BASIC_FONT_NAME = "Arial";
+	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
+	inline std::unordered_map<std::string, Shader> Shaders;
+	inline long currentUniqueObjectID = 0;
+	bool sceneDirty = false; // true in frame where any object size or position changed
 
-inline std::mutex ImagesLoadingMtx;
-inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
-inline std::unordered_map<std::string, Image> pendingImages;
+	inline std::mutex ImagesLoadingMtx;
+	inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
+	inline std::unordered_map<std::string, Image> pendingImages;
+
+	size_t framesSinceStart = 0;
+}
+
 inline void loadImage(const std::string& name, const std::string& path) {
-	ImagesLoadingMtx.lock();
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
 
-	if (pendingImages.find(name) != pendingImages.end()) {
-		ImagesLoadingMtx.unlock();
+	if (SIMPLEUI_GLOBAL::pendingImages.find(name) != SIMPLEUI_GLOBAL::pendingImages.end()) {
+		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 		std::cout << "Image: " << name << " already exists" << std::endl;
 		return;
 	}
 
 	Image img = LoadImage(path.c_str());
 	if (!img.data) {
-		ImagesLoadingMtx.unlock();
+		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 		std::cout << "Image: " << name << " error while loading" << std::endl;
 		return;
 	}
 
-	pendingImages.insert({ name, img });
-	ImagesLoadingMtx.unlock();
+	SIMPLEUI_GLOBAL::pendingImages.insert({ name, img });
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 }
 
 inline void unloadImage(const std::string& name) {
-	ImagesLoadingMtx.lock();
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
 
-	auto it = loadedImages.find(name);
-	if (it != loadedImages.end()) {
+	auto it = SIMPLEUI_GLOBAL::loadedImages.find(name);
+	if (it != SIMPLEUI_GLOBAL::loadedImages.end()) {
 		UnloadImage(it->second.first);
 		UnloadTexture(it->second.second);
-		loadedImages.erase(it);
+		SIMPLEUI_GLOBAL::loadedImages.erase(it);
 	}
 
-	auto it1 = pendingImages.find(name);
-	if (it1 != pendingImages.end()) {
+	auto it1 = SIMPLEUI_GLOBAL::pendingImages.find(name);
+	if (it1 != SIMPLEUI_GLOBAL::pendingImages.end()) {
 		UnloadImage(it1->second);
-		pendingImages.erase(it1);
+		SIMPLEUI_GLOBAL::pendingImages.erase(it1);
 	}
 
-	ImagesLoadingMtx.unlock();
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 }
 
 inline std::pair<Image, Texture> getImage(const std::string& name) {
 	if (name == "") { return {}; }
 
-	ImagesLoadingMtx.lock();
-	auto it = loadedImages.find(name);
-	if (it != loadedImages.end()) {
-		ImagesLoadingMtx.unlock();
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
+	auto it = SIMPLEUI_GLOBAL::loadedImages.find(name);
+	if (it != SIMPLEUI_GLOBAL::loadedImages.end()) {
+		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 		return it->second;
 	}
 
-	auto it1 = pendingImages.find(name);
-	if (it1 != pendingImages.end()) {
-		ImagesLoadingMtx.unlock();
+	auto it1 = SIMPLEUI_GLOBAL::pendingImages.find(name);
+	if (it1 != SIMPLEUI_GLOBAL::pendingImages.end()) {
+		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 		return { it1->second, Texture{} };
 	}
-	ImagesLoadingMtx.unlock();
+	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 
 	std::cout << "Image " << name << " was not found" << std::endl;
 	return {};
 }
 
 inline void loadNewShader(const std::string& name, const std::string& vs, const std::string& fs) {
-	auto it = Shaders.find(name);
-	if (it != Shaders.end()) {
+	auto it = SIMPLEUI_GLOBAL::Shaders.find(name);
+	if (it != SIMPLEUI_GLOBAL::Shaders.end()) {
 		std::cout << "Shader: " << name << " already exists" << std::endl;
 		return;
 	}
 
-	Shaders.emplace(name, LoadShader(vs.c_str(), fs.c_str()));
+	SIMPLEUI_GLOBAL::Shaders.emplace(name, LoadShader(vs.c_str(), fs.c_str()));
 }
 
 inline Shader getShader(const std::string& name) {
-	auto it = Shaders.find(name);
-	if (it == Shaders.end()) {
+	auto it = SIMPLEUI_GLOBAL::Shaders.find(name);
+	if (it == SIMPLEUI_GLOBAL::Shaders.end()) {
 		std::cout << "Shader: " << name << " was not found" << std::endl;
-		return Shaders.find("TextureRoundness")->second;
+		return SIMPLEUI_GLOBAL::Shaders.find("TextureRoundness")->second;
 	}
 	return it->second;
 }
@@ -831,7 +836,7 @@ namespace Animate {
 		std::function<void(void)> Completed = []() {};
 
 		bool Update() {
-			currentTime += dt;
+			currentTime += SIMPLEUI_GLOBAL::dt;
 			if (currentTime >= endTime) {
 				if (type == "int") { *(int*)ptr = endValueI; }
 				else if (type == "float") { *(float*)ptr = endValueF; }
@@ -1058,11 +1063,10 @@ struct InstanceCallback {
 	InstanceCallback(F&& f) {
 		if constexpr (std::is_invocable_v<F, Instance*, Instance*>) {
 			func = std::forward<F>(f);
-		}
-		else if constexpr (std::is_invocable_v<F, Instance*>) {
+		} else if constexpr (std::is_invocable_v<F, Instance*>) {
 			func = [f = std::forward<F>(f)](Instance* a, Instance*) mutable {
 				f(a);
-				};
+			};
 		}
 	}
 
@@ -1073,14 +1077,12 @@ struct InstanceCallback {
 	}
 };
 
-size_t framesSinceStart = 0;
-
 class Instance {
 protected:
 	size_t lastUpdateFrame = 0;
 public:
 	bool changedPosOrSizeFrame = true;
-	const long uniqueID = -1;
+	long uniqueID = -1;
 	std::unordered_map<long, Instance*> childsAddedInFrame;
 	std::unordered_map<long, Instance*> childsRemovedInFrame;
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
@@ -1103,53 +1105,17 @@ public:
 	std::vector<Instance*> Children;
 
 	std::string Name = "Instance";
-	InstanceType Class;
+	InstanceType Class = InstanceType::INSTANCE;
 
 	bool __ParentObject{};
 
-	Instance(bool a) : __ParentObject(true), uniqueID(currentUniqueObjectID++) {};
-	Instance(Instance* p) : Parent(p), uniqueID(currentUniqueObjectID++) {
-		if (p) {
-			p->Children.push_back(this);
-			p->childsAddedInFrame.insert({ p->uniqueID, this });
-			p->updateChildrenZIndex = true;
-		}
-	}
+	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {};
+	Instance(Instance* p);
 	Instance() = delete;
 
 	virtual ~Instance() {}
 
-	void setParent(Instance* ptr) {
-		if (ptr == this) return;
-
-		sceneDirty = true;
-
-		if (Parent != nullptr) {
-			std::vector<Instance*> arr;
-			for (Instance* obj : Parent->Children) {
-				arr.push_back(obj);
-			}
-			for (int i = 0; i < arr.size(); i++) {
-				if (arr[i] == this) {
-					Parent->Children.erase(Parent->Children.begin() + i);
-					break;
-				}
-			}
-
-			if (Parent->childsRemovedInFrame.find(this->uniqueID) == Parent->childsRemovedInFrame.end()) {
-				Parent->childsRemovedInFrame.insert({ this->uniqueID, ptr });
-			}
-		}
-
-		Parent = ptr;
-		if (ptr) {
-			ptr->Children.push_back(this);
-			ptr->updateChildrenZIndex = true;
-			ptr->childsAddedInFrame.insert({ this->uniqueID, this });
-		}
-
-		changedPosOrSizeFrame = true;
-	}
+	void setParent(Instance* ptr);
 
 	Instance* findChild(const std::string& name) const {
 		for (auto obj : Children) {
@@ -1208,7 +1174,7 @@ public:
 			}
 
 			return nullptr;
-			};
+		};
 
 		return l(this);
 	}
@@ -1230,7 +1196,7 @@ public:
 			}
 
 			return nullptr;
-			};
+		};
 
 		return l(this);
 	}
@@ -1246,7 +1212,7 @@ public:
 
 				l(child);
 			}
-			};
+		};
 
 		l(this);
 
@@ -1274,14 +1240,12 @@ public:
 		for (const auto& [type, func] : events) {
 			if (type == TICK) {
 				func(this);
-			}
-			else if (type == CHILD_ADDED) {
+			} else if (type == CHILD_ADDED) {
 				for (auto& [id, ptr] : childsAddedInFrame) {
 					if (childsRemovedInFrame.contains(id)) continue;
 					func(this, ptr);
 				}
-			}
-			else if (type == CHILD_REMOVED) {
+			} else if (type == CHILD_REMOVED) {
 				for (auto& [id, ptr] : childsRemovedInFrame) {
 					if (childsAddedInFrame.contains(id)) continue;
 					func(this, ptr);
@@ -1294,8 +1258,8 @@ public:
 	}
 
 	virtual void Update() {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (updateChildrenZIndex) {
 			updateChildren(this);
@@ -1315,6 +1279,7 @@ public:
 		Instance* i = new Instance(*this);
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -1485,8 +1450,6 @@ class Object2D : public Instance {
 	bool lastActive = Active;
 	int lastZIndex = ZIndex;
 protected:
-	SpecialVector2 RelativePosition{};
-	SpecialVector2 RelativeSize{};
 	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
 	void SameUpdate() {
@@ -1508,6 +1471,18 @@ protected:
 	void eventHandler();
 	void PosOrSizeChanged();
 	void updateAncestorWhichParentIsScroll();
+
+	// Updating parent pointer in SpecialVector2 (after cloning)
+	void UpdateAllVectorPointers() {
+		RealSize.parentalObj = this;
+		PositionOFFSET.parentalObj = this;
+		AnchorPositionOFFSET.parentalObj = this;
+		Position.parentalObj = this;
+		AnchorPosition.parentalObj = this;
+		RelativePCalculated = false;
+		RelativeSCalculated = false;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
+	}
 public:
 	bool RelativePCalculated = false;
 	bool RelativeSCalculated = false;
@@ -1568,14 +1543,13 @@ public:
 			break;
 		}
 
-		SpecialVector2 parentSizePx = parent2D ? parent2D->RealSize : SpecialVector2{ static_cast<float>(winWidth), static_cast<float>(winHeight) };
+		SpecialVector2 parentSizePx = parent2D ? parent2D->RealSize : SpecialVector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 
 		sizePx.x = parentSizePx.x * self->Size.x + self->SizeOFFSET.x;
 		sizePx.y = parentSizePx.y * self->Size.y + self->SizeOFFSET.y;
 
 		RelativeSCalculated = true;
 		RealSize = sizePx;
-		RelativeSize = SpecialVector2{ sizePx.x / winWidth, sizePx.y / winHeight };
 	}
 
 	void getRealObject2Dposition(bool forced=false) {
@@ -1627,59 +1601,66 @@ public:
 				SpecialVector2 canvasPx = getCanvasRealPos(obj);
 				posPx.x = parentPosPx.x + myLocalPx.x - canvasPx.x;
 				posPx.y = parentPosPx.y + myLocalPx.y - canvasPx.y;
-			}
-			else {
+			} else {
 				posPx.x = parentPosPx.x + myLocalPx.x;
 				posPx.y = parentPosPx.y + myLocalPx.y;
 			}
 
-			RelativePosition = SpecialVector2{ posPx.x / winWidth, posPx.y / winHeight };
 			RealPos = posPx;
 			RelativePCalculated = true;
 			return;
 		}
 
-		SpecialVector2 rootSizePx = { (float)winWidth, (float)winHeight };
+		SpecialVector2 rootSizePx = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
 		SpecialVector2 rootLocalPx = {
 			rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x,
 			rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y
 		};
 
 		RealPos = rootLocalPx;
-		RelativePosition = SpecialVector2{ RealPos.x / winWidth, RealPos.y / winHeight };
 		RelativePCalculated = true;
 	}
 
 	SpecialVector2 getMousePosition() {
-		SpecialVector2 mousePos = mousePosition;
+		SpecialVector2 mousePos = SIMPLEUI_GLOBAL::mousePosition;
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
 	}
 
 	virtual void Draw() {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > winWidth
+				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
-			if (BackgroundTransparency != 1) {
-				DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
-			}
+			if (BackgroundTransparency == 0) {
+				if (BorderThickness > 0) {
+					DrawRectangleRounded({ RealPos.x - BorderThickness, RealPos.y - BorderThickness, RealSize.x + BorderThickness * 2, RealSize.y + BorderThickness * 2 }, Roundness, Segments, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
+				}
 
-			if (BorderThickness > 0) {
-				DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
+				if (BackgroundTransparency != 1) {
+					DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
+				}
+			} else {
+				if (BackgroundTransparency != 1) {
+					DrawRectangleRounded({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
+				}
+
+				if (BorderThickness > 0) {
+					DrawRectangleRoundedLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Roundness, Segments, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
+				}
 			}
 		}
 	}
 
 	bool pointInObject(SpecialVector2 pos) {
-		SpecialVector2 mouse = mouseScreenPosition;
-		SpecialVector2 windowPos = windowPosition;
+		SpecialVector2 mouse = SIMPLEUI_GLOBAL::mouseScreenPosition;
+		SpecialVector2 windowPos = SIMPLEUI_GLOBAL::windowPosition;
 
-		int width = winWidth;
-		int height = winHeight;
+		int width = SIMPLEUI_GLOBAL::winWidth;
+		int height = SIMPLEUI_GLOBAL::winHeight;
 
 		if (!(mouse.x >= windowPos.x and
 			mouse.x <= windowPos.x + width and
@@ -1709,8 +1690,8 @@ public:
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE);
 
 	void Update() override {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		RelativeSCalculated = false;
 		RelativePCalculated = false;
@@ -1735,8 +1716,10 @@ public:
 
 	Object2D* Clone() const override {
 		Object2D* i = new Object2D(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -1799,8 +1782,7 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 
 				pos2.x = parentPos.x + (pos2.x - CanvasPosition.x);
 				pos2.y = parentPos.y + (pos2.y - CanvasPosition.y);
-			}
-			else {
+			} else {
 				pos1.x = parentPos.x + pos1.x * obj->Size.x;
 				pos1.y = parentPos.y + pos1.y * obj->Size.y;
 
@@ -1811,7 +1793,7 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 			current = obj->Parent;
 		}
 
-		return { {pos1.x * winWidth, pos1.y * winHeight}, {pos2.x * winWidth, pos2.y * winHeight} };
+		return { {pos1.x * SIMPLEUI_GLOBAL::winWidth, pos1.y * SIMPLEUI_GLOBAL::winHeight}, {pos2.x * SIMPLEUI_GLOBAL::winWidth, pos2.y * SIMPLEUI_GLOBAL::winHeight} };
 	}
 
 public:
@@ -1830,8 +1812,8 @@ public:
 	}
 
 	void Update() override {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		eventHandler();
 		Draw();
@@ -1841,6 +1823,7 @@ public:
 		LineEx* i = new LineEx(*this);
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 
 		return i;
 	}
@@ -1851,10 +1834,9 @@ public:
 	LineEx() = delete;
 };
 
-inline void updateChildren(Instance* parent) {
+inline void updateChildren(Instance* parent) { // THIS SHIT IS SO LEGACY AND UNEFFICIENT MAYBE I WILL UPDATE IT
 	if (!parent) return;
 	parent->updateChildrenZIndex = false;
-
 	std::sort(parent->Children.begin(), parent->Children.end(), [](Instance* a, Instance* b) {
 		auto az = dynamic_cast<Object2D*>(a);
 		auto bz = dynamic_cast<Object2D*>(b);
@@ -1874,7 +1856,7 @@ inline void updateChildren(Instance* parent) {
 		if (az) return true;
 		if (bz) return false;
 		return true;
-		});
+	});
 }
 
 inline Font getFont(const std::string& name) {
@@ -1882,7 +1864,7 @@ inline Font getFont(const std::string& name) {
 	if (it != Fonts.end())
 		return it->second;
 
-	return Fonts.find(BASIC_FONT_NAME)->second;
+	return Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
 }
 
 struct Clip {
@@ -1988,9 +1970,28 @@ private:
 					casted->getRealObject2Dsize();
 				}
 
-				SpecialVector2 pos = { casted->Position.x * casted->Size.x + casted->PositionOFFSET.x - (casted->BorderTransparency != 1 ? casted->BorderThickness : 0), casted->Position.y * casted->Size.y + casted->PositionOFFSET.y - (casted->BorderTransparency != 1 ? casted->BorderThickness : 0) };
-				SpecialVector2 lastpos = { pos.x + casted->RealSize.x + (casted->BorderTransparency != 1 ? casted->BorderThickness * 2 : 0), pos.y + casted->RealSize.y + (casted->BorderTransparency != 1 ? casted->BorderThickness * 2 : 0) };
+				SpecialVector2 parentSize = { 0,0 };
 
+				Instance* currentParent = casted->Parent;
+
+				while (currentParent) {
+					if (Is2DInheritor(currentParent)) {
+						if (!static_cast<Object2D*>(currentParent)->RelativeSCalculated) {
+							static_cast<Object2D*>(currentParent)->getRealObject2Dsize();
+						}
+						parentSize = static_cast<Object2D*>(currentParent)->RealSize;
+						break;
+					} else {
+						currentParent = currentParent->Parent;
+					}
+				}
+
+				SpecialVector2 pos = { 
+					casted->Position.x * parentSize.x + casted->PositionOFFSET.x - casted->BorderThickness, 
+					casted->Position.y * parentSize.y + casted->PositionOFFSET.y - casted->BorderThickness 
+				};
+
+				SpecialVector2 lastpos = { pos.x + casted->RealSize.x + casted->BorderThickness * 2, pos.y + casted->RealSize.y + casted->BorderThickness * 2 };
 
 				for (int i = pos.x / GridSectorSize; i <= lastpos.x / GridSectorSize; i++) {
 					for (int j = pos.y / GridSectorSize; j <= lastpos.y / GridSectorSize; j++) {
@@ -2002,7 +2003,7 @@ private:
 			for (Instance* child : obj->Children) {
 				sectorsCalculate(child, sect);
 			}
-			};
+		};
 
 		sectorsCalculate(generalObj, sectors);
 
@@ -2020,8 +2021,7 @@ private:
 				sector = it2->second;
 				founded = true;
 			}
-		}
-		else {
+		} else {
 			Grid[x] = {};
 		}
 
@@ -2039,8 +2039,7 @@ private:
 
 		if (it3 == SectorsOnObject.end()) {
 			SectorsOnObject[obj->uniqueID] = { sector };
-		}
-		else {
+		} else {
 			SectorsOnObject[obj->uniqueID].push_back(sector);
 		}
 	}
@@ -2096,16 +2095,16 @@ private:
 	std::unordered_map<long, Instance*> toUpdateSectors;
 	void secUpd(Instance* child) {
 		if (!child) return;
+
 		auto checkIt = SectorsOnObject.find(child->uniqueID);
 		if (checkIt == SectorsOnObject.end()) { // new object in Scroll
 			SectorsOnObject.insert({ child->uniqueID, {} });
-			std::vector<std::pair<int, int>> sectors = getSectors(child);
 
+			std::vector<std::pair<int, int>> sectors = getSectors(child);
 			for (auto& [x, y] : sectors) {
 				addObjToSector(child, x, y);
 			}
-		}
-		else { // updating current sector
+		} else { // updating current sector
 			for (ScrollSector* sector : checkIt->second) {
 				auto it2 = sector->Objects.find(child->uniqueID);
 				if (it2 != sector->Objects.end()) {
@@ -2115,7 +2114,6 @@ private:
 			checkIt->second.clear();
 
 			std::vector<std::pair<int, int>> sectors = getSectors(child);
-
 			for (auto& [x, y] : sectors) {
 				addObjToSector(child, x, y);
 			}
@@ -2132,8 +2130,7 @@ public:
 
 		if (hasTick and it == isTick.end()) {
 			isTick.insert({ child->uniqueID, child });
-		}
-		else if (!hasTick and it != isTick.end()) {
+		} else if (!hasTick and it != isTick.end()) {
 			isTick.erase(it);
 		}
 	}
@@ -2231,10 +2228,10 @@ public:
 			}
 		}
 	}
-
+	
 	void Update() override {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (!Visible) return;
 		if (CanvasSize.x < 0) CanvasSize.x = 0; if (CanvasSize.y < 0) CanvasSize.y = 0;
@@ -2349,8 +2346,10 @@ public:
 
 	ScrollFrame* Clone() const override {
 		ScrollFrame* i = new ScrollFrame(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -2501,12 +2500,12 @@ class TextLabel : public Object2D {
 	}
 public:
 	SUI_Text Text = "";
-	SUI_Text FontFace = BASIC_FONT_NAME;
+	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
 	float TextTransparency = 0.0f;
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	Color TextColor = { 0,0,0,255 };
 	int TextSize = -1;
-	int Spacing = defaultSpacing;
+	int Spacing = SIMPLEUI_GLOBAL::defaultSpacing;
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
 
@@ -2529,9 +2528,9 @@ public:
 	void Draw() override {
 		if (Visible) {
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > winWidth
+				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -2567,8 +2566,10 @@ public:
 
 	TextLabel* Clone() const override {
 		TextLabel* i = new TextLabel(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
@@ -2745,7 +2746,7 @@ class TextBox : public Object2D {
 public:
 	Color CursorColor = { 0,0,0,255 };
 	SUI_Text Text = "";
-	SUI_Text FontFace = BASIC_FONT_NAME;
+	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
 	SUI_Text PlaceholderText = "PlaceholderText";
 	Color PlaceholderTextColor = { 150, 150, 150, 255 };
 	Color TextColor = { 0,0,0,255 };
@@ -2755,7 +2756,7 @@ public:
 	float TextTransparency = 0;
 	std::string AllowedSymbols = "";
 	std::string DisallowedSymbols = "";
-	int Spacing = defaultSpacing;
+	int Spacing = SIMPLEUI_GLOBAL::defaultSpacing;
 	char HideText = '\0';
 	bool ClearOnClick = true;
 	TextBoxNextLine EnterInputCondition = TextBoxNextLine::TEXTBOX_NEXTLINE_ENTER;
@@ -2773,9 +2774,9 @@ public:
 	void Draw() override {
 		if (!Visible) return;
 		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - RealSize.x - BorderThickness > winWidth
+			or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+			or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 			return;
 		}
 
@@ -2896,23 +2897,22 @@ public:
 			updateCharOffsets();
 		}
 
-		CursorTime += dt;
+		CursorTime += SIMPLEUI_GLOBAL::dt;
 		if (CursorTime >= CursorCooldown) { CursorVisible = !CursorVisible; CursorTime = 0.0f; }
 
 		if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) and CanClick) {
-			if (pointInObject(mousePosition) and FocusedTextBox != this and higherObject == this and ClearOnClick) {
+			if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and FocusedTextBox != this and higherObject == this and ClearOnClick) {
 				Text = "";
 			}
 			if (higherObject != this and higherObject) {
 				if (higherObject->Class == TEXTBOX) {
 					FocusedTextBox = static_cast<TextBox*>(higherObject);
-				}
-				else {
+				} else {
 					FocusedTextBox = nullptr;
 				}
 			} else if (not higherObject) {
 				FocusedTextBox = nullptr;
-			} else if (pointInObject(mousePosition) and higherObject == this) {
+			} else if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and higherObject == this) {
 				CursorTime = 0.0f;
 				CursorVisible = true;
 				FocusedTextBox = this;
@@ -2943,8 +2943,8 @@ public:
 
 				float textStartX = RealPos.x + textParams.x;
 				float textStartY = RealPos.y + textParams.y;
-				float clickX = mousePosition.x - textStartX + viewX;
-				float clickY = mousePosition.y - textStartY + viewY;
+				float clickX = SIMPLEUI_GLOBAL::mousePosition.x - textStartX + viewX;
+				float clickY = SIMPLEUI_GLOBAL::mousePosition.y - textStartY + viewY;
 
 				int currentLine = clickY / textParams.z + 1;
 
@@ -3363,8 +3363,8 @@ public:
 	}
 
 	void Update() override {
-		if (lastUpdateFrame == framesSinceStart) return;
-		lastUpdateFrame = framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
 		if (!(FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
@@ -3485,8 +3485,10 @@ public:
 
 	TextBox* Clone() const override {
 		TextBox* i = new TextBox(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -3550,9 +3552,9 @@ public:
 		Object2D::Draw();
 
 		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - RealSize.x - BorderThickness > winWidth
+			or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+			or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 			return;
 		}
 
@@ -3644,8 +3646,10 @@ public:
 
 	ImageLabel* Clone() const override {
 		ImageLabel* i = new ImageLabel(*this);
+		i->UpdateAllVectorPointers();
 		i->setParent(nullptr);
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -3713,9 +3717,9 @@ public:
 			}
 
 			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > winWidth
+				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > winHeight) {
+				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -3760,8 +3764,10 @@ public:
 
 	TextureLabel* Clone() const override {
 		TextureLabel* i = new TextureLabel(*this);
+		i->UpdateAllVectorPointers();
 		i->Parent = nullptr;
 		i->Children.clear();
+		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -3782,9 +3788,9 @@ public:
 };
 
 inline void Object2D::PosOrSizeChanged() {
-	sceneDirty = true;
+	SIMPLEUI_GLOBAL::sceneDirty = true;
 	this->changedPosOrSizeFrame = true;
-	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
+	Instance* scrollChild = (Parent and Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
 
 	if (scrollChild) {
 		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
@@ -3811,8 +3817,48 @@ inline void Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType 
 	}
 }
 
+inline void Instance::setParent(Instance* ptr) {
+	if (ptr == this) return;
+
+	SIMPLEUI_GLOBAL::sceneDirty = true;
+
+	if (Parent != nullptr) {
+		for (int i = 0; i < Children.size(); i++) {
+			if (Children[i] == this) {
+				Parent->Children.erase(Parent->Children.begin() + i);
+				break;
+			}
+		}
+
+		Parent->childsRemovedInFrame[this->uniqueID] = this;
+	}
+
+	Parent = ptr;
+	if (ptr) {
+		ptr->Children.push_back(this);
+		ptr->updateChildrenZIndex = true;
+		ptr->childsAddedInFrame[this->uniqueID] = this;
+	}
+
+	changedPosOrSizeFrame = true;
+}
+
+Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
+	SIMPLEUI_GLOBAL::sceneDirty = true;
+	if (p) {
+		p->Children.push_back(this);
+		p->childsAddedInFrame.insert({ p->uniqueID, this });
+		p->updateChildrenZIndex = true;
+
+		ScrollFrame* prob = (p->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(p) : (ScrollFrame*)nullptr);
+		if (prob) {
+			prob->UpdateSectors(this);
+		}
+	}
+}
+
 inline void Object2D::eventHandler() {
-	bool mouseOnObject = pointInObject(mousePosition);
+	bool mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
 	bool hasStartHold1 = false;
 	bool hasStartHold2 = false;
 	bool hasStartHold3 = false;
@@ -4030,10 +4076,10 @@ inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
 		labelFPS = new TextLabel(s);
 		labelFPS->BackgroundTransparency = 1;
 		labelFPS->TextSize = -1;
-		new ChangedSignal(accurateFPS, []() {
+		new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, []() {
 			static int last = 0;
-			if (last != accurateFPS) {
-				labelFPS->SetText(std::to_string(accurateFPS) + " FPS");
+			if (last != SIMPLEUI_GLOBAL::accurateFPS) {
+				labelFPS->SetText(std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS");
 			}
 			});
 		labelFPS->Name = "FPS_LABEL";
@@ -4078,7 +4124,7 @@ inline namespace debug {
 		TextLabel* sas = new TextLabel(console);
 		sas->BackgroundTransparency = 1;
 		sas->TextColor = typeColor[currentColor]; sas->TextSize = -1;
-		sas->FontFace = BASIC_FONT_NAME;
+		sas->FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
 		sas->TextAnchor = TextAnchorEnum::W;
 		int n = console->Children.size();
 		sas->Name = std::to_string(n);
@@ -4121,7 +4167,7 @@ inline namespace debug {
 		lowerName->Size = SpecialVector2{ 0.24, 0.1 };
 		lowerName->TextAnchor = TextAnchorEnum::SE;
 		lowerName->BackgroundTransparency = 1;
-		lowerName->SetFont(DEBUG_MENU_FONT_NAME);
+		lowerName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 
 		/************************
 		*       Settings        *
@@ -4147,7 +4193,7 @@ inline namespace debug {
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
 		SettingsName->BackgroundColor = { 0,0,0,255 };
-		SettingsName->SetFont(DEBUG_MENU_FONT_NAME);
+		SettingsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 
 		TextLabel* AnimLabel = new TextLabel(SettingsFrame);
 		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
@@ -4158,7 +4204,7 @@ inline namespace debug {
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
 		AnimLabel->TextSize = -1;
 		AnimLabel->TextColor = DefaultDebugColor;
-		AnimLabel->SetFont(DEBUG_MENU_FONT_NAME);
+		AnimLabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		AnimLabel->Name = "animLabel";
 
 		TextLabel* AnimButton = new TextLabel(SettingsFrame);
@@ -4169,7 +4215,7 @@ inline namespace debug {
 		AnimButton->TextAnchor = TextAnchorEnum::W;
 		AnimButton->TextSize = -1;
 		AnimButton->TextColor = { 0,0,0,255 };
-		AnimButton->SetFont(DEBUG_MENU_FONT_NAME);
+		AnimButton->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		AnimButton->Name = "animButton";
 		AnimButton->Active = true;
 		AnimButton->AddEvent(MOUSE_CLICK, [](Instance* t) {Animations = !Animations; }, MOUSE_LEFT);
@@ -4184,7 +4230,7 @@ inline namespace debug {
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
 		LGMlabel->TextSize = -1;
 		LGMlabel->TextColor = DefaultDebugColor;
-		LGMlabel->SetFont(DEBUG_MENU_FONT_NAME);
+		LGMlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		LGMlabel->Name = "LGMlabel";
 
 		TextLabel* LGMbutton = new TextLabel(SettingsFrame);
@@ -4195,7 +4241,7 @@ inline namespace debug {
 		LGMbutton->TextAnchor = TextAnchorEnum::W;
 		LGMbutton->TextSize = -1;
 		LGMbutton->TextColor = { 0,0,0,255 };
-		LGMbutton->SetFont(DEBUG_MENU_FONT_NAME);
+		LGMbutton->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		LGMbutton->Name = "LGMbutton";
 		LGMbutton->Active = true;
 		LGMbutton->AddEvent(MOUSE_CLICK, [](Instance* t) {lowGraphicsMode = !lowGraphicsMode; }, MOUSE_LEFT);
@@ -4210,7 +4256,7 @@ inline namespace debug {
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
 		FPSlabel->TextSize = -1;
 		FPSlabel->TextColor = DefaultDebugColor;
-		FPSlabel->SetFont(DEBUG_MENU_FONT_NAME);
+		FPSlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSlabel->Name = "FPSlabel";
 
 		Object2D* FPSframe = new TextLabel(SettingsFrame);
@@ -4229,7 +4275,7 @@ inline namespace debug {
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
 		FPSleft->TextSize = -1;
 		FPSleft->TextColor = DefaultDebugColor;
-		FPSleft->SetFont(DEBUG_MENU_FONT_NAME);
+		FPSleft->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSleft->Name = "FPSleft";
 		FPSleft->Active = true;
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
@@ -4242,7 +4288,7 @@ inline namespace debug {
 		FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str()));
 		FPSquantity->TextSize = -1;
 		FPSquantity->TextColor = DefaultDebugColor;
-		FPSquantity->SetFont(DEBUG_MENU_FONT_NAME);
+		FPSquantity->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSquantity->Name = "FPSquantity";
 		TextLabel* FPSright = new TextLabel(FPSframe);
 		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
@@ -4253,7 +4299,7 @@ inline namespace debug {
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
 		FPSright->TextSize = -1;
 		FPSright->TextColor = DefaultDebugColor;
-		FPSright->SetFont(DEBUG_MENU_FONT_NAME);
+		FPSright->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSright->Name = "FPSright";
 		FPSright->Active = true;
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
@@ -4267,7 +4313,7 @@ inline namespace debug {
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
 		Colorlabel->TextSize = -1;
 		Colorlabel->TextColor = DefaultDebugColor;
-		Colorlabel->SetFont(DEBUG_MENU_FONT_NAME);
+		Colorlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		Colorlabel->Name = "Colorlabel";
 
 		Object2D* Colorframe = new TextLabel(SettingsFrame);
@@ -4286,7 +4332,7 @@ inline namespace debug {
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
 		Colorleft->TextSize = -1;
 		Colorleft->TextColor = DefaultDebugColor;
-		Colorleft->SetFont(DEBUG_MENU_FONT_NAME);
+		Colorleft->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		Colorleft->Name = "Colorleft";
 		Colorleft->Active = true;
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
@@ -4305,7 +4351,7 @@ inline namespace debug {
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
 		Colorright->TextSize = -1;
 		Colorright->TextColor = DefaultDebugColor;
-		Colorright->SetFont(DEBUG_MENU_FONT_NAME);
+		Colorright->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		Colorright->Name = "Colorright";
 		Colorright->Active = true;
 		Colorright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor++; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
@@ -4333,7 +4379,7 @@ inline namespace debug {
 		LogsName->Size = SpecialVector2{ 0.8, 0.055 };
 		LogsName->TextAnchor = TextAnchorEnum::CENTER;
 		LogsName->BackgroundTransparency = 1;
-		LogsName->SetFont(DEBUG_MENU_FONT_NAME);
+		LogsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 
 		console = new ScrollFrame(LogsFrame);
 		console->BackgroundColor = { 0,0,0,255 };
@@ -4374,7 +4420,7 @@ inline namespace debug {
 		treeName->Size = SpecialVector2{ 0.8, 0.055 };
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
-		treeName->SetFont(DEBUG_MENU_FONT_NAME);
+		treeName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		Object2D* manageMenu = new Object2D(treeFrame);
 		manageMenu->Name = "manageMenu";
 		manageMenu->Position = SpecialVector2{ 0, 0.06 };
@@ -4538,8 +4584,8 @@ inline void updateSignals() {
 }
 
 void SUI_SetWindowSize(int newW, int newH) {
-	changeWindowSize = SpecialVector2{ (float)newW, (float)newH };
-	changeWindowSizeB = true;
+	SIMPLEUI_GLOBAL::changeWindowSize = SpecialVector2{ (float)newW, (float)newH };
+	SIMPLEUI_GLOBAL::changeWindowSizeB = true;
 }
 
 void SUI_SetWindowPosition(int newX, int newY) {
@@ -4567,6 +4613,7 @@ void UpdateHigher(Instance* StartInstance) {
 
 			for (auto sector : scroll->sectorsOnView) {
 				for (auto& [id, child] : sector->Objects) {
+					if (child == parent) continue;
 					int nextDepth = localDepth;
 					bool isTarget = false;
 
@@ -4586,7 +4633,7 @@ void UpdateHigher(Instance* StartInstance) {
 						if (obj) {
 							if (!obj->Visible) continue;
 							nextDepth = localDepth + 1;
-							if (obj->Active and obj->pointInObject(mousePosition)) {
+							if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 								isTarget = true;
 							}
 						}
@@ -4631,7 +4678,7 @@ void UpdateHigher(Instance* StartInstance) {
 					if (obj) {
 						if (!obj->Visible) continue;
 						nextDepth = localDepth + 1;
-						if (obj->Active and obj->pointInObject(mousePosition)) {
+						if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 							isTarget = true;
 						}
 					}
@@ -4666,8 +4713,8 @@ void UpdateHigher(Instance* StartInstance) {
 void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
 	SetConfigFlags(flags);
 
-	winWidth = inf.x;
-	winHeight = inf.y;
+	SIMPLEUI_GLOBAL::winWidth = inf.x;
+	SIMPLEUI_GLOBAL::winHeight = inf.y;
 
 	InitWindow(inf.x, inf.y, name);
 	
@@ -4682,8 +4729,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 	SetExitKey(KEY_NULL);
 
-	createFont(BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
-	createFont(DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
+	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
+	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
 	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader
 
 	for (auto& tup : queuedFonts) {
@@ -4691,64 +4738,64 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	}
 	queuedFonts.clear();
 
-	for (auto& pair : pendingImages) {
+	for (auto& pair : SIMPLEUI_GLOBAL::pendingImages) {
 		Texture tex = LoadTextureFromImage(pair.second);
 		GenTextureMipmaps(&tex);
 		SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
 		SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
-		loadedImages.insert({ pair.first, {pair.second, tex} });
+		SIMPLEUI_GLOBAL::loadedImages.insert({ pair.first, {pair.second, tex} });
 	}
 
-	pendingImages.clear();
+	SIMPLEUI_GLOBAL::pendingImages.clear();
 
 	debug::print("Hello from Ishakao!");
 
-	while (programRunning and !WindowShouldClose()) {
+	while (SIMPLEUI_GLOBAL::programRunning and !WindowShouldClose()) {
 		if (IsWindowFullscreen()) ToggleFullscreen();
-		if (changeWindowSizeB) {
-			SetWindowSize(changeWindowSize.x, changeWindowSize.y);
-			changeWindowSizeB = false;
+		if (SIMPLEUI_GLOBAL::changeWindowSizeB) {
+			SetWindowSize(SIMPLEUI_GLOBAL::changeWindowSize.x, SIMPLEUI_GLOBAL::changeWindowSize.y);
+			SIMPLEUI_GLOBAL::changeWindowSizeB = false;
 		}
 
 		static Vector2 previousMousePosition = {};
-		mousePosition = GetMousePosition();
-		mouseScreenPosition = GetMouseScreenPosition();
-		windowPosition = GetWindowPosition();
-		winWidth = GetScreenWidth(); winHeight = GetScreenHeight();
+		SIMPLEUI_GLOBAL::mousePosition = GetMousePosition();
+		SIMPLEUI_GLOBAL::mouseScreenPosition = GetMouseScreenPosition();
+		SIMPLEUI_GLOBAL::windowPosition = GetWindowPosition();
+		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
 
 		static long middleFPS = 0;
-		middleFPS += 1 / dt;
+		middleFPS += 1 / SIMPLEUI_GLOBAL::dt;
 		static double cd = 0;
-		cd += dt;
+		cd += SIMPLEUI_GLOBAL::dt;
 		static int frames = 0;
 		frames++;
 
 		if (cd >= 0.1) {
 			cd = 0;
-			accurateFPS = middleFPS / frames;
+			SIMPLEUI_GLOBAL::accurateFPS = middleFPS / frames;
 			middleFPS = 0;
 			frames = 0;
 		}
 
 		updateSignals();
-		dt = GetFrameTime();
-		Animate::UpdateAnimations(dt);
-		Tasks::UpdateTasks(dt);
+		SIMPLEUI_GLOBAL::dt = GetFrameTime();
+		Animate::UpdateAnimations(SIMPLEUI_GLOBAL::dt);
+		Tasks::UpdateTasks(SIMPLEUI_GLOBAL::dt);
 
-		if ((previousMousePosition.x != mousePosition.x or previousMousePosition.y != mousePosition.y or sceneDirty) or true) {
-			previousMousePosition = mousePosition;
+		if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty) or true) {
+			previousMousePosition = SIMPLEUI_GLOBAL::mousePosition;
 			UpdateHigher(&StartInstance);
 		}
 
 		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, { 125, 180, 220, 255 }); }
 		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }
-		if (IsKeyPressed(KEY_F3)) { std::cout << accurateFPS << std::endl; }
+		if (IsKeyPressed(KEY_F3)) { std::cout << SIMPLEUI_GLOBAL::accurateFPS << std::endl; }
 
-		framesSinceStart += 1;
+		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
 		DrawFrame(&StartInstance);
 
-		sceneDirty = false;
+		SIMPLEUI_GLOBAL::sceneDirty = false;
 	}
 
 	/*

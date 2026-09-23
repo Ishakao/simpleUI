@@ -1,11 +1,12 @@
 #version 330
 
-in vec2 fragTexCoord;
-out vec4 finalColor;
+in vec2 fragLocal;
+in vec4 fragColor;
+flat in vec2 fragHalfSize;
+flat in float fragRoundness;
+flat in float fragBorderThickness;
 
-uniform vec2 rectSize;
-uniform float roundness;
-uniform vec4 color;
+out vec4 finalColor;
 
 float sdRoundRect(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -13,10 +14,13 @@ float sdRoundRect(vec2 p, vec2 b, float r) {
 }
 
 void main() {
-    vec2 halfSize = rectSize / 2.0;
-    float radius = min(halfSize.x, halfSize.y) * clamp(roundness, 0.0, 1.0);
-    vec2 p = (fragTexCoord - 0.5) * rectSize;
-    float d = sdRoundRect(p, halfSize, radius);
-    float alpha = 1.0 - smoothstep(-1.0, 0.0, d);
-    finalColor = vec4(color.rgb, color.a * alpha);
+    float radius = min(fragHalfSize.x, fragHalfSize.y) * clamp(fragRoundness, 0.0, 1.0);
+    float d = sdRoundRect(fragLocal, fragHalfSize, radius);
+
+    float alphaFill = 1.0 - smoothstep(-0.5, 0.5, d);
+    float dOutline = abs(d + fragBorderThickness * 0.5) - fragBorderThickness * 0.5;
+    float alphaBorder = 1.0 - smoothstep(-0.5, 0.5, dOutline);
+
+    float alpha = mix(alphaFill, alphaBorder, step(0.5, fragBorderThickness));
+    finalColor = vec4(fragColor.rgb, fragColor.a * alpha);
 }

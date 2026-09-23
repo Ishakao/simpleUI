@@ -20,6 +20,7 @@
 // TextBox input can be on any language (any UTF-8 character)													//
 // TextBox now supports clipboard and Y viewport																//
 // Optimizated position and size calculate functions															//
+// Self rectangles batcher and shaders. Now rounded rectangles are so optimized (minimal CPU overload)			//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -101,18 +102,8 @@ using RAYLIB_FUNCTIONAL::LoadCodepoints;
 using RAYLIB_FUNCTIONAL::LoadFontEx;
 using RAYLIB_FUNCTIONAL::LoadRenderTexture;
 
-using RAYLIB_FUNCTIONAL::DrawRectangle;
-using RAYLIB_FUNCTIONAL::DrawRectangleLinesEx;
-using RAYLIB_FUNCTIONAL::DrawTexturePro;
-using RAYLIB_FUNCTIONAL::DrawLineEx;
-using RAYLIB_FUNCTIONAL::ClearBackground;
-using RAYLIB_FUNCTIONAL::BeginScissorMode;
-using RAYLIB_FUNCTIONAL::EndScissorMode;
-using RAYLIB_FUNCTIONAL::BeginTextureMode;
-using RAYLIB_FUNCTIONAL::EndTextureMode;
-using RAYLIB_FUNCTIONAL::BeginShaderMode;
-using RAYLIB_FUNCTIONAL::EndShaderMode;
 using RAYLIB_FUNCTIONAL::BeginDrawing;
+using RAYLIB_FUNCTIONAL::ClearBackground;
 using RAYLIB_FUNCTIONAL::EndDrawing;
 
 using RAYLIB_FUNCTIONAL::TEXTURE_FILTER_TRILINEAR;
@@ -178,6 +169,7 @@ using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC2;
 #include <fstream>
 #include <mutex>
 #include <type_traits>
+#include <atomic>
 
 template<typename T, typename = void>
 struct is_streamable : std::false_type {};
@@ -191,9 +183,9 @@ inline constexpr bool is_streamable_v = is_streamable<T>::value;
 template<typename T>
 void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	if constexpr (is_streamable_v<T>) {
-		std::cerr << "Throw: _" << v << "_ on line " << __LINE__ << " (" << __FILE__ << ")" << std::endl;
+		std::cerr << "Throw: _" << v << "_ on line " << line << " (" << file << ")" << std::endl;
 	} else {
-		std::cerr << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << std::to_string(__LINE__) << " (" << __FILE__ << ")" << std::endl;
+		std::cerr << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << std::endl;
 	}
 	throw(1);
 }
@@ -296,29 +288,49 @@ struct SpecialVector2 {
 	}
 };
 
+struct RoundRectData {
+	Vector2 Pos, Size;
+	Color Color, BorderColor;
+	float Transparency, Roundness, BorderTransparency;
+	int BorderThickness;
+};
+
 namespace SIMPLEUI_GLOBAL {
-	inline int winWidth = 0;
-	inline int winHeight = 0;
-	inline int defaultSpacing = 0;
-	inline float dt = 0;
-	inline SpecialVector2 changeWindowSize = { 0,0 };
-	inline bool changeWindowSizeB = false;
-	inline long accurateFPS = 0;
-	inline bool programRunning = true;
+	int winWidth = 0;
+	int winHeight = 0;
+	int defaultSpacing = 0;
+	float dt = 0;
+	SpecialVector2 changeWindowSize = { 0,0 };
+	bool changeWindowSizeB = false;
+	bool windowSizeChanged = false;
+	long accurateFPS = 0;
+	bool programRunning = true;
 	SpecialVector2 mousePosition;
 	SpecialVector2 mouseScreenPosition;
 	SpecialVector2 windowPosition;
-	inline constexpr const char* BASIC_FONT_NAME = "Arial";
-	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
-	inline std::unordered_map<std::string, Shader> Shaders;
-	inline long currentUniqueObjectID = 0;
+	constexpr const char* BASIC_FONT_NAME = "Arial";
+	constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
+	std::unordered_map<int, Shader> Shaders;
+	long currentUniqueObjectID = 0;
 	bool sceneDirty = false; // true in frame where any object size or position changed
 
-	inline std::mutex ImagesLoadingMtx;
-	inline std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
-	inline std::unordered_map<std::string, Image> pendingImages;
+	int TextureRoundnessShader = -1;
+	int RectangleRoundnessShader = -1;
+	int CurrentCustomShader = -1;
+	std::vector<RoundRectData> CurrentRectanglesBatch;
+
+	std::mutex ImagesLoadingMtx;
+	std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
+	std::unordered_map<std::string, Image> pendingImages;
 
 	size_t framesSinceStart = 0;
+
+	TextBox* FocusedTextBox = nullptr;
+	Object2D* PreviousHigherObject = nullptr;
+	Object2D* higherObject = nullptr;
+
+	std::unordered_map<long, Instance*> deletedObjectsByID;
+	std::unordered_map<Instance*, long> deletedObjectsByPtr;
 }
 
 inline void loadImage(const std::string& name, const std::string& path) {
@@ -381,21 +393,19 @@ inline std::pair<Image, Texture> getImage(const std::string& name) {
 	return {};
 }
 
-inline void loadNewShader(const std::string& name, const std::string& vs, const std::string& fs) {
-	auto it = SIMPLEUI_GLOBAL::Shaders.find(name);
-	if (it != SIMPLEUI_GLOBAL::Shaders.end()) {
-		std::cout << "Shader: " << name << " already exists" << std::endl;
-		return;
-	}
+inline int loadNewShader(const std::string& vs, const std::string& fs) {
+	static int cur = 0;
 
-	SIMPLEUI_GLOBAL::Shaders.emplace(name, LoadShader(vs.c_str(), fs.c_str()));
+	SIMPLEUI_GLOBAL::Shaders.emplace(cur, LoadShader(vs.c_str(), fs.c_str()));
+
+	return cur++;
 }
 
-inline Shader getShader(const std::string& name) {
-	auto it = SIMPLEUI_GLOBAL::Shaders.find(name);
+inline Shader getShader(int id) {
+	auto it = SIMPLEUI_GLOBAL::Shaders.find(id);
 	if (it == SIMPLEUI_GLOBAL::Shaders.end()) {
-		std::cout << "Shader: " << name << " was not found" << std::endl;
-		return SIMPLEUI_GLOBAL::Shaders.find("TextureRoundness")->second;
+		std::cout << "Shader: " << id << " was not found" << std::endl;
+		return SIMPLEUI_GLOBAL::Shaders.find(1)->second;
 	}
 	return it->second;
 }
@@ -977,13 +987,6 @@ inline Vector3 getTextCFrame(const char* text, Font font, Rectangle rec, TextAnc
 	return { (float)endX, (float)endY, (float)endSize };
 }
 
-inline TextBox* FocusedTextBox = nullptr;
-inline Object2D* PreviousHigherObject = nullptr;
-inline Object2D* higherObject = nullptr;
-
-inline std::unordered_map<long, Instance*> deletedObjectsByID;
-inline std::unordered_map<Instance*, long> deletedObjectsByPtr;
-
 enum InstanceType : int {
 	INSTANCE = 0,
 
@@ -1026,8 +1029,8 @@ inline void Delete(Z* ptr) {
 
 	if (ptr->Parent) {
 		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
-		deletedObjectsByID.insert({ ptr->uniqueID, ptr });
-		deletedObjectsByPtr.insert({ ptr, ptr->uniqueID });
+		SIMPLEUI_GLOBAL::deletedObjectsByID.insert({ ptr->uniqueID, ptr });
+		SIMPLEUI_GLOBAL::deletedObjectsByPtr.insert({ ptr, ptr->uniqueID });
 
 		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
 		if (it != ptr->Parent->childsAddedInFrame.end()) {
@@ -1276,7 +1279,7 @@ public:
 		}
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
 
@@ -1452,117 +1455,94 @@ enum SUI_EEC {
 	EEC_IF_DESCENDANT_HIGHER
 };
 
-void DrawBackgroundRound(Vector2 RealPos, Vector2 RealSize, Color BackgroundColor, float BackgroundTransparency, float Roundness) {
-	if (BackgroundTransparency != 1) {
-		static bool roundShaderLoaded = false;
-		static Shader shader;
+static void EmitRoundRectQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color color) {
+	float hx = size.x * 0.5f + 1.0f;
+	float hy = size.y * 0.5f + 1.0f;
+	float x0 = pos.x - 1.0f;
+	float y0 = pos.y - 1.0f;
+	float x1 = pos.x + size.x + 1.0f;
+	float y1 = pos.y + size.y + 1.0f;
+	float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 
-		static float lastRoundness = -1;
-		static Vector2 lastSize = { 0,0 };
-		static Vector4 lastColor = { 0,0,0,1 };
-		static Color lastColorDefault = { 1,2,3,4 };
+	RAYLIB_FUNCTIONAL::rlColor4ub(color.r, color.g, color.b, color.a);
 
-		static int roundnessPointer = -1;
-		static int lastSizePointer = -1;
-		static int colorPointer = -1;
+	RAYLIB_FUNCTIONAL::rlTexCoord2f(-hx, -hy); RAYLIB_FUNCTIONAL::rlVertex3f(x0, y0, z);
+	RAYLIB_FUNCTIONAL::rlTexCoord2f(-hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x0, y1, z);
+	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y1, z);
+	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, -hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y0, z);
+}
 
-		if (!roundShaderLoaded) {
-			shader = getShader("RectangleRoundness");
-			lastSizePointer = GetShaderLocation(shader, "rectSize");
-			roundnessPointer = GetShaderLocation(shader, "roundness");
-			colorPointer = GetShaderLocation(shader, "color");
-			roundShaderLoaded = true;
-		}
+void DrawRoundRectBatch(const RoundRectData& r) {
+	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
+	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
+}
 
-		if (Roundness != lastRoundness) {
-			lastRoundness = Roundness;
-			SetShaderValue(shader, roundnessPointer, &lastRoundness, SHADER_UNIFORM_FLOAT);
-		}
-
-		if (RealSize.x != lastSize.x or RealSize.y != lastSize.y) {
-			lastSize = { RealSize.x, RealSize.y };
-			SetShaderValue(shader, lastSizePointer, &lastSize, SHADER_UNIFORM_VEC2);
-		}
-
-		if (lastColorDefault.r != BackgroundColor.r or lastColorDefault.g != BackgroundColor.g or
-			lastColorDefault.b != BackgroundColor.b or lastColorDefault.a != (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency))) {
-			lastColorDefault = { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) };
-			lastColor = { lastColorDefault.r / 255.0f, lastColorDefault.g / 255.0f, lastColorDefault.b / 255.0f, lastColorDefault.a / 255.0f };
-			SetShaderValue(shader, colorPointer, &lastColor, SHADER_UNIFORM_VEC4);
-		}
-
-		BeginShaderMode(shader);
-
+void FlushRectanglesBatch() {
+	if (SIMPLEUI_GLOBAL::CurrentRectanglesBatch.size()) {
+		static Shader shader = getShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
 		RAYLIB_FUNCTIONAL::rlBegin(RL_QUADS);
-		RAYLIB_FUNCTIONAL::rlColor4ub(255, 255, 255, 255);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y + RealSize.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y + RealSize.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y);
-		RAYLIB_FUNCTIONAL::rlEnd();
 
-		EndShaderMode();
+		for (const auto& r : SIMPLEUI_GLOBAL::CurrentRectanglesBatch) {
+			unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
+			if (fillA) {
+				EmitRoundRectQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA });
+			}
+
+			unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
+			if (r.BorderThickness > 0 and borderA) {
+				EmitRoundRectQuad(r.Pos, r.Size, r.Roundness, r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA });
+			}
+		}
+
+		RAYLIB_FUNCTIONAL::rlEnd();
+		RAYLIB_FUNCTIONAL::EndShaderMode();
+
+		SIMPLEUI_GLOBAL::CurrentRectanglesBatch.clear();
 	}
 }
 
-void DrawLinesRound(Vector2 RealPos, Vector2 RealSize, Color BorderColor, float BorderTransparency, int BorderThickness, float Roundness) {
-	if (BorderThickness > 0 and BorderTransparency != 1) {
-		static bool roundLinesShaderLoaded = false;
-		static Shader shader;
+namespace RL_FUNCTIONS_PLUS {
+	void BeginShaderMode(Shader shader) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
+	}
 
-		static float lastRoundness = -1;
-		static Vector2 lastSize = { 0,0 };
-		static Vector4 lastColor = { 0,0,0,1 };
-		static float lastBorderThickness = 0;
-		static Color lastColorDefault = { 1,2,3,4 };
+	void EndShaderMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndShaderMode();
+	}
 
-		static int roundnessPointer = -1;
-		static int lastSizePointer = -1;
-		static int borderThicknessPointer = -1;
-		static int colorPointer = -1;
+	void BeginTextureMode(RenderTexture2D texture) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginTextureMode(texture);
+	}
 
-		if (!roundLinesShaderLoaded) {
-			shader = getShader("RectangleLinesRoundness");
-			lastSizePointer = GetShaderLocation(shader, "rectSize");
-			roundnessPointer = GetShaderLocation(shader, "roundness");
-			borderThicknessPointer = GetShaderLocation(shader, "borderThickness");
-			colorPointer = GetShaderLocation(shader, "color");
-			roundLinesShaderLoaded = true;
-		}
+	void EndTextureMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndTextureMode();
+	}
 
-		if (Roundness != lastRoundness) {
-			lastRoundness = Roundness;
-			SetShaderValue(shader, roundnessPointer, &lastRoundness, SHADER_UNIFORM_FLOAT);
-		}
+	void BeginScissorMode(int x, int y, int width, int height) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginScissorMode(x, y, width, height);
+	}
 
-		if ((float)BorderThickness != lastBorderThickness) {
-			lastBorderThickness = (float)BorderThickness;
-			SetShaderValue(shader, borderThicknessPointer, &lastBorderThickness, SHADER_UNIFORM_FLOAT);
-		}
+	void EndScissorMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndScissorMode();
+	}
 
-		if (RealSize.x != lastSize.x or RealSize.y != lastSize.y) {
-			lastSize = { RealSize.x, RealSize.y };
-			SetShaderValue(shader, lastSizePointer, &lastSize, SHADER_UNIFORM_VEC2);
-		}
+	void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
+		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
+	}
 
-		if (lastColorDefault.r != BorderColor.r or lastColorDefault.g != BorderColor.g or
-			lastColorDefault.b != BorderColor.b or lastColorDefault.a != (unsigned char)(BorderColor.a * (1 - BorderTransparency))) {
-			lastColorDefault = { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) };
-			lastColor = { lastColorDefault.r / 255.0f, lastColorDefault.g / 255.0f, lastColorDefault.b / 255.0f, lastColorDefault.a / 255.0f };
-			SetShaderValue(shader, colorPointer, &lastColor, SHADER_UNIFORM_VEC4);
-		}
-
-		BeginShaderMode(shader);
-
-		RAYLIB_FUNCTIONAL::rlBegin(RL_QUADS);
-		RAYLIB_FUNCTIONAL::rlColor4ub(255, 255, 255, 255);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(0.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x, RealPos.y + RealSize.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 1.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y + RealSize.y);
-		RAYLIB_FUNCTIONAL::rlTexCoord2f(1.0f, 0.0f); RAYLIB_FUNCTIONAL::rlVertex2f(RealPos.x + RealSize.x, RealPos.y);
-		RAYLIB_FUNCTIONAL::rlEnd();
-
-		EndShaderMode();
+	void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
 	}
 }
 
@@ -1642,7 +1622,7 @@ public:
 	bool Visible = true;
 
 	float Roundness = 0.0f;
-	short Segments = 5;
+	short Segments = 5; // Deprecated value, now simpleUI using SDF for corners
 
 	short BorderThickness{};
 	float BorderTransparency{};
@@ -1762,18 +1742,9 @@ public:
 				return;
 			}
 
-			if (Roundness != 0) {
-				DrawBackgroundRound(RealPos, RealSize, BackgroundColor, BackgroundTransparency, Roundness);
-				DrawLinesRound(RealPos, RealSize, BorderColor, BorderTransparency, BorderThickness, Roundness);
-			} else {
-				if (BackgroundTransparency != 1) {
-					DrawRectangle(RealPos.x, RealPos.y, RealSize.x, RealSize.y, { BackgroundColor.r, BackgroundColor.g, BackgroundColor.b, (unsigned char)(BackgroundColor.a * (1 - BackgroundTransparency)) });
-				}
+			const RoundRectData rec = { RealPos, RealSize, BackgroundColor, BorderColor, BackgroundTransparency, Roundness, BorderTransparency, BorderThickness };
 
-				if (BorderThickness > 0 and BorderTransparency != 1) {
-					DrawRectangleLinesEx({ RealPos.x, RealPos.y, RealSize.x, RealSize.y }, BorderThickness, { BorderColor.r, BorderColor.g, BorderColor.b, (unsigned char)(BorderColor.a * (1 - BorderTransparency)) });
-				}
-			}
+			DrawRoundRectBatch(rec);
 		}
 	}
 
@@ -1826,7 +1797,7 @@ public:
 		}
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
 		getRealObject2Dsize();
@@ -1941,7 +1912,7 @@ public:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
 		Draw();
@@ -2014,15 +1985,15 @@ inline void PushClip(Clip last) {
 		last = Intersect(clipStack.back(), last);
 
 	clipStack.push_back(last);
-	BeginScissorMode(last.x, last.y, last.w, last.h);
+	RL_FUNCTIONS_PLUS::BeginScissorMode(last.x, last.y, last.w, last.h);
 }
 
 inline void PopClip() {
-	EndScissorMode();
+	RL_FUNCTIONS_PLUS::EndScissorMode();
 	clipStack.pop_back();
 	if (!clipStack.empty()) {
 		Clip last = clipStack.back();
-		BeginScissorMode(last.x, last.y, last.w, last.h);
+		RL_FUNCTIONS_PLUS::BeginScissorMode(last.x, last.y, last.w, last.h);
 	}
 }
 
@@ -2115,14 +2086,14 @@ private:
 				}
 
 				SpecialVector2 pos = { 
-					casted->Position.x * parentSize.x + casted->PositionOFFSET.x - casted->BorderThickness, 
-					casted->Position.y * parentSize.y + casted->PositionOFFSET.y - casted->BorderThickness 
+					casted->Position.x * parentSize.x + casted->PositionOFFSET.x, 
+					casted->Position.y * parentSize.y + casted->PositionOFFSET.y 
 				};
 
-				SpecialVector2 lastpos = { pos.x + casted->RealSize.x + casted->BorderThickness * 2, pos.y + casted->RealSize.y + casted->BorderThickness * 2 };
+				SpecialVector2 lastpos = { pos.x + casted->RealSize.x, pos.y + casted->RealSize.y };
 
-				for (int i = pos.x / GridSectorSize; i <= lastpos.x / GridSectorSize; i++) {
-					for (int j = pos.y / GridSectorSize; j <= lastpos.y / GridSectorSize; j++) {
+				for (int i = std::floor(pos.x / GridSectorSize); i <= std::ceil(lastpos.x / GridSectorSize); i++) {
+					for (int j = std::floor(pos.y / GridSectorSize); j <= std::ceil(lastpos.y / GridSectorSize); j++) {
 						sect.push_back({ i, j });
 					}
 				}
@@ -2179,7 +2150,7 @@ private:
 		SpecialVector2 fullSize = RealSize;
 		SpecialVector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
 
-		if (force or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
+		if (force or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
 			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y) {
 			lastFullSize = fullSize;
 			lastCanvasFullPosition = fullPos;
@@ -2193,8 +2164,8 @@ private:
 			};
 
 			Vector2 end = {
-				std::floor(lastpos.x / GridSectorSize),
-				std::floor(lastpos.y / GridSectorSize)
+				std::ceil(lastpos.x / GridSectorSize),
+				std::ceil(lastpos.y / GridSectorSize)
 			};
 
 			for (int i = start.x; i <= end.x; i++) {
@@ -2279,7 +2250,7 @@ public:
 	bool ScrollEnabled = true;
 	bool Animated = false;
 
-	void Draw(bool force = false) {
+	void Draw() {
 		Object2D::Draw();
 
 		bool pushed = false;
@@ -2294,9 +2265,11 @@ public:
 
 		toUpdateSectors.clear();
 
+		checkAndUpdateCurrentSectors();
+
 		for (ScrollSector* s : sectorsOnView) {
 			for (auto& [id, ptr] : s->Objects) {
-				if (deletedObjectsByID.size() and deletedObjectsByID.contains(id)) {
+				if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(id)) {
 					continue;
 				}
 				ptr->Update();
@@ -2305,10 +2278,6 @@ public:
 
 		for (Instance* s : Tick) {
 			s->Update();
-		}
-
-		if (force) {
-			checkAndUpdateCurrentSectors(force);
 		}
 
 		if (pushed) PopClip();
@@ -2332,7 +2301,7 @@ public:
 
 					SpecialVector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
 					SpecialVector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
-					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
 				}
 			}
 
@@ -2354,7 +2323,7 @@ public:
 
 					SpecialVector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
 					SpecialVector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
-					DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
 				}
 			}
 		}
@@ -2371,22 +2340,27 @@ public:
 		}
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
+
+		SpecialVector2 oldSize = RealSize;
+
 		getRealObject2Dsize();
 		getRealObject2Dposition();
 
-		bool force = false;
+		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) {
+			for (Instance* child : Children) {
+				UpdateSectors(child);
+			}
+		}
 
 		for (auto& [id, ptr] : childsAddedInFrame) {
 			SectorsAddChild(ptr);
-			force = true;
 		}
 
 		for (auto& [id, ptr] : childsRemovedInFrame) {
 			SectorsRemoveChild(id);
-			force = true;
 		}
 
 		SameUpdate();
@@ -2418,12 +2392,12 @@ public:
 		bool entered = false;
 
 		bool enterAllowed = (
-			EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+			EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
 			(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-				EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+				EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
 			);
 
-		if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+		if (Visible and ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::PreviousHigherObject != this) or enterAllowed)) {
 			entered = true;
 		}
 
@@ -2446,13 +2420,11 @@ public:
 					if (Animated) {
 						Animate::Create(&CanvasPositionOFFSET.y, 0.125, newY);
 						Animate::Create(&CanvasPosition.y, 0.125, newY1);
-					}
-					else {
+					} else {
 						CanvasPositionOFFSET.y = newY;
 						CanvasPosition.y = newY1;
 					}
-				}
-				else if (isX) {
+				} else if (isX) {
 					float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
 					float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOFFSET;
 					float newTotalX = currentX - (WheelMove * totalStep);
@@ -2465,8 +2437,7 @@ public:
 					if (Animated) {
 						Animate::Create(&CanvasPositionOFFSET.x, 0.125, newX);
 						Animate::Create(&CanvasPosition.x, 0.125, newX1);
-					}
-					else {
+					} else {
 						CanvasPositionOFFSET.x = newX;
 						CanvasPosition.x = newX1;
 					}
@@ -2474,8 +2445,7 @@ public:
 			}
 		}
 
-		checkAndUpdateCurrentSectors();
-		Draw(force);
+		Draw();
 	}
 
 	ScrollFrame* Clone() const override {
@@ -2621,15 +2591,15 @@ class TextLabel : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) EndScissorMode();
+			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			BeginTextureMode(cachedText);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText);
 			ClearBackground(BLANK);
 			DrawTextEx(getFont(!FontFace), visibleText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
-			EndTextureMode();
+			RL_FUNCTIONS_PLUS::EndTextureMode();
 			SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
 
-			if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 public:
@@ -2693,7 +2663,7 @@ public:
 				Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
 				SpecialVector2 origin = { 0, 0 };
 
-				DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
 			}
 		}
 	}
@@ -2814,7 +2784,7 @@ class TextBox : public Object2D {
 
 	void updateTexture() {
 		updateTextParams();
-		lastFocused = FocusedTextBox;
+		lastFocused = SIMPLEUI_GLOBAL::FocusedTextBox;
 		lastParams = textParams;
 		lastRealSize = RealSize;
 		lastHideText = HideText;
@@ -2823,7 +2793,7 @@ class TextBox : public Object2D {
 		if (Text != "") {
 			newSize = MeasureTextEx(getFont(!FontFace), Text.c_str(), textParams.z, Spacing);
 		} else {
-			if (CursorIndex == -1 or FocusedTextBox != this) {
+			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
 				newSize = MeasureTextEx(getFont(!FontFace), PlaceholderText.c_str(), textParams.z, Spacing);
 			}
 		}
@@ -2844,9 +2814,9 @@ class TextBox : public Object2D {
 		Clip current;
 		if (hadClip) current = clipStack.back();
 
-		if (hadClip) EndScissorMode();
+		if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-		BeginTextureMode(cachedText);
+		RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText);
 		ClearBackground(BLANK);
 
 		if (Text != "") {
@@ -2868,14 +2838,14 @@ class TextBox : public Object2D {
 			DrawTextEx(getFont(FontFace), t.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
 		} else {
 			lines = 0;
-			if (CursorIndex == -1 or FocusedTextBox != this) {
+			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
 				DrawTextEx(getFont(FontFace), PlaceholderText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
 			}
 		}
 
-		EndTextureMode();
+		RL_FUNCTIONS_PLUS::EndTextureMode();
 		SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
-		if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+		if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 	}
 public:
 	Color CursorColor = { 0,0,0,255 };
@@ -2918,7 +2888,7 @@ public:
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged();
 
-		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or ((FocusedTextBox == this and lastFocused != this) or (lastFocused == this and FocusedTextBox != this))) {
+		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this))) {
 			updateTexture();
 		} else if (Text.isChanged()) {
 			updateTexture();
@@ -2960,11 +2930,11 @@ public:
 				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
 			}
 
-			DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, clr);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, clr);
 		}
 
 		if (Text.empty()) {
-			if (CursorVisible and FocusedTextBox == this) {
+			if (CursorVisible and SIMPLEUI_GLOBAL::FocusedTextBox == this) {
 				if (textParams.z > 1) {
 					float sizeY = textParams.z;
 					DrawLineEx(
@@ -3024,7 +2994,7 @@ public:
 	}
 
 	void inputHandler() {
-		if (FocusedTextBox == this and deleteText and ClearOnClick) {
+		if (SIMPLEUI_GLOBAL::FocusedTextBox == this and deleteText and ClearOnClick) {
 			Text = "";
 			CursorIndex = 0;
 			deleteText = false;
@@ -3035,21 +3005,21 @@ public:
 		if (CursorTime >= CursorCooldown) { CursorVisible = !CursorVisible; CursorTime = 0.0f; }
 
 		if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) and CanClick) {
-			if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and FocusedTextBox != this and higherObject == this and ClearOnClick) {
+			if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::FocusedTextBox != this and SIMPLEUI_GLOBAL::higherObject == this and ClearOnClick) {
 				Text = "";
 			}
-			if (higherObject != this and higherObject) {
-				if (higherObject->Class == TEXTBOX) {
-					FocusedTextBox = static_cast<TextBox*>(higherObject);
+			if (SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject) {
+				if (SIMPLEUI_GLOBAL::higherObject->Class == TEXTBOX) {
+					SIMPLEUI_GLOBAL::FocusedTextBox = static_cast<TextBox*>(SIMPLEUI_GLOBAL::higherObject);
 				} else {
-					FocusedTextBox = nullptr;
+					SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
 				}
-			} else if (not higherObject) {
-				FocusedTextBox = nullptr;
-			} else if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and higherObject == this) {
+			} else if (not SIMPLEUI_GLOBAL::higherObject) {
+				SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
+			} else if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::higherObject == this) {
 				CursorTime = 0.0f;
 				CursorVisible = true;
-				FocusedTextBox = this;
+				SIMPLEUI_GLOBAL::FocusedTextBox = this;
 
 				std::string text = "";
 				if (HideText != '\0') {
@@ -3128,7 +3098,7 @@ public:
 			}
 		}
 
-		if (FocusedTextBox == this and Visible and CanType) {
+		if (SIMPLEUI_GLOBAL::FocusedTextBox == this and Visible and CanType) {
 			if (maxSymbols >= charOffsets.size() or maxSymbols < 0) {
 				int symbolsLeft = maxSymbols - static_cast<int>(charOffsets.size());
 				int addedSymbols = 0;
@@ -3166,7 +3136,7 @@ public:
 			}
 		}
 
-		if (FocusedTextBox == this and Visible and CanType) {
+		if (SIMPLEUI_GLOBAL::FocusedTextBox == this and Visible and CanType) {
 			if (IsKeyPressed(KEY_BACKSPACE)) {
 				if (IsKeyDown(KEY_LEFT_CONTROL)) {
 					if (CursorIndex > 0) {
@@ -3501,12 +3471,12 @@ public:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
-		if (!(FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
+		if (!(SIMPLEUI_GLOBAL::FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
 
 		inputHandler();
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
 		getRealObject2Dsize();
@@ -3673,7 +3643,7 @@ public:
 	float Rotation = 0;
 	SpecialVector2 Origin = { 0, 0 };
 
-	void setImage(std::string name = "") {
+	void setImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
 			UnloadImage(imageIfMemory);
 			UnloadTexture(tex);
@@ -3739,7 +3709,7 @@ public:
 				static int objectDataPointer = -1;
 				static int imageDataPointer = -1;
 				if (!roundShaderLoaded) {
-					shader = getShader("TextureRoundness");
+					shader = getShader(SIMPLEUI_GLOBAL::TextureRoundnessShader);
 					roundnessPointer = GetShaderLocation(shader, "roundness");
 					objectDataPointer = GetShaderLocation(shader, "objectData");
 					imageDataPointer = GetShaderLocation(shader, "imageData");
@@ -3761,11 +3731,11 @@ public:
 					SetShaderValue(shader, imageDataPointer, &srcRec, SHADER_UNIFORM_VEC4);
 				}
 
-				BeginShaderMode(shader);
-				DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
-				EndShaderMode();
+				RL_FUNCTIONS_PLUS::BeginShaderMode(shader);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::EndShaderMode();
 			} else {
-				DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 			}
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
@@ -3870,7 +3840,7 @@ public:
 				return;
 			}
 
-			DrawTexturePro(texture, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Origin, Rotation, TextureColor);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(texture, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Origin, Rotation, TextureColor);
 		}
 	}
 
@@ -4009,6 +3979,9 @@ inline void Object2D::eventHandler() {
 	std::function<void(Instance*)> mouseReleased1;
 	std::function<void(Instance*)> mouseReleased2;
 	std::function<void(Instance*)> mouseReleased3;
+
+	Instance* higherObject = SIMPLEUI_GLOBAL::higherObject;
+	Instance* PreviousHigherObject = SIMPLEUI_GLOBAL::PreviousHigherObject;
 
 	for (const auto& [type, func, mouse] : events) {
 		switch (type) {
@@ -4849,8 +4822,8 @@ void UpdateHigher(Instance* StartInstance) {
 	};
 
 	getTop(StartInstance, 0);
-	PreviousHigherObject = higherObject;
-	higherObject = best;
+	SIMPLEUI_GLOBAL::PreviousHigherObject = SIMPLEUI_GLOBAL::higherObject;
+	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
 void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
@@ -4874,9 +4847,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
 	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
-	loadNewShader("TextureRoundness", "", "include/simpleUI Shaders/texture_roundness.frag"); // Basic shader 1
-	loadNewShader("RectangleRoundness", "", "include/simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
-	loadNewShader("RectangleLinesRoundness", "", "include/simpleUI Shaders/rectangle_lines_roundness.frag"); // Basic shader 3
+	SIMPLEUI_GLOBAL::TextureRoundnessShader = loadNewShader("", "simpleUI Shaders/texture_roundness.frag"); // Basic shader 1
+	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
 
 	for (auto& tup : queuedFonts) {
 		createFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));
@@ -4906,7 +4878,13 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		SIMPLEUI_GLOBAL::mousePosition = GetMousePosition();
 		SIMPLEUI_GLOBAL::mouseScreenPosition = GetMouseScreenPosition();
 		SIMPLEUI_GLOBAL::windowPosition = GetWindowPosition();
+
+		static Vector2 previousWinSize = { SIMPLEUI_GLOBAL::winWidth, SIMPLEUI_GLOBAL::winHeight};
 		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
+
+		if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
+			SIMPLEUI_GLOBAL::windowSizeChanged = true;
+		}
 
 		static long middleFPS = 0;
 		middleFPS += 1 / SIMPLEUI_GLOBAL::dt;
@@ -4941,6 +4919,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		DrawFrame(&StartInstance);
 
 		SIMPLEUI_GLOBAL::sceneDirty = false;
+		SIMPLEUI_GLOBAL::windowSizeChanged = false;
 	}
 
 	/*

@@ -1,13 +1,10 @@
 #pragma once
 #include "simpleUI.h"
-#include "raylib.h"
 
 enum GraphDisplayType {
 	GRAPH_LINEAR = 0, // Default linear graph where lines going from i value to i+1 value
 	GRAPH_COLUMNAR // Columnar graph style where values displays with rectangles
 };
-
-using RAYLIB_FUNCTIONAL::DrawRectangle;
 
 class GraphBuilder : public Object2D {
 	constexpr static const char* DefaultName = "GraphBuilder";
@@ -59,9 +56,9 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) EndScissorMode();
+			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			BeginTextureMode(cachedTexture);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture);
 			ClearBackground(BLANK);
 			
 			size_t gsize = 0;
@@ -100,7 +97,7 @@ class GraphBuilder : public Object2D {
 							GraphRealPos.y + GraphRealSize.y * (1 - (current - gmin) / (gmax - gmin))
 						};
 
-						DrawLineEx(start, end, seq->thickness, seq->color);
+						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color);
 					} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 						long double current = seq->sequence[i];
 						float height = GraphRealSize.y * ((current - lmin) / (lmax - lmin)); if (height <= 0) height = 1;
@@ -109,19 +106,16 @@ class GraphBuilder : public Object2D {
 						if (sizeAfterSpacingX <= 0) continue;
 
 						Rectangle rec = { (GraphRealPos.x + i * (sizeAfterSpacingX + Spacing)), (GraphRealPos.y + (GraphRealSize.y - height)), sizeAfterSpacingX, height };
-						
-						if (ColumnsRoundness) {
-							DrawRectangleRounded(rec, ColumnsRoundness, 10, seq->color);
-						} else {
-							DrawRectangle(rec.x, rec.y, rec.width, rec.height, seq->color);
-						}
+						RoundRectData r = { {rec.x, rec.y}, {rec.width, rec.height}, seq->color, seq->color, 0, ColumnsRoundness, 1, 0 };
+
+						DrawRoundRectBatch(r);
 					}
 				}
 			}
 
-			EndTextureMode();
+			RL_FUNCTIONS_PLUS::EndTextureMode();
 
-			if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -142,16 +136,16 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) EndScissorMode();
+			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			BeginTextureMode(cachedMin);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMin);
 			ClearBackground(BLANK);
 
 			DrawTextEx(getFont(FontFace), strMin.c_str(), { 0,0 }, textParamsMin.z, 0, { 255,255,255,255 });
 
-			EndTextureMode();
+			RL_FUNCTIONS_PLUS::EndTextureMode();
 
-			if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -172,16 +166,16 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) EndScissorMode();
+			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			BeginTextureMode(cachedMax);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMax);
 			ClearBackground(BLANK);
 
 			DrawTextEx(getFont(FontFace), strMax.c_str(), { 0,0 }, textParamsMax.z, 0, { 255,255,255,255 });
 
-			EndTextureMode();
+			RL_FUNCTIONS_PLUS::EndTextureMode();
 
-			if (hadClip) BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -492,10 +486,10 @@ public:
 				}
 			}
 
-			DrawTexturePro(cachedTexture.texture, sourceRec, destRec, { 0,0 }, 0, { 255,255,255,255 });
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture.texture, sourceRec, destRec, { 0,0 }, 0, { 255,255,255,255 });
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				DrawTexturePro(cachedMin.texture, sourceRecMin, destRecMin, { 0,0 }, 0, c);
-				DrawTexturePro(cachedMax.texture, sourceRecMax, destRecMax, { 0,0 }, 0, c);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin.texture, sourceRecMin, destRecMin, { 0,0 }, 0, c);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax.texture, sourceRecMax, destRecMax, { 0,0 }, 0, c);
 			}
 		}
 	}
@@ -555,9 +549,9 @@ class ToggleSwitcher : public Object2D {
 	void checkClick() {
 		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 			bool canBePressed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
 				);
 
 			if (canBePressed) {
@@ -623,22 +617,13 @@ public:
 
 			Object2D::Draw();
 
-			float RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
+			int RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
 			Vector2 RealPos1 = { RealBallPosX, std::ceil(RealPos.y)};
 			Vector2 RealSize1 = { RealSize.y, RealSize.y };
 
-			if (Roundness != 0) {
-				DrawBackgroundRound(RealPos1, RealSize1, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, SliderTransparency, Roundness);
-				DrawLinesRound(RealPos1, RealSize1, { SliderBorderColor.r, SliderBorderColor.g, SliderBorderColor.b, (unsigned char)(SliderBorderColor.a * (1 - SliderBorderTransparency)) }, SliderBorderTransparency, SliderBorderThickness, Roundness);
-			} else {
-				if (SliderTransparency != 1) {
-					DrawRectangle(RealPos1.x, RealPos1.y, RealSize1.x, RealSize1.y, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
-				}
+			const RoundRectData rec = { RealPos1, RealSize1, SliderColor, SliderBorderColor, SliderTransparency, Roundness, SliderBorderTransparency, SliderBorderThickness };
 
-				if (SliderBorderThickness > 0 and SliderBorderTransparency != 1) {
-					DrawRectangleLinesEx({ RealPos1.x, RealPos1.y, RealSize1.x, RealSize1.y }, SliderBorderThickness, { SliderBorderColor.r, SliderBorderColor.g, SliderBorderColor.b, (unsigned char)(SliderBorderColor.a * (1 - SliderBorderTransparency)) });
-				}
-			}
+			DrawRoundRectBatch(rec);
 		}
 	}
 
@@ -657,7 +642,7 @@ public:
 		}
 
 		eventHandler();
-		if (deletedObjectsByID.size() and deletedObjectsByID.contains(uniqueID)) {
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
 			return;
 		}
 		getRealObject2Dsize();

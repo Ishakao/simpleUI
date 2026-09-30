@@ -377,16 +377,16 @@ public:
 	}
 
 	GraphDisplayType GraphType = GraphDisplayType::GRAPH_LINEAR;
-	int Spacing = 0; // Spacing between rectangles in GRAPH_COLUMNAR graph
-	float ColumnsRoundness = 0; // Roundness of rectangles in GRAPH_COLUMNAR graph (0-1)
-	size_t ColumnarDisplayID = 0; // ID of sequence which will be shown on graph (only on columnar graph)
+	int Spacing = 0;												// Spacing between rectangles in GRAPH_COLUMNAR graph
+	float ColumnsRoundness = 0;										// Roundness of rectangles in GRAPH_COLUMNAR graph (0-1)
+	size_t ColumnarDisplayID = 0;									// ID of sequence which will be shown on graph (only on columnar graph)
 
-	OffsetScale SizeOfLeftInfo = { 0, 0 }; // Size by x { offset, scale } of minimal and maximal values on graph. Set {0, 0} or leave it default to not display values
-	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME; // FontFace of left info values
-	Color TextColor = { 255,255,255,255 }; // Color of left info values;
-	bool AutoColorForColumnar = true; // Color of left info will be with current displayed graph (columnar only)
-	bool IndependentValuesX = false; // true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
-	bool IndependentValuesY = false; // true means a same Y size for all graphs (even if the max/min values are different) | false means a Y size of graph will depend on aspect from maximal global value
+	OffsetScale SizeOfLeftInfo = { 0, 0 };							// Size by x { offset, scale } of minimal and maximal values on graph. Set {0, 0} or leave it default to not display values
+	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;			// FontFace of left info values
+	Color TextColor = { 255,255,255,255 };							// Color of left info values;
+	bool AutoColorForColumnar = true;								// Color of left info will be with current displayed graph (columnar only)
+	bool IndependentValuesX = false;								// true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
+	bool IndependentValuesY = false;								// true means a same Y size for all graphs (even if the max/min values are different) | false means a Y size of graph will depend on aspect from maximal global value
 
 	void Draw() override {
 		if (Visible) {
@@ -499,6 +499,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 		i->cachedTexture.id = 0;
 		i->cachedMin.id = 0;
@@ -587,12 +588,12 @@ class ToggleSwitcher : public Object2D {
 		}
 	}
 public:
-	float AnimationSpeed = 0.3; // 0 means instant toggle
-	bool Enabled = true; // Allows user to click
-	bool ClickOnSlider = false; // true means click will toggle value only if click on slider | false means any on-object click will toggle value
+	float AnimationSpeed = 0.3;									// 0 means instant toggle
+	bool Enabled = true;										// Allows user to click
+	bool ClickOnSlider = false;									// true means click will toggle value only if click on slider | false means any on-object click will toggle value
 	Animate::Function AnimationFunction = Animate::Linear;
 	Animate::Ease AnimationEase = Animate::In;
-	MouseButtonType ButtonType = MouseButtonType::MOUSE_LEFT; // Which button click will toggle switcher
+	MouseButtonType ButtonType = MouseButtonType::MOUSE_LEFT;	// Which button will toggle switcher
 	Color SliderColor = { 130,130,130,255 };
 	Color SliderBorderColor = { 0,0,0,255 };
 	float SliderBorderTransparency = 0;
@@ -632,13 +633,14 @@ public:
 		}
 	}
 
-	void Update() override {
+	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		RelativeSCalculated = false;
-		RelativePCalculated = false;
-		if (!Visible) return;
+		if (!Visible) {
+			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			return;
+		}
 
 		SameUpdate();
 
@@ -647,29 +649,32 @@ public:
 		}
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
-		}
-		getRealObject2Dsize();
-		getRealObject2Dposition();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+			getRealObject2Dsize();
+			getRealObject2Dposition();
+		}
+		
 		checkClick();
 
 		Draw();
 
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		posOrSizeChangedResult = false;
+		updateWhenWillBeVisible = false;
+
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
-			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
-			child->Update();
+			child->Update(tempRes);
 		}
-
-		changedPosOrSizeFrame = false;
 	}
 
 	ToggleSwitcher* Clone() const override {
 		ToggleSwitcher* i = new ToggleSwitcher(*this);
 		i->UpdateAllVectorPointers();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		i->Parent = nullptr;
 		i->Children.clear();
 		for (Instance* c : Children) {

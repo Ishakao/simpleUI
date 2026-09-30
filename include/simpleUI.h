@@ -22,6 +22,7 @@
 // Optimizated position and size calculate functions															//
 // Self rectangles batcher and shaders. Now rounded rectangles are so optimized (minimal CPU overload)			//
 // Textures atlassing (excluding TextureLabel)																	//
+// Improved performance on big quantity of rectangles															//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -294,6 +295,10 @@ struct SpecialVector2 {
 		}
 		return *this;
 	}
+
+	bool operator==(const SpecialVector2& other) const {
+		return other.x == x and other.y == y;
+	}
 };
 
 struct AtlasTexture;
@@ -332,8 +337,7 @@ namespace SIMPLEUI_GLOBAL {
 	Object2D* PreviousHigherObject = nullptr;
 	Object2D* higherObject = nullptr;
 
-	std::unordered_map<long, Instance*> deletedObjectsByID;
-	std::unordered_map<Instance*, long> deletedObjectsByPtr;
+	std::vector<uint8_t> deletedObjectsByID;
 
 	std::vector<Atlas*> AtlasArray;
 	size_t AtlasTextureId = 1;
@@ -512,8 +516,10 @@ public:
 	Atlas(int size=DEFAULT_ATLAS_SIZE, int pad=1) : padding(pad) {
 		nodes.resize(size);
 		tex = LoadRenderTexture(size, size);
-		std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
 		SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
+		SetTextureWrap(tex.texture, TEXTURE_WRAP_CLAMP);
+		GenTextureMipmaps(&tex.texture);
+		std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
 		stbrp_init_target(&ctx, size, size, nodes.data(), (int)nodes.size());
 		RL_FUNCTIONS_PLUS::BeginTextureMode(tex);
 		ClearBackground(BLANK);
@@ -544,6 +550,7 @@ namespace RL_FUNCTIONS_PLUS {
 		Texture2D tex = t.currentAtlas->texture();
 
 		Rectangle src = { t.position.x + s.x, t.position.y + s.y, s.width, s.height };
+
 		src.y = tex.height - src.y - src.height;
 		src.height = -src.height;
 
@@ -1288,8 +1295,7 @@ inline void Delete(Z* ptr) {
 
 	if (ptr->Parent) {
 		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
-		SIMPLEUI_GLOBAL::deletedObjectsByID.insert({ ptr->uniqueID, ptr });
-		SIMPLEUI_GLOBAL::deletedObjectsByPtr.insert({ ptr, ptr->uniqueID });
+		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
 
 		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
 		if (it != ptr->Parent->childsAddedInFrame.end()) {
@@ -1352,7 +1358,7 @@ struct InstanceCallback {
 
 	InstanceCallback() = default;
 
-	template<typename F, typename = std::enable_if_t< !std::is_same_v<std::decay_t<F>, InstanceCallback>>>
+	template<typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, InstanceCallback>>>
 	InstanceCallback(F&& f) {
 		if constexpr (std::is_invocable_v<F, Instance*, Instance*>) {
 			func = std::forward<F>(f);
@@ -1377,8 +1383,8 @@ struct InstanceCallback {
 class Instance {
 protected:
 	size_t lastUpdateFrame = 0;
+	bool updateWhenWillBeVisible = true;
 public:
-	bool changedPosOrSizeFrame = true;
 	long uniqueID = -1;
 	std::unordered_map<long, Instance*> childsAddedInFrame;
 	std::unordered_map<long, Instance*> childsRemovedInFrame;
@@ -1406,7 +1412,7 @@ public:
 
 	bool __ParentObject{};
 
-	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {};
+	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) { SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0); };
 	Instance(Instance* p);
 	Instance() = delete;
 
@@ -1554,7 +1560,7 @@ public:
 		childsRemovedInFrame.clear();
 	}
 
-	virtual void Update() {
+	virtual void Update(bool posOrSizeChanged) {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
@@ -1563,19 +1569,12 @@ public:
 		}
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
-		}
-
-		if (Parent and Parent->changedPosOrSizeFrame) changedPosOrSizeFrame = true;
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
-			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
-			child->Update();
+			child->Update(posOrSizeChanged);
 		}
-
-		changedPosOrSizeFrame = false;
 	}
 
 	virtual Instance* Clone() const {
@@ -1583,6 +1582,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -1747,46 +1747,129 @@ void DrawRoundRectBatch(const RoundRectData& r) {
 	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
 }
 
-static void EmitRoundRectQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color color) {
-	float hx = size.x * 0.5f + 1.0f;
-	float hy = size.y * 0.5f + 1.0f;
-	float x0 = pos.x - 1.0f;
-	float y0 = pos.y - 1.0f;
-	float x1 = pos.x + size.x + 1.0f;
-	float y1 = pos.y + size.y + 1.0f;
-	float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
+struct RectVertex {
+	float x, y, z;
+	float u, v;
+	unsigned char r, g, b, a;
+};
 
-	RAYLIB_FUNCTIONAL::rlColor4ub(color.r, color.g, color.b, color.a);
+namespace RectGPU {
+	constexpr int MaxQuads = 16384;
+	inline unsigned int vao = 0;
+	inline unsigned int vbo = 0;
+	inline std::vector<RectVertex> verts;
 
-	RAYLIB_FUNCTIONAL::rlTexCoord2f(-hx, -hy); RAYLIB_FUNCTIONAL::rlVertex3f(x0, y0, z);
-	RAYLIB_FUNCTIONAL::rlTexCoord2f(-hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x0, y1, z);
-	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y1, z);
-	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, -hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y0, z);
+	inline void Init() {
+		std::vector<unsigned short> idx(MaxQuads * 6);
+		for (int i = 0; i < MaxQuads; i++) {
+			unsigned short b = (unsigned short)(i * 4);
+			idx[i * 6 + 0] = b;
+			idx[i * 6 + 1] = b + 1;
+			idx[i * 6 + 2] = b + 3;
+			idx[i * 6 + 3] = b + 1;
+			idx[i * 6 + 4] = b + 2;
+			idx[i * 6 + 5] = b + 3;
+		}
+
+		vao = RAYLIB_FUNCTIONAL::rlLoadVertexArray();
+		RAYLIB_FUNCTIONAL::rlEnableVertexArray(vao);
+
+		vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, MaxQuads * 4 * (int)sizeof(RectVertex), true);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, 3, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, x));
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 2, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, u));
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4, RL_UNSIGNED_BYTE, true, (int)sizeof(RectVertex), offsetof(RectVertex, r));
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
+
+		RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx.data(), (int)(idx.size() * sizeof(unsigned short)), false);
+
+		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
+	}
+
+	inline RAYLIB_FUNCTIONAL::Matrix Mul(const RAYLIB_FUNCTIONAL::Matrix& l, const RAYLIB_FUNCTIONAL::Matrix& r) {
+		RAYLIB_FUNCTIONAL::Matrix out;
+		const float* a = &l.m0;
+		const float* b = &r.m0;
+		float* o = &out.m0;
+		for (int i = 0; i < 4; i++) {
+			for (int j = 0; j < 4; j++) {
+				o[4 * i + j] = a[4 * i] * b[j] + a[4 * i + 1] * b[4 + j] + a[4 * i + 2] * b[8 + j] + a[4 * i + 3] * b[12 + j];
+			}
+		}
+		return out;
+	}
+
+	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c) {
+		float hx = size.x * 0.5f + 1.0f;
+		float hy = size.y * 0.5f + 1.0f;
+		float x0 = pos.x - 1.0f;
+		float y0 = pos.y - 1.0f;
+		float x1 = pos.x + size.x + 1.0f;
+		float y1 = pos.y + size.y + 1.0f;
+		float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
+
+		verts.push_back({ x0, y0, z, -hx, -hy, c.r, c.g, c.b, c.a });
+		verts.push_back({ x0, y1, z, -hx, hy, c.r, c.g, c.b, c.a });
+		verts.push_back({ x1, y1, z, hx, hy, c.r, c.g, c.b, c.a });
+		verts.push_back({ x1, y0, z, hx, -hy, c.r, c.g, c.b, c.a });
+	}
 }
 
 void FlushRectanglesBatch() {
-	if (SIMPLEUI_GLOBAL::CurrentRectanglesBatch.size()) {
-		static Shader shader = getShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
-		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
-		RAYLIB_FUNCTIONAL::rlBegin(RL_QUADS);
+	auto& batch = SIMPLEUI_GLOBAL::CurrentRectanglesBatch;
+	if (batch.empty()) return;
 
-		for (const auto& r : SIMPLEUI_GLOBAL::CurrentRectanglesBatch) {
-			unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
-			if (fillA) {
-				EmitRoundRectQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA });
-			}
+	static Shader shader = getShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+	if (!RectGPU::vao) RectGPU::Init();
 
-			unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
-			if (r.BorderThickness > 0 and borderA) {
-				EmitRoundRectQuad(r.Pos, r.Size, r.Roundness, r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA });
-			}
+	auto& v = RectGPU::verts;
+	v.clear();
+	v.reserve(batch.size() * 8);
+
+	for (const auto& r : batch) {
+		unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
+		if (fillA) {
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA });
 		}
 
-		RAYLIB_FUNCTIONAL::rlEnd();
-		RAYLIB_FUNCTIONAL::EndShaderMode();
-
-		SIMPLEUI_GLOBAL::CurrentRectanglesBatch.clear();
+		unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
+		if (r.BorderThickness > 0 and borderA) {
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA });
+		}
 	}
+
+	if (!v.empty()) {
+		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
+		RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
+
+		RAYLIB_FUNCTIONAL::rlSetUniformMatrix(shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_MATRIX_MVP], RectGPU::Mul(RAYLIB_FUNCTIONAL::rlGetMatrixModelview(), RAYLIB_FUNCTIONAL::rlGetMatrixProjection()));
+
+		int diffuseLoc = shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_COLOR_DIFFUSE];
+		if (diffuseLoc >= 0) {
+			float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+			RAYLIB_FUNCTIONAL::rlSetUniform(diffuseLoc, white, RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, 1);
+		}
+
+		RAYLIB_FUNCTIONAL::rlActiveTextureSlot(0);
+		RAYLIB_FUNCTIONAL::rlEnableTexture(RAYLIB_FUNCTIONAL::rlGetTextureIdDefault());
+
+		size_t totalQuads = v.size() / 4;
+		size_t done = 0;
+		while (done < totalQuads) {
+			int n = (int)std::min<size_t>(RectGPU::MaxQuads, totalQuads - done);
+			RAYLIB_FUNCTIONAL::rlUpdateVertexBuffer(RectGPU::vbo, v.data() + done * 4, n * 4 * (int)sizeof(RectVertex), 0);
+			RAYLIB_FUNCTIONAL::rlEnableVertexArray(RectGPU::vao);
+			RAYLIB_FUNCTIONAL::rlDrawVertexArrayElements(0, n * 6, nullptr);
+			done += n;
+		}
+
+		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
+		RAYLIB_FUNCTIONAL::rlDisableTexture();
+		RAYLIB_FUNCTIONAL::EndShaderMode();
+	}
+
+	batch.clear();
 }
 
 class Object2D : public Instance {
@@ -1800,6 +1883,7 @@ class Object2D : public Instance {
 	bool lastActive = Active;
 	int lastZIndex = ZIndex;
 protected:
+	bool posOrSizeChangedResult = false;
 	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
 	void SameUpdate() {
@@ -1822,18 +1906,16 @@ protected:
 
 	// Updating parent pointer in SpecialVector2 (after cloning)
 	void UpdateAllVectorPointers() {
-		RealSize.parentalObj = this;
 		PositionOFFSET.parentalObj = this;
 		AnchorPositionOFFSET.parentalObj = this;
 		Position.parentalObj = this;
 		AnchorPosition.parentalObj = this;
-		RelativePCalculated = false;
-		RelativeSCalculated = false;
+		Size.parentalObj = this;
+		SizeOFFSET.parentalObj = this;
+
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
 	}
 public:
-	bool RelativePCalculated = false;
-	bool RelativeSCalculated = false;
 	void VectorChanged() {
 		PosOrSizeChanged();
 	}
@@ -1848,15 +1930,17 @@ public:
 		return false;
 	}
 
-	SpecialVector2 RealSize{ 0, 0, this }; // Absolute size in pixels (not for changing from somewhere)
+	SpecialVector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
 	SpecialVector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
 	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
-	SpecialVector2 PositionOFFSET = { 0, 0, this };
-	SpecialVector2 SizeOFFSET = {};
-	SpecialVector2 AnchorPositionOFFSET = { 0, 0, this };
+
+	SpecialVector2 PositionOFFSET{ 0, 0, this };
+	SpecialVector2 AnchorPositionOFFSET{ 0, 0, this };
 	SpecialVector2 Position{ 0, 0, this };
-	SpecialVector2 Size{};
 	SpecialVector2 AnchorPosition{ 0, 0, this };
+
+	SpecialVector2 Size{ 0, 0, this };
+	SpecialVector2 SizeOFFSET{ 0, 0, this };
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -1872,9 +1956,7 @@ public:
 	int ZIndex = 0;
 	bool Active = false;
 
-	void getRealObject2Dsize(bool forced=false) {
-		//if (!changedPosOrSizeFrame and !forced) return; test
-
+	void getRealObject2Dsize() {
 		SpecialVector2 sizePx = {};
 		Object2D* self = this;
 		Instance* current = Parent;
@@ -1888,8 +1970,8 @@ public:
 			}
 			parent2D = static_cast<Object2D*>(current);
 
-			if (parent2D->__ParentObject) { 
-				parent2D = nullptr; 
+			if (parent2D->__ParentObject) {
+				parent2D = nullptr;
 			}
 
 			break;
@@ -1897,28 +1979,19 @@ public:
 
 		SpecialVector2 parentSizePx = parent2D ? parent2D->RealSize : SpecialVector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 
-		sizePx.x = parentSizePx.x * self->Size.x + self->SizeOFFSET.x;
-		sizePx.y = parentSizePx.y * self->Size.y + self->SizeOFFSET.y;
+		sizePx.x = std::roundf(parentSizePx.x * self->Size.x + self->SizeOFFSET.x);
+		sizePx.y = std::roundf(parentSizePx.y * self->Size.y + self->SizeOFFSET.y);
 
-		RelativeSCalculated = true;
 		RealSize = sizePx;
 	}
 
-	void getRealObject2Dposition(bool forced=false) {
-		//if (!changedPosOrSizeFrame and !forced) return; test
-		if (!RelativeSCalculated) getRealObject2Dsize(true);
-
+	void getRealObject2Dposition() {
 		SpecialVector2 posPx = { 0.0f, 0.0f };
 		SpecialVector2 sizePx = RealSize;
 
 		SpecialVector2 anchorPx = {
-			sizePx.x * AnchorPosition.x + AnchorPositionOFFSET.x,
-			sizePx.y * AnchorPosition.y + AnchorPositionOFFSET.y
-		};
-
-		SpecialVector2 localPx = {
-			0.0f,
-			0.0f
+			std::roundf(sizePx.x * AnchorPosition.x + AnchorPositionOFFSET.x),
+			std::roundf(sizePx.y * AnchorPosition.y + AnchorPositionOFFSET.y)
 		};
 
 		Instance* current = Parent;
@@ -1926,51 +1999,46 @@ public:
 			if (!Is2DInheritor(current)) { current = current->Parent; continue; }
 
 			Object2D* obj = static_cast<Object2D*>(current);
-			if (!obj->RelativeSCalculated) obj->getRealObject2Dsize(true);
-			if (!obj->RelativePCalculated) obj->getRealObject2Dposition(true);
 
 			SpecialVector2 parentSizePx = obj->RealSize;
 
 			SpecialVector2 parentAnchorPx = {
-				obj->RealSize.x * obj->AnchorPosition.x + obj->AnchorPositionOFFSET.x,
-				obj->RealSize.y * obj->AnchorPosition.y + obj->AnchorPositionOFFSET.y
+				std::roundf(obj->RealSize.x * obj->AnchorPosition.x + obj->AnchorPositionOFFSET.x),
+				std::roundf(obj->RealSize.y * obj->AnchorPosition.y + obj->AnchorPositionOFFSET.y)
 			};
 
 			SpecialVector2 parentLocalPx = {
-				obj->Position.x * parentSizePx.x + obj->PositionOFFSET.x - parentAnchorPx.x,
-				obj->Position.y * parentSizePx.y + obj->PositionOFFSET.y - parentAnchorPx.y
+				std::roundf(obj->Position.x * parentSizePx.x + obj->PositionOFFSET.x - parentAnchorPx.x),
+				std::roundf(obj->Position.y * parentSizePx.y + obj->PositionOFFSET.y - parentAnchorPx.y)
 			};
 
 			SpecialVector2 parentPosPx = obj->RealPos;
-			if (!obj->RelativePCalculated) parentPosPx = parentLocalPx;
 
 			SpecialVector2 myLocalPx = {
-				parentSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x,
-				parentSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y
+				std::roundf(parentSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
+				std::roundf(parentSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
 			};
 
 			if (obj->Class == SCROLLFRAME) {
 				SpecialVector2 canvasPx = getCanvasRealPos(obj);
-				posPx.x = parentPosPx.x + myLocalPx.x - canvasPx.x;
-				posPx.y = parentPosPx.y + myLocalPx.y - canvasPx.y;
+				posPx.x = std::roundf(parentPosPx.x + myLocalPx.x - canvasPx.x);
+				posPx.y = std::roundf(parentPosPx.y + myLocalPx.y - canvasPx.y);
 			} else {
-				posPx.x = parentPosPx.x + myLocalPx.x;
-				posPx.y = parentPosPx.y + myLocalPx.y;
+				posPx.x = std::roundf(parentPosPx.x + myLocalPx.x);
+				posPx.y = std::roundf(parentPosPx.y + myLocalPx.y);
 			}
 
 			RealPos = posPx;
-			RelativePCalculated = true;
 			return;
 		}
 
-		SpecialVector2 rootSizePx = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
+		SpecialVector2 rootSizePx = { static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 		SpecialVector2 rootLocalPx = {
-			rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x,
-			rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y
+			std::roundf(rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
+			std::roundf(rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
 		};
 
 		RealPos = rootLocalPx;
-		RelativePCalculated = true;
 	}
 
 	SpecialVector2 getMousePosition() {
@@ -2027,13 +2095,14 @@ public:
 
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE);
 
-	void Update() override {
+	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		RelativeSCalculated = false;
-		RelativePCalculated = false;
-		if (!Visible) return;
+		if (!Visible) {
+			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			return;
+		}
 
 		SameUpdate();
 
@@ -2042,20 +2111,23 @@ public:
 		}
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+			getRealObject2Dsize();
+			getRealObject2Dposition();
 		}
-		getRealObject2Dsize();
-		getRealObject2Dposition();
+
 		Draw();
+
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		posOrSizeChangedResult = false;
+		updateWhenWillBeVisible = false;
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
-			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
-			child->Update();
+			child->Update(tempRes);
 		}
-
-		changedPosOrSizeFrame = false;
 	}
 
 	Object2D* Clone() const override {
@@ -2064,6 +2136,8 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+		i->posOrSizeChangedResult = true;
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -2155,14 +2229,12 @@ public:
 		}
 	}
 
-	void Update() override {
+	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
-		}
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 		Draw();
 	}
 
@@ -2171,6 +2243,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 		return i;
 	}
@@ -2307,9 +2380,6 @@ private:
 		static std::function<void(Instance*, std::vector<std::pair<int, int>>&)> sectorsCalculate = [](Instance* obj, std::vector<std::pair<int, int>>& sect) {
 			if (Is2DInheritor(obj)) {
 				Object2D* casted = static_cast<Object2D*>(obj);
-				if (!casted->RelativeSCalculated) {
-					casted->getRealObject2Dsize();
-				}
 
 				SpecialVector2 parentSize = { 0,0 };
 
@@ -2317,9 +2387,6 @@ private:
 
 				while (currentParent) {
 					if (Is2DInheritor(currentParent)) {
-						if (!static_cast<Object2D*>(currentParent)->RelativeSCalculated) {
-							static_cast<Object2D*>(currentParent)->getRealObject2Dsize();
-						}
 						parentSize = static_cast<Object2D*>(currentParent)->RealSize;
 						break;
 					} else {
@@ -2387,6 +2454,7 @@ private:
 private:
 	SpecialVector2 lastFullSize{};
 	SpecialVector2 lastCanvasFullPosition{};
+	SpecialVector2 lastCanvasPos{};
 
 	void checkAndUpdateCurrentSectors(bool force = false) {
 		SpecialVector2 fullSize = RealSize;
@@ -2492,7 +2560,7 @@ public:
 	bool ScrollEnabled = true;
 	bool Animated = false;
 
-	void Draw() {
+	void Draw(bool posOrSizeChanged) {
 		Object2D::Draw();
 
 		bool pushed = false;
@@ -2509,20 +2577,20 @@ public:
 
 		checkAndUpdateCurrentSectors();
 
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		posOrSizeChangedResult = false;
+		updateWhenWillBeVisible = false;
+
 		for (ScrollSector* s : sectorsOnView) {
 			for (auto& [id, ptr] : s->Objects) {
-				if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(id)) {
-					continue;
-				}
+				if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
-				if (ptr and changedPosOrSizeFrame) ptr->changedPosOrSizeFrame = true;
-				ptr->Update();
+				ptr->Update(tempRes);
 			}
 		}
 
 		for (Instance* s : Tick) {
-			if (s and changedPosOrSizeFrame) s->changedPosOrSizeFrame = true;
-			s->Update();
+			s->Update(tempRes);
 		}
 
 		if (pushed) PopClip();
@@ -2574,25 +2642,28 @@ public:
 		}
 	}
 	
-	void Update() override {
+	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		if (!Visible) return;
+		if (!Visible) {
+			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			return;
+		}
 		if (CanvasSize.x < 0) CanvasSize.x = 0; if (CanvasSize.y < 0) CanvasSize.y = 0;
 		if (Direction != 'X' and Direction != 'Y' and Direction != 'B') {
 			Direction = 'Y';
 		}
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
-		}
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
 		SpecialVector2 oldSize = RealSize;
 
-		getRealObject2Dsize();
-		getRealObject2Dposition();
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+			getRealObject2Dsize();
+			getRealObject2Dposition();
+		}
 
 		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) {
 			for (Instance* child : Children) {
@@ -2687,14 +2758,15 @@ public:
 						CanvasPosition.x = newX1;
 					}
 				}
-
-				changedPosOrSizeFrame = true;
 			}
 		}
 
-		Draw();
+		bool canvasPosChanged = lastCanvasPos.x == (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x) and
+								lastCanvasPos.y == (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y);
 
-		changedPosOrSizeFrame = false;
+		lastCanvasPos = { (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x), (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y) };
+
+		Draw(posOrSizeChanged or !canvasPosChanged);
 	}
 
 	ScrollFrame* Clone() const override {
@@ -2703,6 +2775,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -2906,7 +2979,7 @@ public:
 				}
 
 				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
-				Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
+				Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(newSize.x), std::floorf((float)newSize.y) };
 				SpecialVector2 origin = { 0, 0 };
 
 				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
@@ -2920,6 +2993,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
@@ -3158,13 +3232,13 @@ public:
 			SpecialVector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
 
 			Rectangle sourceRec = {
-				viewX,
-				viewY,
-				sizeToDraw.x,
-				sizeToDraw.y
+				std::floorf(viewX),
+				std::floorf(viewY),
+				std::floorf(sizeToDraw.x),
+				std::floorf(sizeToDraw.y)
 			};
 
-			Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, sizeToDraw.x, sizeToDraw.y };
+			Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(sizeToDraw.x), std::floorf(sizeToDraw.y) };
 			SpecialVector2 origin = { 0, 0 };
 
 			Color clr;
@@ -3710,21 +3784,22 @@ public:
 		}
 	}
 
-	void Update() override {
+	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; return; }
+		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
 		if (!(SIMPLEUI_GLOBAL::FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
 
 		inputHandler();
 
 		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(uniqueID)) {
-			return;
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+			getRealObject2Dsize();
+			getRealObject2Dposition();
 		}
-		getRealObject2Dsize();
-		getRealObject2Dposition();
 
 		SameUpdate();
 
@@ -3782,8 +3857,12 @@ public:
 
 			lastCursorIndex = CursorIndex;
 		}
-
+		
 		Draw();
+
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		posOrSizeChangedResult = false;
+		updateWhenWillBeVisible = false;
 
 		Text.restate();
 		FontFace.restate();
@@ -3791,11 +3870,8 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
-			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
-			child->Update();
+			child->Update(tempRes);
 		}
-
-		changedPosOrSizeFrame = false;
 	};
 
 	~TextBox() {
@@ -3843,6 +3919,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -3885,6 +3962,7 @@ public:
 	bool RoundImage = false;
 	float Rotation = 0;
 	SpecialVector2 Origin = { 0, 0 };
+	SpecialVector2 OriginOFFSET = { 0, 0 };
 
 	void setImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
@@ -3911,7 +3989,7 @@ public:
 		updateTexture();
 
 		if (tex.id) {
-			Rectangle destRec = { RealPos.x + Origin.x, RealPos.y + Origin.y, RealSize.x, RealSize.y };
+			Rectangle destRec = { RealPos.x + OriginOFFSET.x + RealSize.x * Origin.x, RealPos.y + OriginOFFSET.y + RealSize.y * Origin.y, RealSize.x, RealSize.y };
 			Rectangle srcRec = { 0, 0, tex.size.x, tex.size.y };
 
 			if (Overlay == ImageOverlayFormat::IMAGE_FIT) {
@@ -3941,6 +4019,16 @@ public:
 					srcRec.height = cropHeight;
 				}
 			}
+
+			srcRec.x = std::floorf(srcRec.x);
+			srcRec.y = std::floorf(srcRec.y);
+			srcRec.width = std::ceilf(srcRec.width);
+			srcRec.height = std::ceilf(srcRec.height);
+
+			destRec.x = std::floorf(destRec.x);
+			destRec.y = std::floorf(destRec.y);
+			destRec.width = std::ceilf(destRec.width);
+			destRec.height = std::ceilf(destRec.height);
 
 			if (Roundness and RoundImage) {
 				static bool roundShaderLoaded = false;
@@ -3975,10 +4063,10 @@ public:
 				}
 
 				RL_FUNCTIONS_PLUS::BeginShaderMode(shader);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 				RL_FUNCTIONS_PLUS::EndShaderMode();
 			} else {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, Origin, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 			}
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
@@ -4006,6 +4094,7 @@ public:
 		i->setParent(nullptr);
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -4124,6 +4213,7 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -4145,7 +4235,7 @@ public:
 
 inline void Object2D::PosOrSizeChanged() {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
-	this->changedPosOrSizeFrame = true;
+	posOrSizeChangedResult = true;
 	Instance* scrollChild = (Parent and Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
 
 	if (scrollChild) {
@@ -4195,12 +4285,11 @@ inline void Instance::setParent(Instance* ptr) {
 		ptr->updateChildrenZIndex = true;
 		ptr->childsAddedInFrame[this->uniqueID] = this;
 	}
-
-	changedPosOrSizeFrame = true;
 }
 
 Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
+	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 	if (p) {
 		p->Children.push_back(this);
 		p->childsAddedInFrame.insert({ p->uniqueID, this });
@@ -4214,6 +4303,8 @@ Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUn
 }
 
 inline void Object2D::eventHandler() {
+	if (events.empty()) return;
+
 	bool mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
 	bool hasStartHold1 = false;
 	bool hasStartHold2 = false;
@@ -4425,7 +4516,7 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 inline void DrawFrame(Instance* StartInstance) {
 	BeginDrawing();
 	ClearBackground({ 255,255,255,255 });
-	StartInstance->Update();
+	StartInstance->Update(SIMPLEUI_GLOBAL::windowSizeChanged);
 	FlushRectanglesBatch();
 	EndDrawing();
 }
@@ -4441,7 +4532,7 @@ inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
 			if (last != SIMPLEUI_GLOBAL::accurateFPS) {
 				labelFPS->SetText(std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS");
 			}
-			});
+		});
 		labelFPS->Name = "FPS_LABEL";
 		labelFPS->Active = false;
 		labelFPS->Size = SpecialVector2{ 0.15, 0.1 };
@@ -4496,7 +4587,7 @@ inline namespace debug {
 	}
 
 	Object2D* debugMenu = nullptr;
-	bool Animations = true;
+	bool Animations = true; // SOON
 	int currentFPSindex = 3;
 	bool lowGraphicsMode = false; // SOON
 
@@ -5120,12 +5211,11 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		SIMPLEUI_GLOBAL::mouseScreenPosition = GetMouseScreenPosition();
 		SIMPLEUI_GLOBAL::windowPosition = GetWindowPosition();
 
-		static Vector2 previousWinSize = { SIMPLEUI_GLOBAL::winWidth, SIMPLEUI_GLOBAL::winHeight};
+		static Vector2 previousWinSize = { -10, -10 };
 		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
 
 		if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
 			SIMPLEUI_GLOBAL::windowSizeChanged = true;
-			StartInstance.changedPosOrSizeFrame = true;
 			previousWinSize = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
 		}
 

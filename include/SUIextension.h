@@ -28,15 +28,15 @@ class GraphBuilder : public Object2D {
 
 	size_t seqID = 0;
 
-	RenderTexture2D cachedTexture{};
+	AtlasTexture cachedTexture{};
 	Vector2 textureSize{};
 
-	RenderTexture2D cachedMin{};
+	AtlasTexture cachedMin{};
 	Vector2 textureSizeMin{};
 	std::string strMin;
 	Vector3 textParamsMin;
 
-	RenderTexture2D cachedMax{};
+	AtlasTexture cachedMax{};
 	Vector2 textureSizeMax{};
 	std::string strMax;
 	Vector3 textParamsMax;
@@ -58,13 +58,16 @@ class GraphBuilder : public Object2D {
 
 			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture);
-			ClearBackground(BLANK);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
+			cachedTexture.currentAtlas->blankArea(cachedTexture);
 			
 			size_t gsize = 0;
 			for (auto [id, seq] : sequences) {
 				if (gsize < seq->sequence.size()) gsize = seq->sequence.size();
 			}
+
+			int xof = cachedTexture.position.x;
+			int yof = cachedTexture.position.y;
 
 			for (auto [id, seq] : sequences) {
 				if (seq->sequence.size() < 2) continue;
@@ -89,12 +92,12 @@ class GraphBuilder : public Object2D {
 						long double prev = seq->sequence[i - 1];
 
 						Vector2 start = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)(i - 1) / (seq->sequence.size() - 1))) * xAspect,
-							GraphRealPos.y + GraphRealSize.y * (1 - (prev - gmin) / (gmax - gmin))
+							(GraphRealPos.x + GraphRealSize.x * ((float)(i - 1) / (seq->sequence.size() - 1))) * xAspect + xof,
+							GraphRealPos.y + GraphRealSize.y * (1 - (prev - gmin) / (gmax - gmin)) + yof
 						};
 						Vector2 end = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)(i) / (seq->sequence.size() - 1))) * xAspect,
-							GraphRealPos.y + GraphRealSize.y * (1 - (current - gmin) / (gmax - gmin))
+							(GraphRealPos.x + GraphRealSize.x * ((float)(i) / (seq->sequence.size() - 1))) * xAspect + xof,
+							GraphRealPos.y + GraphRealSize.y * (1 - (current - gmin) / (gmax - gmin)) + yof
 						};
 
 						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color);
@@ -105,7 +108,7 @@ class GraphBuilder : public Object2D {
 
 						if (sizeAfterSpacingX <= 0) continue;
 
-						Rectangle rec = { (GraphRealPos.x + i * (sizeAfterSpacingX + Spacing)), (GraphRealPos.y + (GraphRealSize.y - height)), sizeAfterSpacingX, height };
+						Rectangle rec = { (GraphRealPos.x + i * (sizeAfterSpacingX + Spacing)) + xof, (GraphRealPos.y + (GraphRealSize.y - height)) + yof, sizeAfterSpacingX, height };
 						RoundRectData r = { {rec.x, rec.y}, {rec.width, rec.height}, seq->color, seq->color, 0, ColumnsRoundness, 1, 0 };
 
 						DrawRoundRectBatch(r);
@@ -126,9 +129,8 @@ class GraphBuilder : public Object2D {
 		textureSizeMin = { leftSize.x - textParamsMin.x, leftSize.y - textParamsMin.y };
 
 		if (load) {
-			if (cachedMin.id) UnloadRenderTexture(cachedMin);
-			cachedMin = LoadRenderTexture(textureSizeMin.x * textureAspect, textureSizeMin.y * textureAspect);
-			SetTextureFilter(cachedMin.texture, TEXTURE_FILTER_TRILINEAR);
+			if (cachedMin.id) UnloadTextureFromAtlas(cachedMin);
+			cachedMin = LoadRenderTextureOnAtlas(textureSizeMin.x * textureAspect, textureSizeMin.y * textureAspect);
 		}
 
 		if (cachedMin.id) {
@@ -138,10 +140,10 @@ class GraphBuilder : public Object2D {
 
 			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMin);
-			ClearBackground(BLANK);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMin.currentAtlas->renderTexture());
+			cachedMin.currentAtlas->blankArea(cachedMin);
 
-			DrawTextEx(getFont(FontFace), strMin.c_str(), { 0,0 }, textParamsMin.z, 0, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFace), strMin.c_str(), { cachedMin.position.x,cachedMin.position.y }, textParamsMin.z, 0, { 255,255,255,255 });
 
 			RL_FUNCTIONS_PLUS::EndTextureMode();
 
@@ -156,9 +158,8 @@ class GraphBuilder : public Object2D {
 		textureSizeMax = { leftSize.x - textParamsMax.x, leftSize.y - textParamsMax.y };
 
 		if (load) {
-			if (cachedMax.id) UnloadRenderTexture(cachedMax);
-			cachedMax = LoadRenderTexture(textureSizeMax.x * textureAspect, textureSizeMax.y * textureAspect);
-			SetTextureFilter(cachedMax.texture, TEXTURE_FILTER_TRILINEAR);
+			if (cachedMax.id) UnloadTextureFromAtlas(cachedMax);
+			cachedMax = LoadRenderTextureOnAtlas(textureSizeMax.x * textureAspect, textureSizeMax.y * textureAspect);
 		}
 
 		if (cachedMax.id) {
@@ -168,10 +169,10 @@ class GraphBuilder : public Object2D {
 
 			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMax);
-			ClearBackground(BLANK);
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
+			cachedMax.currentAtlas->blankArea(cachedMax);
 
-			DrawTextEx(getFont(FontFace), strMax.c_str(), { 0,0 }, textParamsMax.z, 0, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFace), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
 
 			RL_FUNCTIONS_PLUS::EndTextureMode();
 
@@ -412,14 +413,12 @@ public:
 
 			if (GraphDirty) updateGlobalMinMax();
 
-			if (cachedTexture.id and (cachedTexture.texture.width < RealSize.x or cachedTexture.texture.height < RealSize.y)) {
-				UnloadRenderTexture(cachedTexture);
-				cachedTexture = LoadRenderTexture(RealSize.x * textureAspect, RealSize.y * textureAspect);
-				SetTextureFilter(cachedTexture.texture, TEXTURE_FILTER_TRILINEAR);
+			if (cachedTexture.id and (cachedTexture.size.x < RealSize.x or cachedTexture.size.y < RealSize.y)) {
+				UnloadTextureFromAtlas(cachedTexture);
+				cachedTexture = LoadRenderTextureOnAtlas(RealSize.x * textureAspect, RealSize.y * textureAspect);
 				updateTexture();
 			} else if (!cachedTexture.id) {
-				cachedTexture = LoadRenderTexture(RealSize.x * textureAspect, RealSize.y * textureAspect);
-				SetTextureFilter(cachedTexture.texture, TEXTURE_FILTER_TRILINEAR);
+				cachedTexture = LoadRenderTextureOnAtlas(RealSize.x * textureAspect, RealSize.y * textureAspect);
 				updateTexture();
 			} else if (conditionToUpdate) {
 				updateTexture();
@@ -433,7 +432,7 @@ public:
 			FilterChanged = false;
 
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				if (!cachedMin.id or (cachedMin.texture.width < textureSizeMin.x or cachedMin.texture.height < textureSizeMin.y)) {
+				if (!cachedMin.id or (cachedMin.size.x < textureSizeMin.x or cachedMin.size.y < textureSizeMin.y)) {
 					updateMinTexture(true);
 				} else if (conditionToUpdateMin) {
 					updateMinTexture();
@@ -441,7 +440,7 @@ public:
 			}
 
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				if (!cachedMax.id or (cachedMax.texture.width < textureSizeMax.x or cachedMax.texture.height < textureSizeMax.y)) {
+				if (!cachedMax.id or (cachedMax.size.x < textureSizeMax.x or cachedMax.size.y < textureSizeMax.y)) {
 					updateMaxTexture(true);
 				} else if (conditionToUpdateMax) {
 					updateMaxTexture();
@@ -468,13 +467,13 @@ public:
 
 			*/
 
-			Rectangle sourceRec = { 0.0f, (float)(cachedTexture.texture.height - textureSize.y), (float)textureSize.x, -(float)textureSize.y };
+			Rectangle sourceRec = { 0.0f, 0.0f, (float)textureSize.x, (float)textureSize.y };
 			Rectangle destRec = { RealPos.x + leftSizeFull.x + 1 + BorderThickness, RealPos.y + 1 + BorderThickness, (float)RealSize.x - leftSizeFull.x - 2 - BorderThickness, (float)RealSize.y - 2 - BorderThickness };
 
-			Rectangle sourceRecMin = { 0.0f, (float)(cachedMin.texture.height - textureSizeMin.y), (float)textureSizeMin.x, -(float)textureSizeMin.y };
+			Rectangle sourceRecMin = { 0.0f, 0.0f, (float)textureSizeMin.x, (float)textureSizeMin.y };
 			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
 
-			Rectangle sourceRecMax = { 0.0f, (float)(cachedMax.texture.height - textureSizeMax.y), (float)textureSizeMax.x, -(float)textureSizeMax.y };
+			Rectangle sourceRecMax = { 0.0f, 0.0f, (float)textureSizeMax.x, (float)textureSizeMax.y };
 			Rectangle destRecMax = { RealPos.x + textParamsMax.x, RealPos.y + textParamsMax.y, textureSizeMax.x, textureSizeMax.y };
 
 			Color c = TextColor;
@@ -486,10 +485,10 @@ public:
 				}
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture.texture, sourceRec, destRec, { 0,0 }, 0, { 255,255,255,255 });
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, sourceRec, destRec, { 0,0 }, 0, { 255,255,255,255 });
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin.texture, sourceRecMin, destRecMin, { 0,0 }, 0, c);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax.texture, sourceRecMax, destRecMax, { 0,0 }, 0, c);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, sourceRecMin, destRecMin, { 0,0 }, 0, c);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, sourceRecMax, destRecMax, { 0,0 }, 0, c);
 			}
 		}
 	}
@@ -500,9 +499,15 @@ public:
 		i->Parent = nullptr;
 		i->Children.clear();
 		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+
 		i->cachedTexture.id = 0;
 		i->cachedMin.id = 0;
 		i->cachedMax.id = 0;
+
+		i->cachedTexture.currentAtlas = nullptr;
+		i->cachedMin.currentAtlas = nullptr;
+		i->cachedMax.currentAtlas = nullptr;
+
 		for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
@@ -514,15 +519,15 @@ public:
 	GraphBuilder(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
 	~GraphBuilder() {
 		if (cachedTexture.id != 0) {
-			UnloadRenderTexture(cachedTexture);
+			UnloadTextureFromAtlas(cachedTexture);
 		}
 
 		if (cachedMin.id != 0) {
-			UnloadRenderTexture(cachedMin);
+			UnloadTextureFromAtlas(cachedMin);
 		}
 
 		if (cachedMax.id != 0) {
-			UnloadRenderTexture(cachedMax);
+			UnloadTextureFromAtlas(cachedMax);
 		}
 	}
 	GraphBuilder() = delete;
@@ -654,8 +659,11 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
+			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
 			child->Update();
 		}
+
+		changedPosOrSizeFrame = false;
 	}
 
 	ToggleSwitcher* Clone() const override {

@@ -21,6 +21,7 @@
 // TextBox now supports clipboard and Y viewport																//
 // Optimizated position and size calculate functions															//
 // Self rectangles batcher and shaders. Now rounded rectangles are so optimized (minimal CPU overload)			//
+// Textures atlassing (excluding TextureLabel)																	//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -35,9 +36,11 @@
 
 #ifdef _WIN32
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_RECT_PACK_IMPLEMENTATION
 #endif
 
 #include "stb_image_write.h"
+#include "stb_rect_pack.h"
 
 namespace RAYLIB_FUNCTIONAL {
 #include <raylib.h>
@@ -107,6 +110,7 @@ using RAYLIB_FUNCTIONAL::ClearBackground;
 using RAYLIB_FUNCTIONAL::EndDrawing;
 
 using RAYLIB_FUNCTIONAL::TEXTURE_FILTER_TRILINEAR;
+using RAYLIB_FUNCTIONAL::TEXTURE_FILTER_BILINEAR;
 using RAYLIB_FUNCTIONAL::TEXTURE_WRAP_CLAMP;
 
 using RAYLIB_FUNCTIONAL::FLAG_WINDOW_UNDECORATED;
@@ -170,6 +174,14 @@ using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC2;
 #include <mutex>
 #include <type_traits>
 #include <atomic>
+#include <cstddef>
+
+#define RED_ANSI "\033[31m"
+#define GREEN_ANSI "\033[32m"
+#define YELLOW_ANSI "\033[33m"
+#define BLUE_ANSI "\033[36m"
+#define DEFAULT_ANSI "\033[0m"
+#define DEFAULT_ATLAS_SIZE 2048
 
 template<typename T, typename = void>
 struct is_streamable : std::false_type {};
@@ -183,9 +195,9 @@ inline constexpr bool is_streamable_v = is_streamable<T>::value;
 template<typename T>
 void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	if constexpr (is_streamable_v<T>) {
-		std::cerr << "Throw: _" << v << "_ on line " << line << " (" << file << ")" << std::endl;
+		std::cerr << RED_ANSI << "Throw: _" << v << "_ on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	} else {
-		std::cerr << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << std::endl;
+		std::cerr << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	}
 	throw(1);
 }
@@ -200,19 +212,16 @@ class ImageLabel;
 class ScrollFrame;
 class TextureLabel;
 class LineEx;
+class Atlas;
 
+void FlushRectanglesBatch();
 void updateObject2DVector(Object2D*);
 
-struct OffsetScale {
-	int Offset = 0; // value in pixels
-	float Scale = 0; // relative value
-};
-
-struct Padding {
-	OffsetScale upper = { 0,0 };
-	OffsetScale lower = { 0,0 };
-	OffsetScale left = { 0,0 };
-	OffsetScale right = { 0,0 };
+struct RoundRectData {
+	Vector2 Pos, Size;
+	Color Color, BorderColor;
+	float Transparency, Roundness, BorderTransparency;
+	int BorderThickness;
 };
 
 struct SpecialVector2 {
@@ -279,8 +288,7 @@ struct SpecialVector2 {
 			if (parentalObj) {
 				updateObject2DVector(parentalObj);
 			}
-		}
-		else {
+		} else {
 			x.n = other.x;
 			y.n = other.y;
 		}
@@ -288,12 +296,7 @@ struct SpecialVector2 {
 	}
 };
 
-struct RoundRectData {
-	Vector2 Pos, Size;
-	Color Color, BorderColor;
-	float Transparency, Roundness, BorderTransparency;
-	int BorderThickness;
-};
+struct AtlasTexture;
 
 namespace SIMPLEUI_GLOBAL {
 	int winWidth = 0;
@@ -320,7 +323,7 @@ namespace SIMPLEUI_GLOBAL {
 	std::vector<RoundRectData> CurrentRectanglesBatch;
 
 	std::mutex ImagesLoadingMtx;
-	std::unordered_map<std::string, std::pair<Image, Texture>> loadedImages;
+	std::unordered_map<std::string, std::pair<Image, AtlasTexture>> loadedImages;
 	std::unordered_map<std::string, Image> pendingImages;
 
 	size_t framesSinceStart = 0;
@@ -331,6 +334,263 @@ namespace SIMPLEUI_GLOBAL {
 
 	std::unordered_map<long, Instance*> deletedObjectsByID;
 	std::unordered_map<Instance*, long> deletedObjectsByPtr;
+
+	std::vector<Atlas*> AtlasArray;
+	size_t AtlasTextureId = 1;
+}
+
+namespace RL_FUNCTIONS_PLUS {
+	void BeginShaderMode(Shader shader) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
+	}
+
+	void EndShaderMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndShaderMode();
+	}
+
+	void BeginTextureMode(RenderTexture2D texture) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginTextureMode(texture);
+	}
+
+	void EndTextureMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndTextureMode();
+	}
+
+	void BeginBlendMode(int mode) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginBlendMode(mode);
+	}
+
+	void EndBlendMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndBlendMode();
+	}
+
+	void BeginScissorMode(int x, int y, int width, int height) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::BeginScissorMode(x, y, width, height);
+	}
+
+	void EndScissorMode() {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::EndScissorMode();
+	}
+
+	void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
+		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
+	}
+
+	void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
+	}
+
+	void DrawTexture(Texture2D t, int x, int y, Color c) {
+		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawTexture(t, x, y, c);
+	}
+}
+
+struct OffsetScale {
+	int Offset = 0; // value in pixels
+	float Scale = 0; // relative value
+};
+
+struct Padding {
+	OffsetScale upper = { 0,0 };
+	OffsetScale lower = { 0,0 };
+	OffsetScale left = { 0,0 };
+	OffsetScale right = { 0,0 };
+};
+
+struct AtlasTexture {
+	size_t id;
+	Vector2 position;
+	Vector2 size;
+	Atlas* currentAtlas;
+};
+
+class Atlas {
+	RenderTexture2D tex;
+	std::vector<AtlasTexture> textures;
+	std::vector<stbrp_node> nodes;
+	stbrp_context ctx;
+	int padding;
+public:
+	Texture2D texture() const { return tex.texture; }
+	RenderTexture2D renderTexture() const { return tex; }
+
+	Rectangle source(const AtlasTexture& t) const {
+		return {
+			t.position.x,
+			(float)tex.texture.height - t.position.y - t.size.y,
+			t.size.x,
+			-t.size.y
+		};
+	}
+
+	void remove(AtlasTexture& tex) {
+		for (int i = 0; i < textures.size(); i++) {
+			if (textures[i].id == tex.id) {
+				textures.erase(textures.begin() + i);
+				tex.currentAtlas = nullptr;
+				break;
+			}
+		}
+
+		if (textures.size() == 0) {
+			delete this;
+		}
+	}
+
+	AtlasTexture add(const Image& img) {
+		stbrp_rect r{};
+		r.w = img.width + padding * 2;
+		r.h = img.height + padding * 2;
+		if (!stbrp_pack_rects(&ctx, &r, 1)) return { 0 };
+
+		int x = r.x + padding;
+		int y = r.y + padding;
+
+		Texture2D src = LoadTextureFromImage(img);
+
+		RL_FUNCTIONS_PLUS::BeginTextureMode(tex);
+		RAYLIB_FUNCTIONAL::rlSetBlendFactorsSeparate(RL_ONE, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+		RL_FUNCTIONS_PLUS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_CUSTOM_SEPARATE);
+		RL_FUNCTIONS_PLUS::DrawTexture(src, x, y, WHITE);
+		RL_FUNCTIONS_PLUS::EndBlendMode();
+		RL_FUNCTIONS_PLUS::EndTextureMode();
+
+		UnloadTexture(src);
+
+		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)img.width, (float)img.height}, this };
+
+		textures.push_back(att);
+
+		return att;
+	}
+
+	AtlasTexture add(int width, int height) {
+		stbrp_rect r{};
+		r.w = width + padding * 2;
+		r.h = height + padding * 2;
+		if (!stbrp_pack_rects(&ctx, &r, 1)) return { 0 };
+
+		int x = r.x + padding;
+		int y = r.y + padding;
+
+		RL_FUNCTIONS_PLUS::BeginTextureMode(tex);
+		RAYLIB_FUNCTIONAL::rlSetBlendFactorsSeparate(RL_ONE, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+		RL_FUNCTIONS_PLUS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_CUSTOM_SEPARATE);
+		RAYLIB_FUNCTIONAL::DrawRectangle(x, y, width, height, BLANK);
+		RL_FUNCTIONS_PLUS::EndBlendMode();
+		RL_FUNCTIONS_PLUS::EndTextureMode();
+
+		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)width, (float)height}, this };
+
+		textures.push_back(att);
+
+		return att;
+	}
+
+	void blankArea(AtlasTexture t) {
+		if (t.currentAtlas != this) return;
+		RAYLIB_FUNCTIONAL::rlSetBlendFactorsSeparate(RL_ONE, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+		RL_FUNCTIONS_PLUS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_CUSTOM_SEPARATE);
+		RAYLIB_FUNCTIONAL::DrawRectangle(t.position.x, t.position.y, t.size.x + padding * 2, t.size.y + padding * 2, BLANK);
+		RL_FUNCTIONS_PLUS::EndBlendMode();
+	}
+
+	Atlas(int size=DEFAULT_ATLAS_SIZE, int pad=1) : padding(pad) {
+		nodes.resize(size);
+		tex = LoadRenderTexture(size, size);
+		std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
+		SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
+		stbrp_init_target(&ctx, size, size, nodes.data(), (int)nodes.size());
+		RL_FUNCTIONS_PLUS::BeginTextureMode(tex);
+		ClearBackground(BLANK);
+		RL_FUNCTIONS_PLUS::EndTextureMode();
+
+		SIMPLEUI_GLOBAL::AtlasArray.push_back(this);
+	}
+
+	Atlas(const Atlas&) = delete;
+	Atlas& operator=(const Atlas&) = delete;
+
+	~Atlas() { 
+		UnloadRenderTexture(tex);
+
+		for (int i = 0; i < SIMPLEUI_GLOBAL::AtlasArray.size(); i++) {
+			if (SIMPLEUI_GLOBAL::AtlasArray[i] == this) {
+				SIMPLEUI_GLOBAL::AtlasArray.erase(SIMPLEUI_GLOBAL::AtlasArray.begin() + i);
+				break;
+			}
+		}
+	}
+};
+
+namespace RL_FUNCTIONS_PLUS {
+	void DrawTexturePro(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+		if (!t.currentAtlas) return;
+
+		Texture2D tex = t.currentAtlas->texture();
+
+		Rectangle src = { t.position.x + s.x, t.position.y + s.y, s.width, s.height };
+		src.y = tex.height - src.y - src.height;
+		src.height = -src.height;
+
+		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, src, d, o, r, c);
+	}
+}
+
+AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas=DEFAULT_ATLAS_SIZE) {
+	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
+		AtlasTexture t = atlas->add(image);
+		if (t.id) return t;
+	}
+
+	for (int size = DEFAULT_ATLAS_SIZE; size <= 16384; size *= 2) {
+		Atlas* atlas = new Atlas(size);
+		AtlasTexture t = atlas->add(image);
+		if (t.id) return t;
+
+		std::cout << YELLOW_ANSI << "Image cannot be placed on atlas " << sizeOfAtlas << "x" << sizeOfAtlas << "." << DEFAULT_ANSI << std::endl;
+		delete atlas;
+	}
+	
+	return {};
+}
+
+AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas=DEFAULT_ATLAS_SIZE) {
+	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
+		AtlasTexture t = atlas->add(width, height);
+		if (t.id) return t;
+	}
+
+	for (int size = DEFAULT_ATLAS_SIZE; size <= 16384; size *= 2) {
+		Atlas* atlas = new Atlas(size);
+		AtlasTexture t = atlas->add(width, height);
+		if (t.id) return t;
+
+		std::cout << YELLOW_ANSI << "Image cannot be placed on atlas " << sizeOfAtlas << "x" << sizeOfAtlas << "." << DEFAULT_ANSI << std::endl;
+		delete atlas;
+	}
+
+	return {};
+}
+
+void UnloadTextureFromAtlas(AtlasTexture t) {
+	if (t.currentAtlas) {
+		t.currentAtlas->remove(t);
+	}
 }
 
 inline void loadImage(const std::string& name, const std::string& path) {
@@ -338,14 +598,14 @@ inline void loadImage(const std::string& name, const std::string& path) {
 
 	if (SIMPLEUI_GLOBAL::pendingImages.find(name) != SIMPLEUI_GLOBAL::pendingImages.end()) {
 		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
-		std::cout << "Image: " << name << " already exists" << std::endl;
+		std::cout << YELLOW_ANSI << "Image: " << name << " already exists" << DEFAULT_ANSI << std::endl;
 		return;
 	}
 
 	Image img = LoadImage(path.c_str());
 	if (!img.data) {
 		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
-		std::cout << "Image: " << name << " error while loading" << std::endl;
+		std::cout << YELLOW_ANSI << "Image: " << name << " error while loading" << DEFAULT_ANSI << std::endl;
 		return;
 	}
 
@@ -359,7 +619,7 @@ inline void unloadImage(const std::string& name) {
 	auto it = SIMPLEUI_GLOBAL::loadedImages.find(name);
 	if (it != SIMPLEUI_GLOBAL::loadedImages.end()) {
 		UnloadImage(it->second.first);
-		UnloadTexture(it->second.second);
+		UnloadTextureFromAtlas(it->second.second);
 		SIMPLEUI_GLOBAL::loadedImages.erase(it);
 	}
 
@@ -372,7 +632,7 @@ inline void unloadImage(const std::string& name) {
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 }
 
-inline std::pair<Image, Texture> getImage(const std::string& name) {
+inline std::pair<Image, AtlasTexture> getImage(const std::string& name) {
 	if (name == "") { return {}; }
 
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
@@ -385,11 +645,11 @@ inline std::pair<Image, Texture> getImage(const std::string& name) {
 	auto it1 = SIMPLEUI_GLOBAL::pendingImages.find(name);
 	if (it1 != SIMPLEUI_GLOBAL::pendingImages.end()) {
 		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
-		return { it1->second, Texture{} };
+		return { it1->second, AtlasTexture{} };
 	}
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 
-	std::cout << "Image " << name << " was not found" << std::endl;
+	std::cout << YELLOW_ANSI << "Image " << name << " was not found" << DEFAULT_ANSI << std::endl;
 	return {};
 }
 
@@ -404,7 +664,7 @@ inline int loadNewShader(const std::string& vs, const std::string& fs) {
 inline Shader getShader(int id) {
 	auto it = SIMPLEUI_GLOBAL::Shaders.find(id);
 	if (it == SIMPLEUI_GLOBAL::Shaders.end()) {
-		std::cout << "Shader: " << id << " was not found" << std::endl;
+		std::cout << YELLOW_ANSI << "Shader: " << id << " was not found" << DEFAULT_ANSI << std::endl;
 		return SIMPLEUI_GLOBAL::Shaders.find(1)->second;
 	}
 	return it->second;
@@ -921,8 +1181,7 @@ namespace Animate {
 				it = ActiveAnimations.erase(it);
 				sas->Completed();
 				delete sas;
-			}
-			else {
+			} else {
 				it++;
 			}
 		}
@@ -1067,6 +1326,27 @@ inline void Delete(Z* ptr) {
 
 inline void updateChildren(Instance*);
 
+template<typename F>
+struct function_traits : function_traits<decltype(&F::operator())> {};
+
+template<typename R, typename... Args>
+struct function_traits<R(Args...)> {
+	using result_type = R;
+	static constexpr std::size_t arity = sizeof...(Args);
+
+	template<std::size_t N>
+	using arg = std::tuple_element_t<N, std::tuple<Args...>>;
+};
+
+template<typename R, typename... Args>
+struct function_traits<R(*)(Args...)> : function_traits<R(Args...)> {};
+
+template<typename C, typename R, typename... Args>
+struct function_traits<R(C::*)(Args...)> : function_traits<R(Args...)> {};
+
+template<typename C, typename R, typename... Args>
+struct function_traits<R(C::*)(Args...) const> : function_traits<R(Args...)> {};
+
 struct InstanceCallback {
 	std::function<void(Instance*, Instance*)> func;
 
@@ -1080,6 +1360,10 @@ struct InstanceCallback {
 			func = [f = std::forward<F>(f)](Instance* a, Instance*) mutable {
 				f(a);
 			};
+		} else {
+			using traits = function_traits<std::decay_t<F>>;
+			std::string t = typeid(typename traits::template arg<0>).name();
+			std::cout << RED_ANSI << "Can't create function (" << t << "), expected types: (Instance*, ?Instance*)" << DEFAULT_ANSI << std::endl;
 		}
 	}
 
@@ -1287,8 +1571,11 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
+			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
 			child->Update();
 		}
+
+		changedPosOrSizeFrame = false;
 	}
 
 	virtual Instance* Clone() const {
@@ -1450,10 +1737,15 @@ inline SpecialVector2 getScrollFrameRP(Instance*);
 inline bool isScrollFrameCropping(Instance*);
 
 enum SUI_EEC {
-	EEC_DEFAULT = 0,
-	EEC_EVERY_ENTER,
-	EEC_IF_DESCENDANT_HIGHER
+	EEC_DEFAULT = 0, // Entered if current object is highest by ZIndex on mouse
+	EEC_EVERY_ENTER, // Entered if current object on mouse
+	EEC_IF_DESCENDANT_HIGHER // Entered if current object is ancestor of highest ZIndex object on mouse
 };
+
+void DrawRoundRectBatch(const RoundRectData& r) {
+	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
+	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
+}
 
 static void EmitRoundRectQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color color) {
 	float hx = size.x * 0.5f + 1.0f;
@@ -1470,11 +1762,6 @@ static void EmitRoundRectQuad(Vector2 pos, Vector2 size, float roundness, float 
 	RAYLIB_FUNCTIONAL::rlTexCoord2f(-hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x0, y1, z);
 	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y1, z);
 	RAYLIB_FUNCTIONAL::rlTexCoord2f(hx, -hy); RAYLIB_FUNCTIONAL::rlVertex3f(x1, y0, z);
-}
-
-void DrawRoundRectBatch(const RoundRectData& r) {
-	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
-	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
 }
 
 void FlushRectanglesBatch() {
@@ -1499,50 +1786,6 @@ void FlushRectanglesBatch() {
 		RAYLIB_FUNCTIONAL::EndShaderMode();
 
 		SIMPLEUI_GLOBAL::CurrentRectanglesBatch.clear();
-	}
-}
-
-namespace RL_FUNCTIONS_PLUS {
-	void BeginShaderMode(Shader shader) {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
-	}
-
-	void EndShaderMode() {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::EndShaderMode();
-	}
-
-	void BeginTextureMode(RenderTexture2D texture) {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::BeginTextureMode(texture);
-	}
-
-	void EndTextureMode() {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::EndTextureMode();
-	}
-
-	void BeginScissorMode(int x, int y, int width, int height) {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::BeginScissorMode(x, y, width, height);
-	}
-
-	void EndScissorMode() {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::EndScissorMode();
-	}
-
-	void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
-		FlushRectanglesBatch();
-		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
-		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
-	}
-
-	void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
-		FlushRectanglesBatch();
-		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
-		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
 	}
 }
 
@@ -1571,8 +1814,6 @@ protected:
 
 		childsRemovedInFrame.clear();
 		childsAddedInFrame.clear();
-		changedPosOrSizeFrame = false;
-		if (Parent and Parent->changedPosOrSizeFrame) changedPosOrSizeFrame = true;
 	}
 
 	void eventHandler();
@@ -1607,15 +1848,15 @@ public:
 		return false;
 	}
 
-	SpecialVector2 RealSize{ 0,0,this }; // Absolute size in pixels (not for changing from somewhere)
+	SpecialVector2 RealSize{ 0, 0, this }; // Absolute size in pixels (not for changing from somewhere)
 	SpecialVector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
 	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
-	SpecialVector2 PositionOFFSET = { 0,0,this };
+	SpecialVector2 PositionOFFSET = { 0, 0, this };
 	SpecialVector2 SizeOFFSET = {};
-	SpecialVector2 AnchorPositionOFFSET = { 0,0,this };
-	SpecialVector2 Position{ 0,0,this };
+	SpecialVector2 AnchorPositionOFFSET = { 0, 0, this };
+	SpecialVector2 Position{ 0, 0, this };
 	SpecialVector2 Size{};
-	SpecialVector2 AnchorPosition{ 0,0,this };
+	SpecialVector2 AnchorPosition{ 0, 0, this };
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -1632,7 +1873,7 @@ public:
 	bool Active = false;
 
 	void getRealObject2Dsize(bool forced=false) {
-		if (!changedPosOrSizeFrame and !forced) return;
+		//if (!changedPosOrSizeFrame and !forced) return; test
 
 		SpecialVector2 sizePx = {};
 		Object2D* self = this;
@@ -1640,13 +1881,17 @@ public:
 		Object2D* parent2D = nullptr;
 
 		while (current) {
-			if (!Is2DInheritor(current)) {
+			if (!Is2DInheritor(current->Class)) {
 				if (current->Parent) { current = current->Parent; continue; }
 				parent2D = nullptr;
 				break;
 			}
 			parent2D = static_cast<Object2D*>(current);
-			if (parent2D->__ParentObject) { parent2D = nullptr; break; }
+
+			if (parent2D->__ParentObject) { 
+				parent2D = nullptr; 
+			}
+
 			break;
 		}
 
@@ -1660,7 +1905,7 @@ public:
 	}
 
 	void getRealObject2Dposition(bool forced=false) {
-		if (!changedPosOrSizeFrame and !forced) return;
+		//if (!changedPosOrSizeFrame and !forced) return; test
 		if (!RelativeSCalculated) getRealObject2Dsize(true);
 
 		SpecialVector2 posPx = { 0.0f, 0.0f };
@@ -1806,8 +2051,11 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
+			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
 			child->Update();
 		}
+
+		changedPosOrSizeFrame = false;
 	}
 
 	Object2D* Clone() const override {
@@ -1933,28 +2181,22 @@ public:
 	LineEx() = delete;
 };
 
-inline void updateChildren(Instance* parent) { // THIS SHIT IS SO LEGACY AND UNEFFICIENT MAYBE I WILL UPDATE IT
+inline void updateChildren(Instance* parent) {
 	if (!parent) return;
 	parent->updateChildrenZIndex = false;
 	std::sort(parent->Children.begin(), parent->Children.end(), [](Instance* a, Instance* b) {
-		auto az = dynamic_cast<Object2D*>(a);
-		auto bz = dynamic_cast<Object2D*>(b);
+		int zA = 0;
+		int zB = 0;
 
-		LineEx* az2 = nullptr;
-		LineEx* bz2 = nullptr;
+		if (Is2DInheritor(a->Class)) {
+			zA = static_cast<Object2D*>(a)->ZIndex;
+		}
 
-		if (!az and a->Class == LINEEX)
-			az2 = dynamic_cast<LineEx*>(a);
-		if (!bz and b->Class == LINEEX)
-			bz2 = dynamic_cast<LineEx*>(b);
+		if (Is2DInheritor(b->Class)) {
+			zB = static_cast<Object2D*>(b)->ZIndex;
+		}
 
-		if (az and bz) return az->ZIndex < bz->ZIndex;
-		if (az2 and bz2) return az2->ZIndex < bz2->ZIndex;
-		if (az2 and bz) return az2->ZIndex < bz->ZIndex;
-		if (az and bz2) return az->ZIndex < bz2->ZIndex;
-		if (az) return true;
-		if (bz) return false;
-		return true;
+		return zA < zB;
 	});
 }
 
@@ -2272,11 +2514,14 @@ public:
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID.size() and SIMPLEUI_GLOBAL::deletedObjectsByID.contains(id)) {
 					continue;
 				}
+
+				if (ptr and changedPosOrSizeFrame) ptr->changedPosOrSizeFrame = true;
 				ptr->Update();
 			}
 		}
 
 		for (Instance* s : Tick) {
+			if (s and changedPosOrSizeFrame) s->changedPosOrSizeFrame = true;
 			s->Update();
 		}
 
@@ -2442,10 +2687,14 @@ public:
 						CanvasPosition.x = newX1;
 					}
 				}
+
+				changedPosOrSizeFrame = true;
 			}
 		}
 
 		Draw();
+
+		changedPosOrSizeFrame = false;
 	}
 
 	ScrollFrame* Clone() const override {
@@ -2529,7 +2778,7 @@ class TextLabel : public Object2D {
 	int lastMaxVisible = -1;
 	Vector3 textParams{};
 	SpecialVector2 lastRealSize{};
-	RenderTexture2D cachedText{};
+	AtlasTexture cachedText{};
 	SpecialVector2 newSize{};
 	SpecialVector2 lastNewSize{};
 	Vector3 lastParams = Vector3{};
@@ -2557,14 +2806,12 @@ class TextLabel : public Object2D {
 				size_t idx = charOffsets[std::max(3, (int)(charOffsets.size() - MaxVisibleSymbols)) - 3];
 				visibleText = "...";
 				visibleText += Text.substr(idx);
-			}
-			else {
+			} else {
 				size_t idx = charOffsets[std::max(3, MaxVisibleSymbols) - 3];
 				visibleText = Text.substr(0, idx);
 				visibleText += "...";
 			}
-		}
-		else {
+		} else {
 			visibleText = !Text;
 		}
 
@@ -2577,11 +2824,11 @@ class TextLabel : public Object2D {
 
 		if (cachedText.id == 0 or lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
 			if (cachedText.id != 0) {
-				UnloadRenderTexture(cachedText);
+				UnloadTextureFromAtlas(cachedText);
 			}
 
 			if (Text.size()) {
-				cachedText = LoadRenderTexture(newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect);
+				cachedText = LoadRenderTextureOnAtlas(newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect);
 				lastNewSize = SpecialVector2{ newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
 			}
 		}
@@ -2593,11 +2840,10 @@ class TextLabel : public Object2D {
 
 			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText);
-			ClearBackground(BLANK);
-			DrawTextEx(getFont(!FontFace), visibleText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
+			cachedText.currentAtlas->blankArea(cachedText);
+			DrawTextEx(getFont(!FontFace), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
 			RL_FUNCTIONS_PLUS::EndTextureMode();
-			SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
 
 			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
@@ -2613,19 +2859,19 @@ public:
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
 
-	const SUI_Text& GetText() const {
+	const SUI_Text& GetText() const { // Deprecated functional. Now you can use ***->Text;
 		return Text;
 	}
 
-	void SetText(const std::string& T) {
+	void SetText(const std::string& T) { // Deprecated functional. Now you can use ***->Text = ***;
 		Text = T;
 	}
 
-	const SUI_Text& GetFont() const {
+	const SUI_Text& GetFont() const { // Deprecated functional. Now you can use ***->FontFace;
 		return FontFace;
 	}
 
-	void SetFont(const std::string& F) {
+	void SetFont(const std::string& F) { // Deprecated functional. Now you can use ***->FontFace = ***;
 		FontFace = F;
 	}
 
@@ -2646,8 +2892,7 @@ public:
 
 			if (lastParams.z != textParams.z or (cachedText.id == 0 and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
 				updateTexture();
-			}
-			else {
+			} else {
 				if (std::fabsf(lastRealSize.x - RealSize.x) >= TextTextureUpdateAspect or std::fabsf(lastRealSize.y - RealSize.y) >= TextTextureUpdateAspect) {
 					lastRealSize = RealSize;
 					newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
@@ -2659,11 +2904,12 @@ public:
 				if (cachedText.id == 0) {
 					updateTexture();
 				}
-				Rectangle sourceRec = { 0.0f, (float)(cachedText.texture.height - newSize.y), (float)newSize.x, -(float)newSize.y };
+
+				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
 				Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, (float)newSize.x, (float)newSize.y };
 				SpecialVector2 origin = { 0, 0 };
 
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
 			}
 		}
 	}
@@ -2680,7 +2926,7 @@ public:
 		}
 
 		i->cachedText.id = 0;
-		i->cachedText.texture.id = 0;
+		i->cachedText.currentAtlas = nullptr;
 		i->updateTexture();
 
 		return i;
@@ -2690,7 +2936,7 @@ public:
 	TextLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
 	~TextLabel() {
 		if (cachedText.id != 0) {
-			UnloadRenderTexture(cachedText);
+			UnloadTextureFromAtlas(cachedText);
 		}
 	}
 	TextLabel() = delete;
@@ -2756,7 +3002,7 @@ class TextBox : public Object2D {
 	int lines = 0;
 	Vector2 highlightedIndexes{ -1,-1 };
 	Vector3 textParams{};
-	RenderTexture2D cachedText;
+	AtlasTexture cachedText;
 	TextBox* lastFocused = nullptr;
 	SpecialVector2 newSize{};
 	SpecialVector2 lastRealSize{};
@@ -2771,8 +3017,7 @@ class TextBox : public Object2D {
 			textParams.y = 0;
 			textParams.x = 0;
 			textParams.z = std::fmin(RealSize.y, ((TextSize > 0) ? TextSize : RealSize.y));
-		}
-		else {
+		} else {
 			if (Text != "") {
 				textParams = getTextCFrame(Text.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 			}
@@ -2803,10 +3048,10 @@ class TextBox : public Object2D {
 
 		if (lastNewSize.x < reqX or lastNewSize.y < reqY) {
 			if (cachedText.id != 0) {
-				UnloadRenderTexture(cachedText);
+				UnloadTextureFromAtlas(cachedText);
 			}
 
-			cachedText = LoadRenderTexture(reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect);
+			cachedText = LoadRenderTextureOnAtlas(reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect);
 			lastNewSize = SpecialVector2{ reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect };
 		}
 
@@ -2816,8 +3061,8 @@ class TextBox : public Object2D {
 
 		if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
-		RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText);
-		ClearBackground(BLANK);
+		RL_FUNCTIONS_PLUS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
+		cachedText.currentAtlas->blankArea(cachedText);
 
 		if (Text != "") {
 			lines = 1;
@@ -2835,16 +3080,15 @@ class TextBox : public Object2D {
 				if (c == '\n') lines++;
 			}
 
-			DrawTextEx(getFont(FontFace), t.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFace), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
 		} else {
 			lines = 0;
 			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
-				DrawTextEx(getFont(FontFace), PlaceholderText.c_str(), { 0,0 }, textParams.z, Spacing, { 255,255,255,255 });
+				DrawTextEx(getFont(FontFace), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
 			}
 		}
 
 		RL_FUNCTIONS_PLUS::EndTextureMode();
-		SetTextureWrap(cachedText.texture, TEXTURE_WRAP_CLAMP);
 		if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 	}
 public:
@@ -2915,22 +3159,22 @@ public:
 
 			Rectangle sourceRec = {
 				viewX,
-				cachedText.texture.height - sizeToDraw.y - viewY,
+				viewY,
 				sizeToDraw.x,
-				-sizeToDraw.y
+				sizeToDraw.y
 			};
+
 			Rectangle destRec = { RealPos.x + textParams.x, RealPos.y + textParams.y, sizeToDraw.x, sizeToDraw.y };
 			SpecialVector2 origin = { 0, 0 };
 
 			Color clr;
 			if (Text == "") {
 				clr = { PlaceholderTextColor.r, PlaceholderTextColor.g, PlaceholderTextColor.b, (unsigned char)(PlaceholderTextColor.a * (1 - TextTransparency)) };
-			}
-			else {
+			} else {
 				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText.texture, sourceRec, destRec, origin, 0, clr);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, sourceRec, destRec, origin, 0, clr);
 		}
 
 		if (Text.empty()) {
@@ -3547,13 +3791,16 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
+			if (child and changedPosOrSizeFrame) child->changedPosOrSizeFrame = true;
 			child->Update();
 		}
+
+		changedPosOrSizeFrame = false;
 	};
 
 	~TextBox() {
 		if (cachedText.id != 0) {
-			UnloadRenderTexture(cachedText);
+			UnloadTextureFromAtlas(cachedText);
 		}
 	}
 
@@ -3601,8 +3848,7 @@ public:
 		}
 
 		i->cachedText.id = 0;
-		i->cachedText.texture.id = 0;
-		i->updateTexture();
+		i->cachedText.currentAtlas = nullptr;
 
 		return i;
 	}
@@ -3623,16 +3869,13 @@ class ImageLabel : public Object2D {
 	constexpr static const char* DefaultName = "ImageLabel";
 	constexpr static InstanceType DefaultClass = IMAGELABEL;
 
-	Texture2D tex{};
+	AtlasTexture tex{};
 	Image imageIfMemory{};
 	std::string currentPair;
 
 	void updateTexture() {
 		if ((tex.id == 0) and imageIfMemory.data) {
-			tex = LoadTextureFromImage(imageIfMemory);
-			GenTextureMipmaps(&tex);
-			SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
-			SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
+			tex = LoadTextureOnAtlas(imageIfMemory);
 		}
 	}
 public:
@@ -3646,7 +3889,7 @@ public:
 	void setImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
 			UnloadImage(imageIfMemory);
-			UnloadTexture(tex);
+			UnloadTextureFromAtlas(tex);
 		}
 
 		auto pair = getImage(name);
@@ -3669,10 +3912,10 @@ public:
 
 		if (tex.id) {
 			Rectangle destRec = { RealPos.x + Origin.x, RealPos.y + Origin.y, RealSize.x, RealSize.y };
-			Rectangle srcRec = { 0, 0, tex.width, tex.height };
+			Rectangle srcRec = { 0, 0, tex.size.x, tex.size.y };
 
 			if (Overlay == ImageOverlayFormat::IMAGE_FIT) {
-				float imageAspect = (float)tex.width / tex.height;
+				float imageAspect = (float)tex.size.x / tex.size.y;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
@@ -3685,16 +3928,16 @@ public:
 					destRec.width = scaledWidth;
 				}
 			} else if (Overlay == ImageOverlayFormat::IMAGE_CROP) {
-				float imageAspect = (float)tex.width / tex.height;
+				float imageAspect = (float)tex.size.x / tex.size.y;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
-					float cropWidth = tex.height * rectAspect;
-					srcRec.x = (tex.width - cropWidth) / 2.0f;
+					float cropWidth = tex.size.y * rectAspect;
+					srcRec.x = (tex.size.x - cropWidth) / 2.0f;
 					srcRec.width = cropWidth;
 				} else {
-					float cropHeight = tex.width / rectAspect;
-					srcRec.y = (tex.height - cropHeight) / 2.0f;
+					float cropHeight = tex.size.x / rectAspect;
+					srcRec.y = (tex.size.y - cropHeight) / 2.0f;
 					srcRec.height = cropHeight;
 				}
 			}
@@ -3747,11 +3990,11 @@ public:
 		imageIfMemory = LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (!imageIfMemory.data) {
-			std::cout << "UpdateFromMemory FAILED" << std::endl;
+			std::cout << RED_ANSI << "UpdateFromMemory FAILED" << DEFAULT_ANSI << std::endl;
 			return;
 		}
 
-		if (tex.id != 0) UnloadTexture(tex);
+		if (tex.id != 0 and tex.currentAtlas) UnloadTextureFromAtlas(tex);
 
 		tex.id = 0;
 		currentPair = "";
@@ -3782,7 +4025,7 @@ public:
 	ImageLabel() = delete;
 
 	~ImageLabel() {
-		if (tex.id != 0 and imageIfMemory.data) UnloadTexture(tex);
+		if (tex.id != 0 and imageIfMemory.data) UnloadTextureFromAtlas(tex);
 		if (imageIfMemory.data) UnloadImage(imageIfMemory);
 	}
 };
@@ -4183,6 +4426,7 @@ inline void DrawFrame(Instance* StartInstance) {
 	BeginDrawing();
 	ClearBackground({ 255,255,255,255 });
 	StartInstance->Update();
+	FlushRectanglesBatch();
 	EndDrawing();
 }
 
@@ -4856,10 +5100,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	queuedFonts.clear();
 
 	for (auto& pair : SIMPLEUI_GLOBAL::pendingImages) {
-		Texture tex = LoadTextureFromImage(pair.second);
-		GenTextureMipmaps(&tex);
-		SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
-		SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
+		AtlasTexture tex = LoadTextureOnAtlas(pair.second);
 		SIMPLEUI_GLOBAL::loadedImages.insert({ pair.first, {pair.second, tex} });
 	}
 
@@ -4884,6 +5125,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 		if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
 			SIMPLEUI_GLOBAL::windowSizeChanged = true;
+			StartInstance.changedPosOrSizeFrame = true;
+			previousWinSize = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
 		}
 
 		static long middleFPS = 0;
@@ -4905,14 +5148,14 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 		Animate::UpdateAnimations(SIMPLEUI_GLOBAL::dt);
 		Tasks::UpdateTasks(SIMPLEUI_GLOBAL::dt);
 
-		if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty) or true) {
+		if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty)) {
 			previousMousePosition = SIMPLEUI_GLOBAL::mousePosition;
 			UpdateHigher(&StartInstance);
 		}
 
 		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, { 125, 180, 220, 255 }); }
 		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }
-		if (IsKeyPressed(KEY_F3)) { std::cout << SIMPLEUI_GLOBAL::accurateFPS << std::endl; }
+		if (IsKeyPressed(KEY_F3)) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
 
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 

@@ -516,6 +516,11 @@ public:
 		return i;
 	}
 
+	static GraphBuilder* New(GraphBuilder* parent = nullptr) {
+		GraphBuilder* i = new GraphBuilder(parent);
+		return i;
+	}
+
 	GraphBuilder(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
 	GraphBuilder(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
 	~GraphBuilder() {
@@ -673,21 +678,20 @@ public:
 	ToggleSwitcher* Clone() const override {
 		ToggleSwitcher* i = new ToggleSwitcher(*this);
 		i->UpdateAllVectorPointers();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		i->Parent = nullptr;
-		i->Children.clear();
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->posOrSizeChangedResult = true;
 
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static ToggleSwitcher* New(ToggleSwitcher* parent = nullptr) {
+		ToggleSwitcher* i = new ToggleSwitcher(parent);
 		return i;
 	}
 	
 	ToggleSwitcher(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
 	ToggleSwitcher(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
-	~ToggleSwitcher() {
-
-	}
+	~ToggleSwitcher() {}
 	ToggleSwitcher() = delete;
 };

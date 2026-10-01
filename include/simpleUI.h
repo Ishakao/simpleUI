@@ -1367,8 +1367,7 @@ struct InstanceCallback {
 				f(a);
 			};
 		} else {
-			using traits = function_traits<std::decay_t<F>>;
-			std::string t = typeid(typename traits::template arg<0>).name();
+			std::string t = typeid(typename function_traits<std::decay_t<F>>::template arg<0>).name();
 			std::cout << RED_ANSI << "Can't create function (" << t << "), expected types: (Instance*, ?Instance*)" << DEFAULT_ANSI << std::endl;
 		}
 	}
@@ -1384,14 +1383,25 @@ class Instance {
 protected:
 	size_t lastUpdateFrame = 0;
 	bool updateWhenWillBeVisible = true;
+
+	virtual void basicCloneOperation() {
+		this->Parent = nullptr;
+		this->Children.clear();
+		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+
+		for (Instance* c : Children) {
+			c->Clone()->setParent(this);
+		}
+	}
+private:
+	std::vector<std::pair<EventType, InstanceCallback>> events;
 public:
 	long uniqueID = -1;
 	std::unordered_map<long, Instance*> childsAddedInFrame;
 	std::unordered_map<long, Instance*> childsRemovedInFrame;
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
-private:
-	std::vector<std::pair<EventType, InstanceCallback>> events;
-public:
+
 	bool hasEvent(EventType t) const {
 		for (auto& [type, _] : events) {
 			if (type == t) {
@@ -1577,15 +1587,18 @@ public:
 		}
 	}
 
+	static Instance* New(Instance* parent=nullptr) {
+		Instance* i = new Instance(parent);
+		return i;
+	}
+
+	void Destroy() {
+		Delete(this);
+	}
+
 	virtual Instance* Clone() const {
 		Instance* i = new Instance(*this);
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->basicCloneOperation();
 
 		return i;
 	}
@@ -1629,6 +1642,18 @@ class StringValue : public Instance {
 public:
 	std::string Value = "";
 
+	StringValue* Clone() const {
+		StringValue* i = new StringValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static StringValue* New(StringValue* parent = nullptr) {
+		StringValue* i = new StringValue(parent);
+		return i;
+	}
+
 	StringValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	StringValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
 
@@ -1640,6 +1665,18 @@ class ObjectValue : public Instance {
 	constexpr static InstanceType DefaultClass = OBJECT_VALUE;
 public:
 	Instance* Value = nullptr;
+
+	ObjectValue* Clone() const {
+		ObjectValue* i = new ObjectValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static ObjectValue* New(ObjectValue* parent = nullptr) {
+		ObjectValue* i = new ObjectValue(parent);
+		return i;
+	}
 
 	ObjectValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	ObjectValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
@@ -1654,6 +1691,18 @@ class AddressValue : public Instance {
 public:
 	T* Value = nullptr;
 
+	AddressValue* Clone() const {
+		AddressValue* i = new AddressValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static AddressValue* New(AddressValue* parent = nullptr) {
+		AddressValue* i = new AddressValue(parent);
+		return i;
+	}
+
 	AddressValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	AddressValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
 
@@ -1665,6 +1714,18 @@ class BoolValue : public Instance {
 	constexpr static InstanceType DefaultClass = BOOL_VALUE;
 public:
 	bool Value = 0;
+
+	BoolValue* Clone() const {
+		BoolValue* i = new BoolValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static BoolValue* New(BoolValue* parent = nullptr) {
+		BoolValue* i = new BoolValue(parent);
+		return i;
+	}
 
 	BoolValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	BoolValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
@@ -1678,6 +1739,18 @@ class IntValue : public Instance {
 public:
 	int Value = 0;
 
+	IntValue* Clone() const {
+		IntValue* i = new IntValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static IntValue* New(IntValue* parent = nullptr) {
+		IntValue* i = new IntValue(parent);
+		return i;
+	}
+
 	IntValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	IntValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
 
@@ -1689,6 +1762,18 @@ class FloatValue : public Instance {
 	constexpr static InstanceType DefaultClass = FLOAT_VALUE;
 public:
 	float Value = 0.0f;
+
+	FloatValue* Clone() const {
+		FloatValue* i = new FloatValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static FloatValue* New(FloatValue* parent = nullptr) {
+		FloatValue* i = new FloatValue(parent);
+		return i;
+	}
 
 	FloatValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	FloatValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
@@ -1702,6 +1787,18 @@ class Vector2Value : public Instance {
 public:
 	SpecialVector2 Value = { 0,0 };
 
+	Vector2Value* Clone() const {
+		Vector2Value* i = new Vector2Value(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static Vector2Value* New(Vector2Value* parent = nullptr) {
+		Vector2Value* i = new Vector2Value(parent);
+		return i;
+	}
+
 	Vector2Value(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	Vector2Value(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
 
@@ -1714,6 +1811,18 @@ class ColorValue : public Instance {
 public:
 	Color Value = { 255,255,255,255 };
 
+	ColorValue* Clone() const {
+		ColorValue* i = new ColorValue(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static ColorValue* New(ColorValue* parent = nullptr) {
+		ColorValue* i = new ColorValue(parent);
+		return i;
+	}
+
 	ColorValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	ColorValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
 
@@ -1724,6 +1833,17 @@ class Folder : public Instance {
 	constexpr static const char* DefaultName = "Folder";
 	constexpr static InstanceType DefaultClass = FOLDER;
 public:
+	Folder* Clone() const {
+		Folder* i = new Folder(*this);
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static Folder* New(Folder* parent = nullptr) {
+		Folder* i = new Folder(parent);
+		return i;
+	}
 
 	Folder(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
 	Folder(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
@@ -2133,15 +2253,15 @@ public:
 	Object2D* Clone() const override {
 		Object2D* i = new Object2D(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 		i->posOrSizeChangedResult = true;
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
 
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static Object2D* New(Object2D* parent = nullptr) {
+		Object2D* i = new Object2D(parent);
 		return i;
 	}
 
@@ -2240,11 +2360,14 @@ public:
 
 	LineEx* Clone() const override {
 		LineEx* i = new LineEx(*this);
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static LineEx* New(LineEx* parent = nullptr) {
+		LineEx* i = new LineEx(parent);
 		return i;
 	}
 
@@ -2772,14 +2895,15 @@ public:
 	ScrollFrame* Clone() const override {
 		ScrollFrame* i = new ScrollFrame(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->posOrSizeChangedResult = true;
 
+		i->basicCloneOperation();
+
+		return i;
+	}
+
+	static ScrollFrame* New(ScrollFrame* parent = nullptr) {
+		ScrollFrame* i = new ScrollFrame(parent);
 		return i;
 	}
 
@@ -2990,19 +3114,19 @@ public:
 	TextLabel* Clone() const override {
 		TextLabel* i = new TextLabel(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+		i->posOrSizeChangedResult = true;
 
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->basicCloneOperation();
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
 		i->updateTexture();
 
+		return i;
+	}
+
+	static TextLabel* New(TextLabel* parent = nullptr) {
+		TextLabel* i = new TextLabel(parent);
 		return i;
 	}
 
@@ -3916,17 +4040,18 @@ public:
 	TextBox* Clone() const override {
 		TextBox* i = new TextBox(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->posOrSizeChangedResult = true;
+
+		i->basicCloneOperation();
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
 
+		return i;
+	}
+
+	static TextBox* New(TextBox* parent = nullptr) {
+		TextBox* i = new TextBox(parent);
 		return i;
 	}
 
@@ -4091,13 +4216,9 @@ public:
 	ImageLabel* Clone() const override {
 		ImageLabel* i = new ImageLabel(*this);
 		i->UpdateAllVectorPointers();
-		i->setParent(nullptr);
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->posOrSizeChangedResult = true;
+
+		i->basicCloneOperation();
 
 		if (imageIfMemory.data) {
 			Image im{};
@@ -4105,6 +4226,11 @@ public:
 			i->tex.id = 0;
 		}
 
+		return i;
+	}
+
+	static ImageLabel* New(ImageLabel* parent = nullptr) {
+		ImageLabel* i = new ImageLabel(parent);
 		return i;
 	}
 
@@ -4210,16 +4336,17 @@ public:
 	TextureLabel* Clone() const override {
 		TextureLabel* i = new TextureLabel(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
+		i->posOrSizeChangedResult = true;
+
+		i->basicCloneOperation();
 
 		i->owner = false;
 
+		return i;
+	}
+
+	static TextureLabel* New(TextureLabel* parent = nullptr) {
+		TextureLabel* i = new TextureLabel(parent);
 		return i;
 	}
 

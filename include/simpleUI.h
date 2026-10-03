@@ -416,10 +416,10 @@ struct Padding {
 };
 
 struct AtlasTexture {
-	size_t id;
+	size_t id = 0;
 	Vector2 position;
 	Vector2 size;
-	Atlas* currentAtlas;
+	Atlas* currentAtlas = nullptr;
 };
 
 class Atlas {

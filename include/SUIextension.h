@@ -506,10 +506,6 @@ public:
 		i->cachedMax.currentAtlas = nullptr;
 
 		i->basicCloneOperation(const_cast<GraphBuilder*>(this));
-				for (Instance* c : Children) {
-			c->Clone()->setParent(i);
-		}
-
 		return i;
 	}
 

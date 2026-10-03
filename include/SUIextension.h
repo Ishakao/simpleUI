@@ -496,10 +496,6 @@ public:
 	GraphBuilder* Clone() const override {
 		GraphBuilder* i = new GraphBuilder(*this);
 		i->UpdateAllVectorPointers();
-		i->Parent = nullptr;
-		i->Children.clear();
-		i->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
-		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 		i->cachedTexture.id = 0;
 		i->cachedMin.id = 0;
@@ -509,7 +505,8 @@ public:
 		i->cachedMin.currentAtlas = nullptr;
 		i->cachedMax.currentAtlas = nullptr;
 
-		for (Instance* c : Children) {
+		i->basicCloneOperation(const_cast<GraphBuilder*>(this));
+				for (Instance* c : Children) {
 			c->Clone()->setParent(i);
 		}
 
@@ -680,7 +677,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<ToggleSwitcher*>(this));
 
 		return i;
 	}

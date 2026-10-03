@@ -417,8 +417,8 @@ struct Padding {
 
 struct AtlasTexture {
 	size_t id = 0;
-	Vector2 position;
-	Vector2 size;
+	Vector2 position = {0,0};
+	Vector2 size = {0,0};
 	Atlas* currentAtlas = nullptr;
 };
 
@@ -455,7 +455,7 @@ public:
 		}
 	}
 
-	AtlasTexture add(const Image& img) {
+	AtlasTexture add(Image img) {
 		stbrp_rect r{};
 		r.w = img.width + padding * 2;
 		r.h = img.height + padding * 2;
@@ -594,9 +594,11 @@ AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas=DEF
 	return {};
 }
 
-void UnloadTextureFromAtlas(AtlasTexture t) {
-	if (t.currentAtlas) {
+void UnloadTextureFromAtlas(AtlasTexture& t) {
+	if (t.currentAtlas and t.id) {
 		t.currentAtlas->remove(t);
+		t.currentAtlas = nullptr;
+		t.id = 0;
 	}
 }
 
@@ -1087,6 +1089,7 @@ namespace Animate {
 	void deleteCurrent(void* ptr) {
 		auto an = ActiveAnimations.find(ptr);
 		if (an != ActiveAnimations.end()) {
+			delete an->second;
 			ActiveAnimations.erase(an);
 		}
 	}
@@ -1384,13 +1387,15 @@ protected:
 	size_t lastUpdateFrame = 0;
 	bool updateWhenWillBeVisible = true;
 
-	virtual void basicCloneOperation() {
+	virtual void basicCloneOperation(Instance* copyfrom) {
 		this->Parent = nullptr;
 		this->Children.clear();
 		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
-		for (Instance* c : Children) {
+		if (!copyfrom) return;
+
+		for (Instance* c : copyfrom->Children) {
 			c->Clone()->setParent(this);
 		}
 	}
@@ -1598,7 +1603,7 @@ public:
 
 	virtual Instance* Clone() const {
 		Instance* i = new Instance(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<Instance*>(this));
 
 		return i;
 	}
@@ -1644,7 +1649,7 @@ public:
 
 	StringValue* Clone() const {
 		StringValue* i = new StringValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<StringValue*>(this));
 
 		return i;
 	}
@@ -1668,7 +1673,7 @@ public:
 
 	ObjectValue* Clone() const {
 		ObjectValue* i = new ObjectValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<ObjectValue*>(this));
 
 		return i;
 	}
@@ -1693,7 +1698,7 @@ public:
 
 	AddressValue* Clone() const {
 		AddressValue* i = new AddressValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<AddressValue*>(this));
 
 		return i;
 	}
@@ -1717,7 +1722,7 @@ public:
 
 	BoolValue* Clone() const {
 		BoolValue* i = new BoolValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<BoolValue*>(this));
 
 		return i;
 	}
@@ -1741,7 +1746,7 @@ public:
 
 	IntValue* Clone() const {
 		IntValue* i = new IntValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<IntValue*>(this));
 
 		return i;
 	}
@@ -1765,7 +1770,7 @@ public:
 
 	FloatValue* Clone() const {
 		FloatValue* i = new FloatValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<FloatValue*>(this));
 
 		return i;
 	}
@@ -1789,7 +1794,7 @@ public:
 
 	Vector2Value* Clone() const {
 		Vector2Value* i = new Vector2Value(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<Vector2Value*>(this));
 
 		return i;
 	}
@@ -1813,7 +1818,7 @@ public:
 
 	ColorValue* Clone() const {
 		ColorValue* i = new ColorValue(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<ColorValue*>(this));
 
 		return i;
 	}
@@ -1835,7 +1840,7 @@ class Folder : public Instance {
 public:
 	Folder* Clone() const {
 		Folder* i = new Folder(*this);
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<Folder*>(this));
 
 		return i;
 	}
@@ -2255,7 +2260,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<Object2D*>(this));
 
 		return i;
 	}
@@ -2361,7 +2366,7 @@ public:
 	LineEx* Clone() const override {
 		LineEx* i = new LineEx(*this);
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<LineEx*>(this));
 
 		return i;
 	}
@@ -2897,7 +2902,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<ScrollFrame*>(this));
 
 		return i;
 	}
@@ -3116,7 +3121,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<TextLabel*>(this));
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
@@ -4042,7 +4047,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<TextBox*>(this));
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
@@ -4076,7 +4081,7 @@ class ImageLabel : public Object2D {
 	std::string currentPair;
 
 	void updateTexture() {
-		if ((tex.id == 0) and imageIfMemory.data) {
+		if (tex.id == 0 and imageIfMemory.data and currentPair.empty()) {
 			tex = LoadTextureOnAtlas(imageIfMemory);
 		}
 	}
@@ -4105,9 +4110,9 @@ public:
 		Object2D::Draw();
 
 		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+			or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
 			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 			return;
 		}
 
@@ -4200,6 +4205,10 @@ public:
 	}
 
 	void UpdateImageFromMemory(const std::string& type, const std::vector<unsigned char>& data) {
+		if (imageIfMemory.data) {
+			UnloadImage(imageIfMemory);
+		}
+
 		imageIfMemory = LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (!imageIfMemory.data) {
@@ -4218,7 +4227,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<ImageLabel*>(this));
 
 		if (imageIfMemory.data) {
 			Image im{};
@@ -4338,7 +4347,7 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
-		i->basicCloneOperation();
+		i->basicCloneOperation(const_cast<TextureLabel*>(this));
 
 		i->owner = false;
 
@@ -5208,12 +5217,10 @@ void UpdateHigher(Instance* StartInstance) {
 					} else {
 						auto obj = static_cast<Object2D*>(child);
 
-						if (obj) {
-							if (!obj->Visible) continue;
-							nextDepth = localDepth + 1;
-							if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
-								isTarget = true;
-							}
+						if (!obj->Visible) continue;
+						nextDepth = localDepth + 1;
+						if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+							isTarget = true;
 						}
 
 						if (getTop(child, nextDepth)) {
@@ -5249,16 +5256,13 @@ void UpdateHigher(Instance* StartInstance) {
 					if (foundInThisBranch) {
 						return true;
 					}
-				}
-				else {
+				} else {
 					auto obj = static_cast<Object2D*>(child);
 
-					if (obj) {
-						if (!obj->Visible) continue;
-						nextDepth = localDepth + 1;
-						if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
-							isTarget = true;
-						}
+					if (!obj->Visible) continue;
+					nextDepth = localDepth + 1;
+					if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+						isTarget = true;
 					}
 
 					if (getTop(child, nextDepth)) {

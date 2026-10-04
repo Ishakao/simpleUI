@@ -71,6 +71,13 @@ extern "C" float GetMouseScreenPositionY() {
 #endif
 }
 
+extern "C" void SetConsoleUTF8() {
+#ifdef _WIN32
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+#endif
+}
+
 #ifdef _WIN32
 extern "C" const wchar_t* GetFile() {
 	static std::wstring result;

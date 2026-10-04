@@ -60,7 +60,7 @@ class GraphBuilder : public Object2D {
 
 			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
 			cachedTexture.currentAtlas->blankArea(cachedTexture);
-			
+
 			size_t gsize = 0;
 			for (auto [id, seq] : sequences) {
 				if (gsize < seq->sequence.size()) gsize = seq->sequence.size();
@@ -236,7 +236,7 @@ public:
 		}
 	}
 
-	size_t createSequence(const std::string& name="") {
+	size_t createSequence(const std::string& name = "") {
 		GraphSequence* s = new GraphSequence(seqID++, name);
 		sequences.insert({ s->id, s });
 		return s->id;
@@ -455,7 +455,7 @@ public:
 			lastMax = maximalGraphValue;
 
 			/* I will add padding in future. Work piece of GraphBuilder
-			
+
 			Vector2 start = {
 				GraphRealPos.x + GraphPadding.left.Offset + GraphPadding.left.Scale * GraphRealSize.x + (GraphRealSize.x - GraphPadding.right.Offset - GraphPadding.left.Offset - GraphPadding.left.Scale * GraphRealSize.x - GraphPadding.right.Scale * GraphRealSize.x) * ((float)(i - 1) / (seq->sequence.size() - 1)),
 				GraphRealPos.y + GraphPadding.upper.Offset + GraphPadding.upper.Scale * GraphRealSize.y + (GraphRealSize.y - GraphPadding.lower.Offset - GraphPadding.upper.Offset - GraphPadding.upper.Scale * GraphRealSize.y - GraphPadding.lower.Scale * GraphRealSize.y) * (1 - ((prev - min) / (max - min)))
@@ -506,6 +506,7 @@ public:
 		i->cachedMax.currentAtlas = nullptr;
 
 		i->basicCloneOperation(const_cast<GraphBuilder*>(this));
+
 		return i;
 	}
 
@@ -622,7 +623,7 @@ public:
 			Object2D::Draw();
 
 			int RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
-			Vector2 RealPos1 = { RealBallPosX, std::ceil(RealPos.y)};
+			Vector2 RealPos1 = { RealBallPosX, std::ceil(RealPos.y) };
 			Vector2 RealSize1 = { RealSize.y, RealSize.y };
 
 			const RoundRectData rec = { RealPos1, RealSize1, SliderColor, SliderBorderColor, SliderTransparency, Roundness, SliderBorderTransparency, SliderBorderThickness };
@@ -653,7 +654,7 @@ public:
 			getRealObject2Dsize();
 			getRealObject2Dposition();
 		}
-		
+
 		checkClick();
 
 		Draw();
@@ -682,7 +683,7 @@ public:
 		ToggleSwitcher* i = new ToggleSwitcher(parent);
 		return i;
 	}
-	
+
 	ToggleSwitcher(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
 	ToggleSwitcher(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
 	~ToggleSwitcher() {}

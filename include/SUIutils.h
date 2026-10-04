@@ -15,11 +15,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
     API const char* getLayout();
     API bool capsLock();
     API float GetMouseScreenPositionX();
     API float GetMouseScreenPositionY();
+    API void SetConsoleUTF8();
 #ifdef _WIN32
     API const wchar_t* GetFile();
 #elif defined(__linux__)

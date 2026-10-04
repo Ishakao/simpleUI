@@ -345,12 +345,14 @@ namespace SIMPLEUI_GLOBAL {
 
 namespace RL_FUNCTIONS_PLUS {
 	void BeginShaderMode(Shader shader) {
+		SIMPLEUI_GLOBAL::CurrentCustomShader = shader.id;
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
 	}
 
 	void EndShaderMode() {
 		FlushRectanglesBatch();
+		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
 		RAYLIB_FUNCTIONAL::EndShaderMode();
 	}
 
@@ -386,19 +388,20 @@ namespace RL_FUNCTIONS_PLUS {
 
 	void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
 		FlushRectanglesBatch();
-		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
 		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
 	}
 
 	void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		FlushRectanglesBatch();
-		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
+		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
+	}
+
+	void DrawTextureProNoFlush(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
 	}
 
 	void DrawTexture(Texture2D t, int x, int y, Color c) {
 		FlushRectanglesBatch();
-		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
 		RAYLIB_FUNCTIONAL::DrawTexture(t, x, y, c);
 	}
 }
@@ -417,8 +420,8 @@ struct Padding {
 
 struct AtlasTexture {
 	size_t id = 0;
-	Vector2 position = {0,0};
-	Vector2 size = {0,0};
+	Vector2 position = { 0,0 };
+	Vector2 size = { 0,0 };
 	Atlas* currentAtlas = nullptr;
 };
 
@@ -473,6 +476,8 @@ public:
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 		RL_FUNCTIONS_PLUS::EndTextureMode();
 
+		GenTextureMipmaps(&tex.texture);
+
 		UnloadTexture(src);
 
 		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)img.width, (float)img.height}, this };
@@ -498,6 +503,8 @@ public:
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 		RL_FUNCTIONS_PLUS::EndTextureMode();
 
+		GenTextureMipmaps(&tex.texture);
+
 		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)width, (float)height}, this };
 
 		textures.push_back(att);
@@ -513,12 +520,12 @@ public:
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 	}
 
-	Atlas(int size=DEFAULT_ATLAS_SIZE, int pad=1) : padding(pad) {
+	Atlas(int size = DEFAULT_ATLAS_SIZE, int pad = 1) : padding(pad) {
 		nodes.resize(size);
 		tex = LoadRenderTexture(size, size);
+		GenTextureMipmaps(&tex.texture);
 		SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
 		SetTextureWrap(tex.texture, TEXTURE_WRAP_CLAMP);
-		GenTextureMipmaps(&tex.texture);
 		std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
 		stbrp_init_target(&ctx, size, size, nodes.data(), (int)nodes.size());
 		RL_FUNCTIONS_PLUS::BeginTextureMode(tex);
@@ -531,7 +538,7 @@ public:
 	Atlas(const Atlas&) = delete;
 	Atlas& operator=(const Atlas&) = delete;
 
-	~Atlas() { 
+	~Atlas() {
 		UnloadRenderTexture(tex);
 
 		for (int i = 0; i < SIMPLEUI_GLOBAL::AtlasArray.size(); i++) {
@@ -556,33 +563,46 @@ namespace RL_FUNCTIONS_PLUS {
 
 		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, src, d, o, r, c);
 	}
+
+	void DrawTextureProNoFlush(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+		if (!t.currentAtlas) return;
+
+		Texture2D tex = t.currentAtlas->texture();
+
+		Rectangle src = { t.position.x + s.x, t.position.y + s.y, s.width, s.height };
+
+		src.y = tex.height - src.y - src.height;
+		src.height = -src.height;
+
+		RL_FUNCTIONS_PLUS::DrawTextureProNoFlush(tex, src, d, o, r, c);
+	}
 }
 
-AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas=DEFAULT_ATLAS_SIZE) {
+AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
 	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
 		AtlasTexture t = atlas->add(image);
 		if (t.id) return t;
 	}
 
-	for (int size = DEFAULT_ATLAS_SIZE; size <= 16384; size *= 2) {
+	for (int size = sizeOfAtlas; size <= 16384; size *= 2) {
 		Atlas* atlas = new Atlas(size);
 		AtlasTexture t = atlas->add(image);
 		if (t.id) return t;
 
-		std::cout << YELLOW_ANSI << "Image cannot be placed on atlas " << sizeOfAtlas << "x" << sizeOfAtlas << "." << DEFAULT_ANSI << std::endl;
+		std::cout << YELLOW_ANSI << "Image cannot be placed on atlas " << size << "x" << size << "." << DEFAULT_ANSI << std::endl;
 		delete atlas;
 	}
-	
+
 	return {};
 }
 
-AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas=DEFAULT_ATLAS_SIZE) {
+AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
 	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
 		AtlasTexture t = atlas->add(width, height);
 		if (t.id) return t;
 	}
 
-	for (int size = DEFAULT_ATLAS_SIZE; size <= 16384; size *= 2) {
+	for (int size = sizeOfAtlas; size <= 16384; size *= 2) {
 		Atlas* atlas = new Atlas(size);
 		AtlasTexture t = atlas->add(width, height);
 		if (t.id) return t;
@@ -755,8 +775,7 @@ public:
 	const SUI_Text& operator=(const std::string& other) {
 		if (text.size() != other.size()) {
 			changed = true;
-		}
-		else {
+		} else {
 			changed = text != other;
 		}
 
@@ -769,8 +788,7 @@ public:
 
 		if (text.size() != st.size()) {
 			changed = true;
-		}
-		else {
+		} else {
 			changed = text != st;
 		}
 
@@ -781,8 +799,7 @@ public:
 	const SUI_Text& operator=(const SUI_Text& other) {
 		if (text.size() != other.size()) {
 			changed = true;
-		}
-		else {
+		} else {
 			changed = text != !other;
 		}
 
@@ -801,8 +818,7 @@ public:
 	bool operator==(const std::string& other) {
 		if (text.size() != other.size()) {
 			return false;
-		}
-		else {
+		} else {
 			return text == other;
 		}
 	}
@@ -818,8 +834,7 @@ public:
 	bool operator!=(const std::string& other) {
 		if (text.size() == other.size()) {
 			return text != other;
-		}
-		else {
+		} else {
 			return true;
 		}
 	}
@@ -827,8 +842,7 @@ public:
 	bool operator==(const SUI_Text& other) {
 		if (text.size() != other.size()) {
 			return false;
-		}
-		else {
+		} else {
 			return text == !other;
 		}
 	}
@@ -895,8 +909,7 @@ namespace Tasks {
 				delete ActiveTasks[i];
 
 				ActiveTasks.erase(ActiveTasks.begin() + i);
-			}
-			else {
+			} else {
 				ActiveTasks[i]->TimeLeft -= dt;
 				i++;
 			}
@@ -1031,13 +1044,11 @@ namespace Animate {
 		if (f == Linear) { return t; }
 
 		if (f == Quad) {
-			if (e == In) { return t * t; }
-			else { float a = 1.0f - t; return 1.0f - a * a; }
+			if (e == In) { return t * t; } else { float a = 1.0f - t; return 1.0f - a * a; }
 		}
 
 		if (f == Cube) {
-			if (e == In) { return t * t * t; }
-			else { float a = 1.0f - t; return 1.0f - a * a * a; }
+			if (e == In) { return t * t * t; } else { float a = 1.0f - t; return 1.0f - a * a * a; }
 		}
 
 		if (f == Exponential) {
@@ -1045,20 +1056,17 @@ namespace Animate {
 
 			if (e == In) {
 				return (expf(k * t) - 1.0f) / (expf(k) - 1.0f);
-			}
-			else {
+			} else {
 				return 1.0f - (expf(k * (1.0f - t)) - 1.0f) / (expf(k) - 1.0f);
 			}
 		}
 
 		if (f == Sine) {
-			if (e == In) { return 1.0f - cosf((PI * t) / 2.0f); }
-			else { return sinf((PI * t) / 2.0f); }
+			if (e == In) { return 1.0f - cosf((PI * t) / 2.0f); } else { return sinf((PI * t) / 2.0f); }
 		}
 
 		if (f == Circular) {
-			if (e == In) { return 1.0f - sqrtf(1.0f - t * t); }
-			else { float a = t - 1.0f; return sqrtf(1.0f - a * a); }
+			if (e == In) { return 1.0f - sqrtf(1.0f - t * t); } else { float a = t - 1.0f; return sqrtf(1.0f - a * a); }
 		}
 
 		if (f == Bounce) {
@@ -1067,15 +1075,12 @@ namespace Animate {
 				const float d1 = 2.75f;
 
 				if (x < 1.0f / d1) return n1 * x * x;
-				else if (x < 2.0f / d1) { x -= 1.5f / d1; return n1 * x * x + 0.75f; }
-				else if (x < 2.5f / d1) { x -= 2.25f / d1; return n1 * x * x + 0.9375f; }
-				else { x -= 2.625f / d1; return n1 * x * x + 0.984375f; }
-				};
+				else if (x < 2.0f / d1) { x -= 1.5f / d1; return n1 * x * x + 0.75f; } else if (x < 2.5f / d1) { x -= 2.25f / d1; return n1 * x * x + 0.9375f; } else { x -= 2.625f / d1; return n1 * x * x + 0.984375f; }
+			};
 
 			if (e == In) {
 				return 1.0f - bounceOut(1.0f - t);
-			}
-			else {
+			} else {
 				return bounceOut(t);
 			}
 		}
@@ -1121,20 +1126,10 @@ namespace Animate {
 		bool Update() {
 			currentTime += SIMPLEUI_GLOBAL::dt;
 			if (currentTime >= endTime) {
-				if (type == "int") { *(int*)ptr = endValueI; }
-				else if (type == "float") { *(float*)ptr = endValueF; }
-				else if (type == "color") { *(Color*)ptr = endValueC; }
-				else if (type == "vector2") { *(SpecialVector2*)ptr = endValueV; }
-				else if (type == "numx") { *(SpecialVector2::num_x*)ptr = endValueNX; }
-				else if (type == "numy") { *(SpecialVector2::num_y*)ptr = endValueNY; }
+				if (type == "int") { *(int*)ptr = endValueI; } else if (type == "float") { *(float*)ptr = endValueF; } else if (type == "color") { *(Color*)ptr = endValueC; } else if (type == "vector2") { *(SpecialVector2*)ptr = endValueV; } else if (type == "numx") { *(SpecialVector2::num_x*)ptr = endValueNX; } else if (type == "numy") { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
-			if (type == "int") { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
-			else if (type == "float") { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
-			else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
-			else if (type == "vector2") { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
-			else if (type == "numx") { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
-			else if (type == "numy") { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
+			if (type == "int") { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); } else if (type == "float") { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); } else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); } else if (type == "vector2") { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; } else if (type == "numx") { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); } else if (type == "numy") { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
 			return false;
 		}
 
@@ -1592,7 +1587,7 @@ public:
 		}
 	}
 
-	static Instance* New(Instance* parent=nullptr) {
+	static Instance* New(Instance* parent = nullptr) {
 		Instance* i = new Instance(parent);
 		return i;
 	}
@@ -2522,9 +2517,9 @@ private:
 					}
 				}
 
-				SpecialVector2 pos = { 
-					casted->Position.x * parentSize.x + casted->PositionOFFSET.x, 
-					casted->Position.y * parentSize.y + casted->PositionOFFSET.y 
+				SpecialVector2 pos = {
+					casted->Position.x * parentSize.x + casted->PositionOFFSET.x,
+					casted->Position.y * parentSize.y + casted->PositionOFFSET.y
 				};
 
 				SpecialVector2 lastpos = { pos.x + casted->RealSize.x, pos.y + casted->RealSize.y };
@@ -2618,8 +2613,7 @@ private:
 
 					if (f2 == f->second.end()) {
 						continue;
-					}
-					else {
+					} else {
 						s = f2->second;
 					}
 
@@ -2769,7 +2763,7 @@ public:
 			}
 		}
 	}
-	
+
 	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
@@ -2890,7 +2884,7 @@ public:
 		}
 
 		bool canvasPosChanged = lastCanvasPos.x == (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x) and
-								lastCanvasPos.y == (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y);
+			lastCanvasPos.y == (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y);
 
 		lastCanvasPos = { (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x), (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y) };
 
@@ -3223,8 +3217,7 @@ class TextBox : public Object2D {
 		} else {
 			if (Text != "") {
 				textParams = getTextCFrame(Text.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-			}
-			else {
+			} else {
 				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 			}
 		}
@@ -3473,8 +3466,7 @@ public:
 					for (int i = 0; i < charOffsets.size(); i++) {
 						text += HideText;
 					}
-				}
-				else {
+				} else {
 					text = !Text;
 				}
 
@@ -3484,8 +3476,7 @@ public:
 					for (int i = 0; i < Text.size(); i++) {
 						textBeforeCursor += HideText;
 					}
-				}
-				else {
+				} else {
 					textBeforeCursor = !Text;
 				}
 
@@ -3514,7 +3505,7 @@ public:
 							currentL++;
 						}
 					}
-					
+
 					if (currentL == currentLine) {
 						int endIdx = startIdx;
 						while (endIdx < (int)charOffsets.size() and Text[charOffsets[endIdx]] != '\n' and Text[charOffsets[endIdx]] != '\0') {
@@ -3670,8 +3661,7 @@ public:
 
 						CursorIndex--;
 					}
-				}
-				else {
+				} else {
 					CursorIndex--;
 				}
 
@@ -3764,7 +3754,7 @@ public:
 				int s1 = -1;
 				int charI = -1;
 				int charI1 = -1;
-				for (int i = CursorIndex-1; i >= 0; i--) {
+				for (int i = CursorIndex - 1; i >= 0; i--) {
 					if (Text[charOffsets[i]] == '\n') {
 						if (s == -1) {
 							s = charOffsets[i + 1];
@@ -3786,7 +3776,7 @@ public:
 
 				std::string textBeforeCursorOnLine = (s == -1 ? "" : Text.substr(s, charOffsets[CursorIndex] - s));
 				std::string textBeforeCursorOnPreviousLine = (s1 == -1 ? "" : Text.substr(s1, ((s - s1 > 0) ? (s - s1 - 1) : 0)));
-				
+
 				float currentX = MeasureTextEx(getFont(FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing).x;
 
 				int left = charI1;
@@ -3857,8 +3847,7 @@ public:
 						if (s1 == -1) {
 							s1 = charOffsets[i + 1];
 							charI1 = i + 1;
-						}
-						else {
+						} else {
 							s2 = charOffsets[i];
 							charI2 = i;
 							break;
@@ -3888,8 +3877,7 @@ public:
 					if (midX <= currentX) {
 						targetCharI = mid;
 						left = mid + 1;
-					}
-					else {
+					} else {
 						right = mid - 1;
 					}
 				}
@@ -3945,40 +3933,41 @@ public:
 				if (calcY) viewportPosition.y = 0.0f;
 			} else {
 				int s = 0;
-				for (int i = CursorIndex-1; i >= 0; i--) {
+				for (int i = CursorIndex - 1; i >= 0; i--) {
 					if (Text[charOffsets[i]] == '\n') {
-						s = charOffsets[i+1];
+						s = charOffsets[i + 1];
 						break;
 					}
 				}
 
-				std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex]-s);
-				std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-				SpecialVector2 textSizeY = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
-				SpecialVector2 textSizeX = MeasureTextEx(getFont(!FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
+				if (!charOffsets.empty()) {
+					std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex] - s);
+					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
+					SpecialVector2 textSizeY = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
+					SpecialVector2 textSizeX = MeasureTextEx(getFont(!FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
 
-				SpecialVector2 textSize = { textSizeX.x, textSizeY.y };
+					SpecialVector2 textSize = { textSizeX.x, textSizeY.y };
 
-				if (calcX) {
-					float currentX = textSize.x;
+					if (calcX) {
+						float currentX = textSize.x;
 
-					if (currentX - viewportPosition.x >= RealSize.x) {
-						viewportPosition.x = currentX - RealSize.x;
-					} else if (currentX < viewportPosition.x) {
-						viewportPosition.x = currentX;
-					}
-				}
-
-				if (calcY) {
-					float currentY = textSize.y;
-					if (currentY == 0) {
-						viewportPosition.y = 0;
-					} else {
-						if (currentY - viewportPosition.y >= RealSize.y) {
-							viewportPosition.y = currentY - RealSize.y;
+						if (currentX - viewportPosition.x >= RealSize.x) {
+							viewportPosition.x = currentX - RealSize.x;
+						} else if (currentX < viewportPosition.x) {
+							viewportPosition.x = currentX;
 						}
-						else if (currentY - textParams.z < viewportPosition.y) {
-							viewportPosition.y = currentY - textParams.z;
+					}
+
+					if (calcY) {
+						float currentY = textSize.y;
+						if (currentY == 0) {
+							viewportPosition.y = 0;
+						} else {
+							if (currentY - viewportPosition.y >= RealSize.y) {
+								viewportPosition.y = currentY - RealSize.y;
+							} else if (currentY - textParams.z < viewportPosition.y) {
+								viewportPosition.y = currentY - textParams.z;
+							}
 						}
 					}
 				}
@@ -3986,7 +3975,7 @@ public:
 
 			lastCursorIndex = CursorIndex;
 		}
-		
+
 		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
@@ -4193,7 +4182,7 @@ public:
 				}
 
 				RL_FUNCTIONS_PLUS::BeginShaderMode(shader);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTextureProNoFlush(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 				RL_FUNCTIONS_PLUS::EndShaderMode();
 			} else {
 				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
@@ -4441,7 +4430,8 @@ Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUn
 inline void Object2D::eventHandler() {
 	if (events.empty()) return;
 
-	bool mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+	bool mouseOnObject = false;
+	bool mouseCalculated = false;
 	bool hasStartHold1 = false;
 	bool hasStartHold2 = false;
 	bool hasStartHold3 = false;
@@ -4460,6 +4450,10 @@ inline void Object2D::eventHandler() {
 			break;
 		} case MOUSE_ENTER: {
 			bool entered = false;
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
 
 			if (mouseOnObject) {
 				bool enterAllowed = (
@@ -4479,6 +4473,11 @@ inline void Object2D::eventHandler() {
 			}
 			break;
 		} case MOUSE_LEAVE: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
 			bool enterAllowed = (
 				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
@@ -4491,19 +4490,27 @@ inline void Object2D::eventHandler() {
 			}
 			break;
 		} case MOUSE_CLICK: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
 			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
 				func(this);
 			}
 			break;
 		} case MOUSE_HOLD_START: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
 			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
 				if (mouse == MOUSE_LEFT) {
 					startedOnObject1 = true;
-				}
-				else if (mouse == MOUSE_RIGHT) {
+				} else if (mouse == MOUSE_RIGHT) {
 					startedOnObject2 = true;
-				}
-				else if (mouse == MOUSE_MIDDLE) {
+				} else if (mouse == MOUSE_MIDDLE) {
 					startedOnObject3 = true;
 				}
 				func(this);
@@ -4511,11 +4518,9 @@ inline void Object2D::eventHandler() {
 
 			if (mouse == MOUSE_LEFT) {
 				hasStartHold1 = true;
-			}
-			else if (mouse == MOUSE_RIGHT) {
+			} else if (mouse == MOUSE_RIGHT) {
 				hasStartHold2 = true;
-			}
-			else if (mouse == MOUSE_MIDDLE) {
+			} else if (mouse == MOUSE_MIDDLE) {
 				hasStartHold3 = true;
 			}
 
@@ -4524,11 +4529,9 @@ inline void Object2D::eventHandler() {
 			if (IsMouseButtonReleased(mouse)) {
 				if (mouse == MOUSE_LEFT) {
 					mouseReleased1 = func;
-				}
-				else if (mouse == MOUSE_RIGHT) {
+				} else if (mouse == MOUSE_RIGHT) {
 					mouseReleased2 = func;
-				}
-				else if (mouse == MOUSE_MIDDLE) {
+				} else if (mouse == MOUSE_MIDDLE) {
 					mouseReleased3 = func;
 				}
 			}
@@ -4560,26 +4563,62 @@ inline void Object2D::eventHandler() {
 		}
 	}
 
-	if (not hasStartHold1 and IsMouseButtonPressed(MOUSE_LEFT) and mouseOnObject and higherObject == this) {
-		startedOnObject1 = true;
+	if (not hasStartHold1 and IsMouseButtonPressed(MOUSE_LEFT) and higherObject == this) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) {
+			startedOnObject1 = true;
+		}
 	}
 
-	if (not hasStartHold2 and IsMouseButtonPressed(MOUSE_RIGHT) and mouseOnObject and higherObject == this) {
-		startedOnObject2 = true;
+	if (not hasStartHold2 and IsMouseButtonPressed(MOUSE_RIGHT) and higherObject == this) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) {
+			startedOnObject2 = true;
+		}
 	}
 
-	if (not hasStartHold3 and IsMouseButtonPressed(MOUSE_MIDDLE) and mouseOnObject and higherObject == this) {
-		startedOnObject3 = true;
+	if (not hasStartHold3 and IsMouseButtonPressed(MOUSE_MIDDLE) and higherObject == this) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) {
+			startedOnObject3 = true;
+		}
 	}
 
-	if (mouseReleased1 and mouseOnObject and startedOnObject1) {
-		mouseReleased1(this);
+	if (mouseReleased1 and startedOnObject1) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) mouseReleased1(this);
 	}
-	if (mouseReleased2 and mouseOnObject and startedOnObject2) {
-		mouseReleased2(this);
+	if (mouseReleased2 and startedOnObject2) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) mouseReleased2(this);
 	}
-	if (mouseReleased3 and mouseOnObject and startedOnObject3) {
-		mouseReleased3(this);
+	if (mouseReleased3 and startedOnObject3) {
+		if (!mouseCalculated) {
+			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseCalculated = true;
+		}
+
+		if (mouseOnObject) mouseReleased3(this);
 	}
 
 	if (IsMouseButtonReleased(MOUSE_LEFT)) {
@@ -4594,7 +4633,12 @@ inline void Object2D::eventHandler() {
 }
 
 inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, int quality = 60) {
-	Image img = LoadImage(path.c_str());
+	std::ifstream f(path, std::ios::binary);
+	std::filesystem::path p(std::u8string(reinterpret_cast<const char8_t*>(path.c_str())));
+	if (!f) return {};
+	std::vector<unsigned char> buf((std::istreambuf_iterator<char>(f)), {});
+	Image img = LoadImageFromMemory(".png", buf.data(), (int)buf.size());
+	if (!IsImageValid(img)) return {};
 
 	if (img.data == nullptr) {
 		return {};
@@ -4618,11 +4662,9 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 	int channels = 3;
 	if (background.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
 		channels = 4;
-	}
-	else if (background.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8) {
+	} else if (background.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8) {
 		channels = 3;
-	}
-	else {
+	} else {
 		ImageFormat(&background, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 		channels = 4;
 	}
@@ -4631,10 +4673,10 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 
 	stbi_write_jpg_to_func(
 		[](void* context, void* data, int size) {
-			auto* vec = static_cast<std::vector<unsigned char>*>(context);
-			auto* bytes = static_cast<unsigned char*>(data);
-			vec->insert(vec->end(), bytes, bytes + size);
-		},
+		auto* vec = static_cast<std::vector<unsigned char>*>(context);
+		auto* bytes = static_cast<unsigned char*>(data);
+		vec->insert(vec->end(), bytes, bytes + size);
+	},
 		&outBytes,
 		background.width,
 		background.height,
@@ -5293,13 +5335,14 @@ void UpdateHigher(Instance* StartInstance) {
 }
 
 void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
+	SetConsoleUTF8();
 	SetConfigFlags(flags);
 
 	SIMPLEUI_GLOBAL::winWidth = inf.x;
 	SIMPLEUI_GLOBAL::winHeight = inf.y;
 
 	InitWindow(inf.x, inf.y, name);
-	
+
 	if (windowMinimalSize.x != 0 and windowMinimalSize.y != 0) {
 		SetWindowMinSize(windowMinimalSize.x, windowMinimalSize.y);
 	}

@@ -510,7 +510,7 @@ public:
 		return i;
 	}
 
-	static GraphBuilder* New(GraphBuilder* parent = nullptr) {
+	static GraphBuilder* New(Instance* parent = nullptr) {
 		GraphBuilder* i = new GraphBuilder(parent);
 		return i;
 	}
@@ -679,7 +679,7 @@ public:
 		return i;
 	}
 
-	static ToggleSwitcher* New(ToggleSwitcher* parent = nullptr) {
+	static ToggleSwitcher* New(Instance* parent = nullptr) {
 		ToggleSwitcher* i = new ToggleSwitcher(parent);
 		return i;
 	}

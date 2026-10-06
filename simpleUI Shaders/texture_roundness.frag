@@ -8,8 +8,10 @@ uniform vec4 imageData;
 out vec4 finalColor;
 
 void main() {
-    vec2 texSize = vec2(textureSize(texture0, 0));
-    vec2 localUV = (fragTexCoord * texSize - imageData.xy) / imageData.zw;
+    vec2 texSize = imageData.zw;
+    vec2 atlasSize = vec2(textureSize(texture0, 0));
+    vec2 pixel = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * atlasSize;
+    vec2 localUV = (pixel - imageData.xy) / imageData.zw;
 
     vec2 size = objectData.zw;
     vec2 localPos = localUV * size;

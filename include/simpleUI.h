@@ -98,14 +98,6 @@ using RAYLIB_FUNCTIONAL::GenTextureMipmaps;
 using RAYLIB_FUNCTIONAL::SetTextureFilter;
 using RAYLIB_FUNCTIONAL::SetTextureWrap;
 
-using RAYLIB_FUNCTIONAL::LoadImage;
-using RAYLIB_FUNCTIONAL::LoadImageFromMemory;
-using RAYLIB_FUNCTIONAL::LoadTextureFromImage;
-using RAYLIB_FUNCTIONAL::LoadShader;
-using RAYLIB_FUNCTIONAL::LoadCodepoints;
-using RAYLIB_FUNCTIONAL::LoadFontEx;
-using RAYLIB_FUNCTIONAL::LoadRenderTexture;
-
 using RAYLIB_FUNCTIONAL::BeginDrawing;
 using RAYLIB_FUNCTIONAL::ClearBackground;
 using RAYLIB_FUNCTIONAL::EndDrawing;
@@ -222,7 +214,9 @@ struct RoundRectData {
 	Vector2 Pos, Size;
 	Color Color, BorderColor;
 	float Transparency, Roundness, BorderTransparency;
-	int BorderThickness;
+	int BorderThickness = 0;
+	float Rotation = 0;
+	Vector2 Origin = { 0, 0 };
 };
 
 struct SpecialVector2 {
@@ -397,12 +391,17 @@ namespace RL_FUNCTIONS_PLUS {
 	}
 
 	void DrawTextureProNoFlush(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
-		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
+		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, {0,0}, r, c);
 	}
 
 	void DrawTexture(Texture2D t, int x, int y, Color c) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::DrawTexture(t, x, y, c);
+	}
+
+	void SetShaderValue(Shader shader, int a, const void* ptr, int type) {
+		FlushRectanglesBatch();
+		RAYLIB_FUNCTIONAL::SetShaderValue(shader, a, ptr, type);
 	}
 }
 
@@ -522,7 +521,7 @@ public:
 
 	Atlas(int size = DEFAULT_ATLAS_SIZE, int pad = 1) : padding(pad) {
 		nodes.resize(size);
-		tex = LoadRenderTexture(size, size);
+		tex = RAYLIB_FUNCTIONAL::LoadRenderTexture(size, size);
 		GenTextureMipmaps(&tex.texture);
 		SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
 		SetTextureWrap(tex.texture, TEXTURE_WRAP_CLAMP);
@@ -539,7 +538,7 @@ public:
 	Atlas& operator=(const Atlas&) = delete;
 
 	~Atlas() {
-		UnloadRenderTexture(tex);
+		RAYLIB_FUNCTIONAL::UnloadRenderTexture(tex);
 
 		for (int i = 0; i < SIMPLEUI_GLOBAL::AtlasArray.size(); i++) {
 			if (SIMPLEUI_GLOBAL::AtlasArray[i] == this) {
@@ -631,7 +630,7 @@ inline void loadImage(const std::string& name, const std::string& path) {
 		return;
 	}
 
-	Image img = LoadImage(path.c_str());
+	Image img = RAYLIB_FUNCTIONAL::LoadImage(path.c_str());
 	if (!img.data) {
 		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 		std::cout << YELLOW_ANSI << "Image: " << name << " error while loading" << DEFAULT_ANSI << std::endl;
@@ -685,7 +684,7 @@ inline std::pair<Image, AtlasTexture> getImage(const std::string& name) {
 inline int loadNewShader(const std::string& vs, const std::string& fs) {
 	static int cur = 0;
 
-	SIMPLEUI_GLOBAL::Shaders.emplace(cur, LoadShader(vs.c_str(), fs.c_str()));
+	SIMPLEUI_GLOBAL::Shaders.emplace(cur, RAYLIB_FUNCTIONAL::LoadShader(vs.c_str(), fs.c_str()));
 
 	return cur++;
 }
@@ -725,8 +724,8 @@ inline void addFontToQueqe(const char* name, std::string path, int size) {
 
 inline void createFont(const char* name, std::string path, int size) {
 	static int codepointsCount = 0;
-	static int* codepoints = LoadCodepoints(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ЁАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯёабвгдежзийклмнопрстуфхцчшщъыьэюя", &codepointsCount);
-	Font ft = LoadFontEx(path.c_str(), size, codepoints, codepointsCount);
+	static int* codepoints = RAYLIB_FUNCTIONAL::LoadCodepoints(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ЁАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯёабвгдежзийклмнопрстуфхцчшщъыьэюя", &codepointsCount);
+	Font ft = RAYLIB_FUNCTIONAL::LoadFontEx(path.c_str(), size, codepoints, codepointsCount);
 	if (ft.texture.id) {
 		GenTextureMipmaps(&ft.texture);
 		SetTextureFilter(ft.texture, TEXTURE_FILTER_TRILINEAR);
@@ -1302,7 +1301,7 @@ inline void Delete(Z* ptr) {
 
 		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
 
-		if (scrollChild) {
+		if (scrollChild and scrollChild != ptr) {
 			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
 		}
 
@@ -1385,6 +1384,11 @@ protected:
 	virtual void basicCloneOperation(Instance* copyfrom) {
 		this->Parent = nullptr;
 		this->Children.clear();
+		this->childsRemovedInFrame.clear();
+		this->childsAddedInFrame.clear();
+		updateWhenWillBeVisible = true;
+		SIMPLEUI_GLOBAL::sceneDirty = true;
+
 		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
@@ -1550,17 +1554,17 @@ public:
 	}
 
 	virtual void eventHandler() {
+		if (events.empty()) return;
+
 		for (const auto& [type, func] : events) {
 			if (type == TICK) {
 				func(this);
 			} else if (type == CHILD_ADDED) {
 				for (auto& [id, ptr] : childsAddedInFrame) {
-					if (childsRemovedInFrame.contains(id)) continue;
 					func(this, ptr);
 				}
 			} else if (type == CHILD_REMOVED) {
 				for (auto& [id, ptr] : childsRemovedInFrame) {
-					if (childsAddedInFrame.contains(id)) continue;
 					func(this, ptr);
 				}
 			}
@@ -1568,6 +1572,10 @@ public:
 
 		childsAddedInFrame.clear();
 		childsRemovedInFrame.clear();
+	}
+
+	void SetSizePosUpdateFlag() {
+		updateWhenWillBeVisible = true;
 	}
 
 	virtual void Update(bool posOrSizeChanged) {
@@ -1583,8 +1591,10 @@ public:
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
-			child->Update(posOrSizeChanged);
+			child->Update(posOrSizeChanged or updateWhenWillBeVisible);
 		}
+
+		updateWhenWillBeVisible = false;
 	}
 
 	static Instance* New(Instance* parent = nullptr) {
@@ -1649,7 +1659,7 @@ public:
 		return i;
 	}
 
-	static StringValue* New(StringValue* parent = nullptr) {
+	static StringValue* New(Instance* parent = nullptr) {
 		StringValue* i = new StringValue(parent);
 		return i;
 	}
@@ -1673,7 +1683,7 @@ public:
 		return i;
 	}
 
-	static ObjectValue* New(ObjectValue* parent = nullptr) {
+	static ObjectValue* New(Instance* parent = nullptr) {
 		ObjectValue* i = new ObjectValue(parent);
 		return i;
 	}
@@ -1698,7 +1708,7 @@ public:
 		return i;
 	}
 
-	static AddressValue* New(AddressValue* parent = nullptr) {
+	static AddressValue* New(Instance* parent = nullptr) {
 		AddressValue* i = new AddressValue(parent);
 		return i;
 	}
@@ -1722,7 +1732,7 @@ public:
 		return i;
 	}
 
-	static BoolValue* New(BoolValue* parent = nullptr) {
+	static BoolValue* New(Instance* parent = nullptr) {
 		BoolValue* i = new BoolValue(parent);
 		return i;
 	}
@@ -1746,7 +1756,7 @@ public:
 		return i;
 	}
 
-	static IntValue* New(IntValue* parent = nullptr) {
+	static IntValue* New(Instance* parent = nullptr) {
 		IntValue* i = new IntValue(parent);
 		return i;
 	}
@@ -1770,7 +1780,7 @@ public:
 		return i;
 	}
 
-	static FloatValue* New(FloatValue* parent = nullptr) {
+	static FloatValue* New(Instance* parent = nullptr) {
 		FloatValue* i = new FloatValue(parent);
 		return i;
 	}
@@ -1794,7 +1804,7 @@ public:
 		return i;
 	}
 
-	static Vector2Value* New(Vector2Value* parent = nullptr) {
+	static Vector2Value* New(Instance* parent = nullptr) {
 		Vector2Value* i = new Vector2Value(parent);
 		return i;
 	}
@@ -1818,7 +1828,7 @@ public:
 		return i;
 	}
 
-	static ColorValue* New(ColorValue* parent = nullptr) {
+	static ColorValue* New(Instance* parent = nullptr) {
 		ColorValue* i = new ColorValue(parent);
 		return i;
 	}
@@ -1840,7 +1850,7 @@ public:
 		return i;
 	}
 
-	static Folder* New(Folder* parent = nullptr) {
+	static Folder* New(Instance* parent = nullptr) {
 		Folder* i = new Folder(parent);
 		return i;
 	}
@@ -1920,19 +1930,27 @@ namespace RectGPU {
 		return out;
 	}
 
-	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c) {
+	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c, float rotation=0, Vector2 origin={0, 0}) {
 		float hx = size.x * 0.5f + 1.0f;
 		float hy = size.y * 0.5f + 1.0f;
-		float x0 = pos.x - 1.0f;
-		float y0 = pos.y - 1.0f;
-		float x1 = pos.x + size.x + 1.0f;
-		float y1 = pos.y + size.y + 1.0f;
+		float cx = pos.x + size.x * 0.5f;
+		float cy = pos.y + size.y * 0.5f;
+		float ox = pos.x + origin.x;
+		float oy = pos.y + origin.y;
+		float sn = sinf(rotation * DEG2RAD);
+		float cs = cosf(rotation * DEG2RAD);
 		float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 
-		verts.push_back({ x0, y0, z, -hx, -hy, c.r, c.g, c.b, c.a });
-		verts.push_back({ x0, y1, z, -hx, hy, c.r, c.g, c.b, c.a });
-		verts.push_back({ x1, y1, z, hx, hy, c.r, c.g, c.b, c.a });
-		verts.push_back({ x1, y0, z, hx, -hy, c.r, c.g, c.b, c.a });
+		auto corner = [&](float lx, float ly) {
+			float dx = cx + lx - ox;
+			float dy = cy + ly - oy;
+			verts.push_back({ ox + dx * cs - dy * sn, oy + dx * sn + dy * cs, z, lx, ly, c.r, c.g, c.b, c.a });
+		};
+
+		corner(-hx, -hy);
+		corner(-hx, hy);
+		corner(hx, hy);
+		corner(hx, -hy);
 	}
 }
 
@@ -1950,12 +1968,12 @@ void FlushRectanglesBatch() {
 	for (const auto& r : batch) {
 		unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
 		if (fillA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA });
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA }, r.Rotation, r.Origin);
 		}
 
 		unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
 		if (r.BorderThickness > 0 and borderA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA });
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin);
 		}
 	}
 
@@ -2020,7 +2038,7 @@ protected:
 		childsAddedInFrame.clear();
 	}
 
-	void eventHandler();
+	void eventHandler() override;
 	void PosOrSizeChanged();
 	void updateAncestorWhichParentIsScroll();
 
@@ -2061,6 +2079,9 @@ public:
 
 	SpecialVector2 Size{ 0, 0, this };
 	SpecialVector2 SizeOFFSET{ 0, 0, this };
+
+	float Rotation = 0; // WIP
+	SpecialVector2 Origin = { 0,0 }; // WIP
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -2175,7 +2196,7 @@ public:
 				return;
 			}
 
-			const RoundRectData rec = { RealPos, RealSize, BackgroundColor, BorderColor, BackgroundTransparency, Roundness, BorderTransparency, BorderThickness };
+			const RoundRectData rec = { RealPos, RealSize, BackgroundColor, BorderColor, BackgroundTransparency, Roundness, BorderTransparency, BorderThickness, Rotation, {Origin.x * RealSize.x, Origin.y * RealSize.y} };
 
 			DrawRoundRectBatch(rec);
 		}
@@ -2192,23 +2213,32 @@ public:
 			mouse.x <= windowPos.x + width and
 			mouse.y >= windowPos.y and
 			mouse.y <= windowPos.y + height)) return false;
-		if (Parent and Parent->Class == SCROLLFRAME) {
+
+		if (Parent and Parent->Class == SCROLLFRAME and isScrollFrameCropping(Parent)) {
 			SpecialVector2 scrRS = getScrollFrameRS(Parent);
 			SpecialVector2 scrRP = getScrollFrameRP(Parent);
-			bool cropping = isScrollFrameCropping(Parent);
-			if (cropping) {
-				if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
-					scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
-					return false;
-				}
-			} else {
-				if (pos.x >= RealPos.x and pos.x <= RealPos.x + RealSize.x and pos.y >= RealPos.y and pos.y <= RealPos.y + RealSize.y) return true;
+			if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
+				scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
+				return false;
 			}
 		}
 
-		if (pos.x >= RealPos.x and pos.x <= RealPos.x + RealSize.x and pos.y >= RealPos.y and pos.y <= RealPos.y + RealSize.y) return true;
+		float px = pos.x;
+		float py = pos.y;
 
-		return false;
+		if (Rotation != 0.0f) {
+			float ox = RealPos.x + Origin.x * RealSize.x;
+			float oy = RealPos.y + Origin.y * RealSize.y;
+			float sn = sinf(Rotation * DEG2RAD);
+			float cs = cosf(Rotation * DEG2RAD);
+			float dx = pos.x - ox;
+			float dy = pos.y - oy;
+			px = ox + dx * cs + dy * sn;
+			py = oy - dx * sn + dy * cs;
+		}
+
+		return px >= RealPos.x and px <= RealPos.x + RealSize.x and
+			py >= RealPos.y and py <= RealPos.y + RealSize.y;
 	}
 
 	bool MouseEntered = false; // works with MOUSE_ENTER MOUSE_LEAVE events
@@ -2260,7 +2290,7 @@ public:
 		return i;
 	}
 
-	static Object2D* New(Object2D* parent = nullptr) {
+	static Object2D* New(Instance* parent = nullptr) {
 		Object2D* i = new Object2D(parent);
 		return i;
 	}
@@ -2366,7 +2396,7 @@ public:
 		return i;
 	}
 
-	static LineEx* New(LineEx* parent = nullptr) {
+	static LineEx* New(Instance* parent = nullptr) {
 		LineEx* i = new LineEx(parent);
 		return i;
 	}
@@ -2521,7 +2551,7 @@ private:
 					casted->Position.x * parentSize.x + casted->PositionOFFSET.x,
 					casted->Position.y * parentSize.y + casted->PositionOFFSET.y
 				};
-
+				casted->getRealObject2Dsize();
 				SpecialVector2 lastpos = { pos.x + casted->RealSize.x, pos.y + casted->RealSize.y };
 
 				for (int i = std::floor(pos.x / GridSectorSize); i <= std::ceil(lastpos.x / GridSectorSize); i++) {
@@ -2578,15 +2608,17 @@ private:
 	SpecialVector2 lastFullSize{};
 	SpecialVector2 lastCanvasFullPosition{};
 	SpecialVector2 lastCanvasPos{};
+	bool lastVisible = false;
 
 	void checkAndUpdateCurrentSectors(bool force = false) {
 		SpecialVector2 fullSize = RealSize;
 		SpecialVector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
 
-		if (force or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
+		if (force or lastVisible != Visible or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
 			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y) {
 			lastFullSize = fullSize;
 			lastCanvasFullPosition = fullPos;
+			lastVisible = Visible;
 			sectorsOnView.clear();
 			SpecialVector2 pos = fullPos;
 			SpecialVector2 lastpos = { fullPos.x + fullSize.x, fullPos.y + fullSize.y };
@@ -2692,12 +2724,11 @@ public:
 		}
 
 		for (auto& [id, ptr] : toUpdateSectors) {
+			if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 			secUpd(ptr);
 		}
 
 		toUpdateSectors.clear();
-
-		checkAndUpdateCurrentSectors();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -2705,8 +2736,7 @@ public:
 
 		for (ScrollSector* s : sectorsOnView) {
 			for (auto& [id, ptr] : s->Objects) {
-				if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
-
+				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 				ptr->Update(tempRes);
 			}
 		}
@@ -2714,6 +2744,8 @@ public:
 		for (Instance* s : Tick) {
 			s->Update(tempRes);
 		}
+
+		checkAndUpdateCurrentSectors(true); // force update cuz sometimes calculate condition doesn't work
 
 		if (pushed) PopClip();
 
@@ -2785,9 +2817,14 @@ public:
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+
+			for (Instance* obj : Children) {
+				obj->SetSizePosUpdateFlag();
+				UpdateSectors(obj);
+			}
 		}
 
-		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) {
+		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) { 
 			for (Instance* child : Children) {
 				UpdateSectors(child);
 			}
@@ -2827,57 +2864,59 @@ public:
 			CanvasPositionOFFSET.y = maxScrollY - (RealSize.y * CanvasPosition.y);
 		}
 
-		bool entered = false;
-
-		bool enterAllowed = (
-			EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
-			(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-				EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
-			);
-
-		if (Visible and ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::PreviousHigherObject != this) or enterAllowed)) {
-			entered = true;
-		}
-
-		if (entered and ScrollEnabled) {
+		if (ScrollEnabled) {
 			float WheelMove = GetMouseWheelMove();
 			if (WheelMove != 0) {
-				bool isY = (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
-				bool isX = (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
+				bool entered = false;
 
-				if (isY) {
-					float currentY = (RealSize.y * CanvasPosition.y) + CanvasPositionOFFSET.y;
-					float totalStep = (RealSize.y * ScrollSpeed) + ScrollSpeedOFFSET;
-					float newTotalY = currentY - (WheelMove * totalStep);
+				bool enterAllowed = (
+					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
+					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
+					);
 
-					newTotalY = std::clamp(newTotalY, 0.0f, maxScrollY);
+				if (Visible and ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::PreviousHigherObject != this) or enterAllowed)) {
+					entered = true;
+				}
 
-					float newY1 = std::floor(newTotalY / RealSize.y);
-					float newY = newTotalY - (RealSize.y * newY1);
+				if (entered) {
+					bool isY = (Direction == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
+					bool isX = (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
 
-					if (Animated) {
-						Animate::Create(&CanvasPositionOFFSET.y, 0.125, newY);
-						Animate::Create(&CanvasPosition.y, 0.125, newY1);
-					} else {
-						CanvasPositionOFFSET.y = newY;
-						CanvasPosition.y = newY1;
-					}
-				} else if (isX) {
-					float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
-					float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOFFSET;
-					float newTotalX = currentX - (WheelMove * totalStep);
+					if (isY) {
+						float currentY = (RealSize.y * CanvasPosition.y) + CanvasPositionOFFSET.y;
+						float totalStep = (RealSize.y * ScrollSpeed) + ScrollSpeedOFFSET;
+						float newTotalY = currentY - (WheelMove * totalStep);
 
-					newTotalX = std::clamp(newTotalX, 0.0f, maxScrollX);
+						newTotalY = std::clamp(newTotalY, 0.0f, maxScrollY);
 
-					float newX1 = std::floor(newTotalX / RealSize.x);
-					float newX = newTotalX - (RealSize.x * newX1);
+						float newY1 = std::floor(newTotalY / RealSize.y);
+						float newY = newTotalY - (RealSize.y * newY1);
 
-					if (Animated) {
-						Animate::Create(&CanvasPositionOFFSET.x, 0.125, newX);
-						Animate::Create(&CanvasPosition.x, 0.125, newX1);
-					} else {
-						CanvasPositionOFFSET.x = newX;
-						CanvasPosition.x = newX1;
+						if (Animated) {
+							Animate::Create(&CanvasPositionOFFSET.y, 0.125, newY);
+							Animate::Create(&CanvasPosition.y, 0.125, newY1);
+						} else {
+							CanvasPositionOFFSET.y = newY;
+							CanvasPosition.y = newY1;
+						}
+					} else if (isX) {
+						float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
+						float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOFFSET;
+						float newTotalX = currentX - (WheelMove * totalStep);
+
+						newTotalX = std::clamp(newTotalX, 0.0f, maxScrollX);
+
+						float newX1 = std::floor(newTotalX / RealSize.x);
+						float newX = newTotalX - (RealSize.x * newX1);
+
+						if (Animated) {
+							Animate::Create(&CanvasPositionOFFSET.x, 0.125, newX);
+							Animate::Create(&CanvasPosition.x, 0.125, newX1);
+						} else {
+							CanvasPositionOFFSET.x = newX;
+							CanvasPosition.x = newX1;
+						}
 					}
 				}
 			}
@@ -2888,7 +2927,7 @@ public:
 
 		lastCanvasPos = { (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x), (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y) };
 
-		Draw(posOrSizeChanged or !canvasPosChanged);
+		Draw(posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or !canvasPosChanged);
 	}
 
 	ScrollFrame* Clone() const override {
@@ -2896,12 +2935,19 @@ public:
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
 
+		i->Grid.clear();
+		i->SectorsOnObject.clear();
+		i->Tick.clear();
+		i->isTick.clear();
+		i->sectorsOnView.clear();
+		i->lastFullSize.x = -123123;
+
 		i->basicCloneOperation(const_cast<ScrollFrame*>(this));
 
 		return i;
 	}
 
-	static ScrollFrame* New(ScrollFrame* parent = nullptr) {
+	static ScrollFrame* New(Instance* parent = nullptr) {
 		ScrollFrame* i = new ScrollFrame(parent);
 		return i;
 	}
@@ -2921,7 +2967,7 @@ public:
 };
 
 inline void Object2D::updateAncestorWhichParentIsScroll() {
-	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
+	Instance* scrollChild = ((this->Parent and this->Parent->Class == SCROLLFRAME) ? this : getAncestorWhichParentIsScrollFrame(this));
 
 	if (scrollChild) {
 		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
@@ -3018,7 +3064,7 @@ class TextLabel : public Object2D {
 
 		newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
 
-		if (cachedText.id == 0 or lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
+		if (cachedText.id == 0 or !cachedText.currentAtlas or lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
 			if (cachedText.id != 0) {
 				UnloadTextureFromAtlas(cachedText);
 			}
@@ -3029,7 +3075,7 @@ class TextLabel : public Object2D {
 			}
 		}
 
-		if (cachedText.id) {
+		if (cachedText.id and cachedText.currentAtlas) {
 			bool hadClip = !clipStack.empty();
 			Clip current;
 			if (hadClip) current = clipStack.back();
@@ -3124,7 +3170,7 @@ public:
 		return i;
 	}
 
-	static TextLabel* New(TextLabel* parent = nullptr) {
+	static TextLabel* New(Instance* parent = nullptr) {
 		TextLabel* i = new TextLabel(parent);
 		return i;
 	}
@@ -4044,7 +4090,7 @@ public:
 		return i;
 	}
 
-	static TextBox* New(TextBox* parent = nullptr) {
+	static TextBox* New(Instance* parent = nullptr) {
 		TextBox* i = new TextBox(parent);
 		return i;
 	}
@@ -4168,21 +4214,24 @@ public:
 
 				if (Roundness != lastRoundness) {
 					lastRoundness = Roundness;
-					SetShaderValue(shader, roundnessPointer, &Roundness, SHADER_UNIFORM_FLOAT);
+					RL_FUNCTIONS_PLUS::SetShaderValue(shader, roundnessPointer, &Roundness, SHADER_UNIFORM_FLOAT);
 				}
 
 				if (destRec.width != lastObjectData.width or destRec.height != lastObjectData.height) {
 					lastObjectData = destRec;
-					SetShaderValue(shader, objectDataPointer, &destRec, SHADER_UNIFORM_VEC4);
+					RL_FUNCTIONS_PLUS::SetShaderValue(shader, objectDataPointer, &destRec, SHADER_UNIFORM_VEC4);
 				}
-				if (srcRec.x != lastImageData.x or srcRec.y != lastImageData.y or
-					srcRec.width != lastImageData.width or srcRec.height != lastImageData.height) {
-					lastImageData = srcRec;
-					SetShaderValue(shader, imageDataPointer, &srcRec, SHADER_UNIFORM_VEC4);
+
+				Rectangle ShaderSRC = { srcRec.x + tex.position.x, srcRec.y + tex.position.y, srcRec.width, srcRec.height };
+
+				if (ShaderSRC.x != lastImageData.x or ShaderSRC.y != lastImageData.y or
+					ShaderSRC.width != lastImageData.width or ShaderSRC.height != lastImageData.height) {
+					lastImageData = ShaderSRC;
+					RL_FUNCTIONS_PLUS::SetShaderValue(shader, imageDataPointer, &ShaderSRC, SHADER_UNIFORM_VEC4);
 				}
 
 				RL_FUNCTIONS_PLUS::BeginShaderMode(shader);
-				RL_FUNCTIONS_PLUS::DrawTextureProNoFlush(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
 				RL_FUNCTIONS_PLUS::EndShaderMode();
 			} else {
 				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
@@ -4198,7 +4247,7 @@ public:
 			UnloadImage(imageIfMemory);
 		}
 
-		imageIfMemory = LoadImageFromMemory(type.c_str(), data.data(), data.size());
+		imageIfMemory = RAYLIB_FUNCTIONAL::LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (!imageIfMemory.data) {
 			std::cout << RED_ANSI << "UpdateFromMemory FAILED" << DEFAULT_ANSI << std::endl;
@@ -4227,7 +4276,7 @@ public:
 		return i;
 	}
 
-	static ImageLabel* New(ImageLabel* parent = nullptr) {
+	static ImageLabel* New(Instance* parent = nullptr) {
 		ImageLabel* i = new ImageLabel(parent);
 		return i;
 	}
@@ -4307,7 +4356,7 @@ public:
 			}
 		}
 
-		img = LoadImageFromMemory(type.c_str(), data.data(), data.size());
+		img = RAYLIB_FUNCTIONAL::LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (img.data == nullptr) return;
 		if (texture.id != 0 and owner) UnloadTexture(texture);
@@ -4401,14 +4450,19 @@ inline void Instance::setParent(Instance* ptr) {
 			}
 		}
 
-		Parent->childsRemovedInFrame[this->uniqueID] = this;
+		Parent->childsRemovedInFrame.insert({ this->uniqueID, this });
 	}
 
 	Parent = ptr;
 	if (ptr) {
 		ptr->Children.push_back(this);
+		ptr->childsAddedInFrame.insert({ this->uniqueID, this });
 		ptr->updateChildrenZIndex = true;
-		ptr->childsAddedInFrame[this->uniqueID] = this;
+
+		ScrollFrame* prob = (ptr->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(ptr) : (ScrollFrame*)nullptr);
+		if (prob) {
+			prob->UpdateSectors(this);
+		}
 	}
 }
 
@@ -4538,13 +4592,11 @@ inline void Object2D::eventHandler() {
 			break;
 		} case CHILD_ADDED: {
 			for (auto& [id, ptr] : childsAddedInFrame) {
-				if (childsRemovedInFrame.contains(id)) continue;
 				func(this, ptr);
 			}
 			break;
 		} case CHILD_REMOVED: {
 			for (auto& [id, ptr] : childsRemovedInFrame) {
-				if (childsAddedInFrame.contains(id)) continue;
 				func(this, ptr);
 			}
 			break;
@@ -4637,7 +4689,7 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 	std::filesystem::path p(std::u8string(reinterpret_cast<const char8_t*>(path.c_str())));
 	if (!f) return {};
 	std::vector<unsigned char> buf((std::istreambuf_iterator<char>(f)), {});
-	Image img = LoadImageFromMemory(".png", buf.data(), (int)buf.size());
+	Image img = RAYLIB_FUNCTIONAL::LoadImageFromMemory(".png", buf.data(), (int)buf.size());
 	if (!IsImageValid(img)) return {};
 
 	if (img.data == nullptr) {
@@ -5180,8 +5232,8 @@ inline namespace debug {
 					element->Name = currentInstance->Children[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = typeColor[currentColor];
-					element->Position = SpecialVector2{ 0, (i - dec) * 0.05f };
-					element->Size = SpecialVector2{ 1, 0.05 };
+					element->Position = { 0, (i - dec) * 0.05f };
+					element->Size = { 1, 0.05 };
 					std::ostringstream pupupupu; pupupupu << " > " << currentInstance->Children[i]->Name;
 					element->SetText(pupupupu.str());
 					element->Active = true;
@@ -5350,7 +5402,7 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 	int targetFPS = (inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z;
 	SetTargetFPS(targetFPS);
 
-	if (iconName != "") SetWindowIcon(LoadImage(iconName));
+	if (!std::string(iconName).empty()) RAYLIB_FUNCTIONAL::SetWindowIcon(RAYLIB_FUNCTIONAL::LoadImage(iconName));
 
 	SetExitKey(KEY_NULL);
 

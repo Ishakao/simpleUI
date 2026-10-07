@@ -24,6 +24,7 @@
 // Textures atlassing (excluding TextureLabel)																	//
 // Improved performance on big quantity of rectangles															//
 // Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
+// Textures draw optimization. Batching for textures and rectangles												//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -214,14 +215,25 @@ inline void FlushRectanglesBatch();
 inline void updateObject2DVector(Object2D*);
 
 struct RoundRectData {
+	// Base rectangle data
 	Vector2 Pos, Size;
 	Color Color, BorderColor;
 	float Transparency, Roundness, BorderTransparency;
 	int BorderThickness = 0;
 	float Rotation = 0;
 	Vector2 Origin = { 0, 0 };
+
+	// Texture data
+	Texture2D Texture;
+	Rectangle Source;
+	Rectangle Destination;
+	// Texture color = Color
 };
 
+inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	FlushRectanglesBatch();
+	RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
+}
 struct SpecialVector2 {
 	template <size_t Index>
 	struct num {
@@ -338,7 +350,10 @@ namespace SIMPLEUI_GLOBAL {
 
 	inline std::vector<Atlas*> AtlasArray;
 	inline size_t AtlasTextureId = 1;
+	inline unsigned int CurrentBatchTexture = 0;
 }
+
+inline void DrawRoundRectBatch(const RoundRectData&);
 
 namespace RL_FUNCTIONS_PLUS {
 	inline void BeginShaderMode(Shader shader) {
@@ -388,13 +403,21 @@ namespace RL_FUNCTIONS_PLUS {
 		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
 	}
 
-	inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
-	}
+	inline void DrawTexturePro(Texture2D texture, Vector2 position, Vector2 size, Rectangle source, Rectangle destination, Vector2 origin, float rotation, Color color, float roundness) {
+		const RoundRectData rec = { 
+			position, 
+			size, 
+			color, {255,255,255,255},
+			0.0f, roundness, 1.0f, 
+			0, 
+			rotation, 
+			{ origin.x * destination.x, origin.y * destination.y },
+			texture,
+			source,
+			destination
+		};
 
-	inline void DrawTextureProNoFlush(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
-		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, {0,0}, r, c);
+		DrawRoundRectBatch(rec);
 	}
 
 	inline void DrawTexture(Texture2D t, int x, int y, Color c) {
@@ -433,9 +456,22 @@ class Atlas {
 	std::vector<stbrp_node> nodes;
 	stbrp_context ctx;
 	int padding;
+	bool pleaseGenerateMipmaps = false;
 public:
-	Texture2D texture() const { return tex.texture; }
-	RenderTexture2D renderTexture() const { return tex; }
+	Texture2D texture() { 
+		if (pleaseGenerateMipmaps) {
+			GenTextureMipmaps(&tex.texture);
+			pleaseGenerateMipmaps = false;
+		}
+		return tex.texture; 
+	}
+	RenderTexture2D renderTexture() { 
+		if (pleaseGenerateMipmaps) {
+			GenTextureMipmaps(&tex.texture);
+			pleaseGenerateMipmaps = false;
+		}
+		return tex; 
+	}
 
 	Rectangle source(const AtlasTexture& t) const {
 		return {
@@ -478,7 +514,7 @@ public:
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 		RL_FUNCTIONS_PLUS::EndTextureMode();
 
-		GenTextureMipmaps(&tex.texture);
+		pleaseGenerateMipmaps = true;
 
 		UnloadTexture(src);
 
@@ -505,7 +541,7 @@ public:
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 		RL_FUNCTIONS_PLUS::EndTextureMode();
 
-		GenTextureMipmaps(&tex.texture);
+		pleaseGenerateMipmaps = true;
 
 		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)width, (float)height}, this };
 
@@ -525,7 +561,6 @@ public:
 	Atlas(int size = DEFAULT_ATLAS_SIZE, int pad = 1) : padding(pad) {
 		nodes.resize(size);
 		tex = RAYLIB_FUNCTIONAL::LoadRenderTexture(size, size);
-		GenTextureMipmaps(&tex.texture);
 		SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
 		SetTextureWrap(tex.texture, TEXTURE_WRAP_CLAMP);
 		std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
@@ -553,7 +588,7 @@ public:
 };
 
 namespace RL_FUNCTIONS_PLUS {
-	inline void DrawTexturePro(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	inline void DrawTexturePro(AtlasTexture t, Vector2 pos, Vector2 size, Rectangle s, Rectangle d, Vector2 o, float r, Color c, float rot) {
 		if (!t.currentAtlas) return;
 
 		Texture2D tex = t.currentAtlas->texture();
@@ -563,20 +598,7 @@ namespace RL_FUNCTIONS_PLUS {
 		src.y = tex.height - src.y - src.height;
 		src.height = -src.height;
 
-		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, src, d, o, r, c);
-	}
-
-	inline void DrawTextureProNoFlush(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
-		if (!t.currentAtlas) return;
-
-		Texture2D tex = t.currentAtlas->texture();
-
-		Rectangle src = { t.position.x + s.x, t.position.y + s.y, s.width, s.height };
-
-		src.y = tex.height - src.y - src.height;
-		src.height = -src.height;
-
-		RL_FUNCTIONS_PLUS::DrawTextureProNoFlush(tex, src, d, o, r, c);
+		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, pos, size, src, d, o, r, c, rot);
 	}
 }
 
@@ -1854,12 +1876,18 @@ enum SUI_EEC {
 
 inline void DrawRoundRectBatch(const RoundRectData& r) {
 	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
+	if (r.Texture.id) {
+		auto& cur = SIMPLEUI_GLOBAL::CurrentBatchTexture;
+		if (cur and cur != r.Texture.id) FlushRectanglesBatch();
+		cur = r.Texture.id;
+	}
 	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
 }
 
 struct RectVertex {
 	float x, y, z;
-	float u, v;
+	float lx, ly, hx, hy;
+	float u, v, useTex;
 	unsigned char r, g, b, a;
 };
 
@@ -1891,6 +1919,10 @@ namespace RectGPU {
 		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4, RL_UNSIGNED_BYTE, true, (int)sizeof(RectVertex), offsetof(RectVertex, r));
 		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 4, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, lx));
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2, 3, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, u));
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2);
 
 		RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx.data(), (int)(idx.size() * sizeof(unsigned short)), false);
 
@@ -1910,27 +1942,51 @@ namespace RectGPU {
 		return out;
 	}
 
-	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c, float rotation=0, Vector2 origin={0, 0}) {
-		float hx = size.x * 0.5f + 1.0f;
-		float hy = size.y * 0.5f + 1.0f;
-		float cx = pos.x + size.x * 0.5f;
-		float cy = pos.y + size.y * 0.5f;
+	struct QuadTex {
+		Rectangle dest = { 0, 0, 0, 0 };
+		float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
+		float use = 0;
+	};
+
+	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c, float rotation, Vector2 origin, const QuadTex& t) {
+		float halfW = size.x * 0.5f;
+		float halfH = size.y * 0.5f;
+		float cx = pos.x + halfW;
+		float cy = pos.y + halfH;
 		float ox = pos.x + origin.x;
 		float oy = pos.y + origin.y;
 		float sn = sinf(rotation * DEG2RAD);
 		float cs = cosf(rotation * DEG2RAD);
 		float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 
-		auto corner = [&](float lx, float ly) {
+		float x0, y0, x1, y1;
+		if (t.use > 0.5f) {
+			x0 = t.dest.x - cx;
+			y0 = t.dest.y - cy;
+			x1 = x0 + t.dest.width;
+			y1 = y0 + t.dest.height;
+		} else {
+			x0 = -halfW - 1.0f;
+			y0 = -halfH - 1.0f;
+			x1 = halfW + 1.0f;
+			y1 = halfH + 1.0f;
+		}
+
+		auto corner = [&](float lx, float ly, float fx, float fy) {
 			float dx = cx + lx - ox;
 			float dy = cy + ly - oy;
-			verts.push_back({ ox + dx * cs - dy * sn, oy + dx * sn + dy * cs, z, lx, ly, c.r, c.g, c.b, c.a });
+			verts.push_back({
+				ox + dx * cs - dy * sn, oy + dx * sn + dy * cs, z,
+				lx, ly, halfW, halfH,
+				t.u0 + (t.u1 - t.u0) * fx, t.v0 + (t.v1 - t.v0) * fy, t.use,
+				c.r, c.g, c.b, c.a
+			});
 		};
 
-		corner(-hx, -hy);
-		corner(-hx, hy);
-		corner(hx, hy);
-		corner(hx, -hy);
+		corner(x0, y0, 0, 0);
+		corner(x0, y1, 0, 1);
+		corner(x1, y1, 1, 1);
+		corner(x1, y0, 1, 0);
 	}
 }
 
@@ -1946,19 +2002,34 @@ inline void FlushRectanglesBatch() {
 	v.reserve(batch.size() * 8);
 
 	for (const auto& r : batch) {
+		RectGPU::QuadTex qt;
+		if (r.Texture.id) {
+			Rectangle s = r.Source;
+			if (s.width < 0) s.x -= s.width;
+			if (s.height < 0) s.y -= s.height;
+			float tw = (float)r.Texture.width;
+			float th = (float)r.Texture.height;
+			qt.dest = r.Destination;
+			qt.u0 = s.x / tw;
+			qt.v0 = s.y / th;
+			qt.u1 = (s.x + s.width) / tw;
+			qt.v1 = (s.y + s.height) / th;
+			qt.use = 1.0f;
+		}
+
 		unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
 		if (fillA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA }, r.Rotation, r.Origin);
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA }, r.Rotation, r.Origin, qt);
 		}
 
 		unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
 		if (r.BorderThickness > 0 and borderA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin);
+			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin, RectGPU::QuadTex{});
 		}
 	}
 
 	if (!v.empty()) {
-		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
+		RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
 		RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
 
 		RAYLIB_FUNCTIONAL::rlSetUniformMatrix(shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_MATRIX_MVP], RectGPU::Mul(RAYLIB_FUNCTIONAL::rlGetMatrixModelview(), RAYLIB_FUNCTIONAL::rlGetMatrixProjection()));
@@ -1969,8 +2040,9 @@ inline void FlushRectanglesBatch() {
 			RAYLIB_FUNCTIONAL::rlSetUniform(diffuseLoc, white, RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, 1);
 		}
 
+		unsigned int texId = SIMPLEUI_GLOBAL::CurrentBatchTexture ? SIMPLEUI_GLOBAL::CurrentBatchTexture : RAYLIB_FUNCTIONAL::rlGetTextureIdDefault();
 		RAYLIB_FUNCTIONAL::rlActiveTextureSlot(0);
-		RAYLIB_FUNCTIONAL::rlEnableTexture(RAYLIB_FUNCTIONAL::rlGetTextureIdDefault());
+		RAYLIB_FUNCTIONAL::rlEnableTexture(texId);
 
 		size_t totalQuads = v.size() / 4;
 		size_t done = 0;
@@ -1984,10 +2056,10 @@ inline void FlushRectanglesBatch() {
 
 		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
 		RAYLIB_FUNCTIONAL::rlDisableTexture();
-		RAYLIB_FUNCTIONAL::EndShaderMode();
 	}
 
 	batch.clear();
+	SIMPLEUI_GLOBAL::CurrentBatchTexture = 0;
 }
 
 class Object2D : public Instance {
@@ -3144,9 +3216,8 @@ public:
 
 				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
 				Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(newSize.x), std::floorf((float)newSize.y) };
-				SpecialVector2 origin = { 0, 0 };
 
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, sourceRec, destRec, origin, 0, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) });
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, 0);
 			}
 		}
 	}
@@ -3403,7 +3474,6 @@ public:
 			};
 
 			Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(sizeToDraw.x), std::floorf(sizeToDraw.y) };
-			SpecialVector2 origin = { 0, 0 };
 
 			Color clr;
 			if (Text == "") {
@@ -3412,7 +3482,7 @@ public:
 				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, sourceRec, destRec, origin, 0, clr);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, clr, 0);
 		}
 
 		if (Text.empty()) {
@@ -4190,47 +4260,7 @@ public:
 			destRec.width = std::ceilf(destRec.width);
 			destRec.height = std::ceilf(destRec.height);
 
-			if (Roundness and RoundImage) {
-				static bool roundShaderLoaded = false;
-				static Shader shader;
-				static float lastRoundness = 0;
-				static Rectangle lastObjectData = { 0,0,0,0 };
-				static Rectangle lastImageData = { 0,0,0,0 };
-				static int roundnessPointer = -1;
-				static int objectDataPointer = -1;
-				static int imageDataPointer = -1;
-				if (!roundShaderLoaded) {
-					shader = getShader(SIMPLEUI_GLOBAL::TextureRoundnessShader);
-					roundnessPointer = GetShaderLocation(shader, "roundness");
-					objectDataPointer = GetShaderLocation(shader, "objectData");
-					imageDataPointer = GetShaderLocation(shader, "imageData");
-					roundShaderLoaded = true;
-				}
-
-				if (Roundness != lastRoundness) {
-					lastRoundness = Roundness;
-					RL_FUNCTIONS_PLUS::SetShaderValue(shader, roundnessPointer, &Roundness, SHADER_UNIFORM_FLOAT);
-				}
-
-				if (destRec.width != lastObjectData.width or destRec.height != lastObjectData.height) {
-					lastObjectData = destRec;
-					RL_FUNCTIONS_PLUS::SetShaderValue(shader, objectDataPointer, &destRec, SHADER_UNIFORM_VEC4);
-				}
-
-				Rectangle ShaderSRC = { srcRec.x + tex.position.x, srcRec.y + tex.position.y, srcRec.width, srcRec.height };
-
-				if (ShaderSRC.x != lastImageData.x or ShaderSRC.y != lastImageData.y or
-					ShaderSRC.width != lastImageData.width or ShaderSRC.height != lastImageData.height) {
-					lastImageData = ShaderSRC;
-					RL_FUNCTIONS_PLUS::SetShaderValue(shader, imageDataPointer, &ShaderSRC, SHADER_UNIFORM_VEC4);
-				}
-
-				RL_FUNCTIONS_PLUS::BeginShaderMode(shader);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
-				RL_FUNCTIONS_PLUS::EndShaderMode();
-			} else {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(tex, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) });
-			}
+			RL_FUNCTIONS_PLUS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
 			setImage(currentPair);
@@ -4322,7 +4352,6 @@ public:
 
 					owner = true;
 					texture = LoadTextureFromImage(img);
-					GenTextureMipmaps(&texture);
 					SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
 					UnloadImage(img);
 				}
@@ -4339,7 +4368,7 @@ public:
 				return;
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(texture, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Origin, Rotation, TextureColor);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(texture, RealPos, RealSize, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Origin, Rotation, TextureColor, 0);
 		}
 	}
 
@@ -4779,27 +4808,46 @@ inline void DrawFrame(Instance* StartInstance) {
 	EndDrawing();
 }
 
-inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
+inline void toggleFPS(Instance* s) {
 	static TextLabel* labelFPS = nullptr;
+
+	auto upd = []() {
+		if (!labelFPS) return;
+
+		labelFPS->Text = "  " + std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS  ";
+		Color c =
+			(SIMPLEUI_GLOBAL::accurateFPS > 200) ? Color{ 153, 255, 204, 255 } :
+			(SIMPLEUI_GLOBAL::accurateFPS > 120) ? Color{ 0, 255, 0, 255 } :
+			(SIMPLEUI_GLOBAL::accurateFPS > 60) ? Color{ 255, 255, 102, 255 } :
+			(SIMPLEUI_GLOBAL::accurateFPS > 30) ? Color{ 255, 178, 102, 255 } :
+			(SIMPLEUI_GLOBAL::accurateFPS > 15) ? Color{ 255, 102, 102, 255 } :
+			Color{ 255, 0, 0, 255 };
+		labelFPS->TextColor = c;
+	};
+
 	if (!labelFPS) {
 		labelFPS = TextLabel::New(s);
-		labelFPS->BackgroundTransparency = 1;
+		labelFPS->BackgroundTransparency = 0.4;
+		labelFPS->BackgroundColor = { 0, 0, 0, 255 };
 		labelFPS->TextSize = -1;
-		new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, []() {
-			static int last = 0;
-			if (last != SIMPLEUI_GLOBAL::accurateFPS) {
-				labelFPS->SetText(std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS");
-			}
-		});
 		labelFPS->Name = "FPS_LABEL";
 		labelFPS->Active = false;
-		labelFPS->Size = SpecialVector2{ 0.15, 0.1 };
-		labelFPS->Position = SpecialVector2{ 0.85, 0 };
-		labelFPS->TextAnchor = TextAnchorEnum::NE;
-		labelFPS->ZIndex = 1000;
+		labelFPS->SizeOFFSET = SpecialVector2{ 180, 30 };
+		labelFPS->Position = SpecialVector2{ 1, 0 };
+		labelFPS->PositionOFFSET = SpecialVector2{ -180, 0 };
+		labelFPS->ZIndex = 10000000;
 		labelFPS->Visible = false;
-		labelFPS->TextColor = textColor;
+		labelFPS->Roundness = 0.5;
+
+		new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, [upd]() {
+			static int last = 0;
+			if (last != SIMPLEUI_GLOBAL::accurateFPS or last == 0) {
+				upd();
+			}
+		});
 	}
+
+	upd();
 
 	labelFPS->Visible = !labelFPS->Visible;
 }
@@ -5443,13 +5491,13 @@ inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, c
 	int targetFPS = (inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z;
 	SetTargetFPS(targetFPS);
 
-	if (!std::string(iconName).empty()) RAYLIB_FUNCTIONAL::SetWindowIcon(RAYLIB_FUNCTIONAL::LoadImage(iconName));
+	Image ic = RAYLIB_FUNCTIONAL::LoadImage(iconName);
+	if (!std::string(iconName).empty()) RAYLIB_FUNCTIONAL::SetWindowIcon(ic);
 
 	SetExitKey(KEY_NULL);
 
 	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
 	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
-	SIMPLEUI_GLOBAL::TextureRoundnessShader = loadNewShader("", "simpleUI Shaders/texture_roundness.frag"); // Basic shader 1
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
 
 	for (auto& tup : queuedFonts) {
@@ -5510,7 +5558,7 @@ inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, c
 			UpdateHigher(StartInstance);
 		}
 
-		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(StartInstance, { 125, 180, 220, 255 }); }
+		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(StartInstance); }
 		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(StartInstance); }
 		if (IsKeyPressed(KEY_F3)) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
 
@@ -5525,6 +5573,8 @@ inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, c
 	if (GetRoot()) {
 		GetRoot()->deleteAllChildren();
 	}
+
+	UnloadImage(ic);
 
 	for (auto pair : SIMPLEUI_GLOBAL::loadedImages) {
 		RAYLIB_FUNCTIONAL::UnloadImage(pair.second.first);

@@ -47,7 +47,6 @@ class GraphBuilder : public Object2D {
 	bool GraphDirty = false;
 
 	void updateTexture() {
-		textureSize = RealSize;
 		int quantity = sequences.size();
 		Vector2 GraphRealPos = { 0,0 };
 		Vector2 GraphRealSize = RealSize;
@@ -109,7 +108,14 @@ class GraphBuilder : public Object2D {
 						if (sizeAfterSpacingX <= 0) continue;
 
 						Rectangle rec = { (GraphRealPos.x + i * (sizeAfterSpacingX + Spacing)) + xof, (GraphRealPos.y + (GraphRealSize.y - height)) + yof, sizeAfterSpacingX, height };
-						RoundRectData r = { {rec.x, rec.y}, {rec.width, rec.height}, seq->color, seq->color, 0, ColumnsRoundness, 1, 0 };
+						RoundRectData r = { 
+							{rec.x, rec.y}, {rec.width, rec.height}, 
+							seq->color, seq->color, 
+							0.0f, ColumnsRoundness, 1.0f,
+							0,
+							Rotation,
+							Origin,
+						};
 
 						DrawRoundRectBatch(r);
 					}
@@ -430,18 +436,24 @@ public:
 
 			if (GraphDirty) updateGlobalMinMax();
 
-			if (cachedTexture.id and (cachedTexture.size.x < RealSize.x or cachedTexture.size.y < RealSize.y)) {
-				UnloadTextureFromAtlas(cachedTexture);
-				cachedTexture = LoadRenderTextureOnAtlas(RealSize.x * textureAspect, RealSize.y * textureAspect);
+			Vector2 leftSizeFull = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / 4 };
+
+			Vector2 wanted = {
+				std::max(1.0f, std::floorf(RealSize.x - leftSizeFull.x - 2 - BorderThickness)),
+				std::max(1.0f, std::floorf(RealSize.y - 2 - BorderThickness))
+			};
+			bool sizeChanged = wanted.x != textureSize.x or wanted.y != textureSize.y;
+
+			if (!cachedTexture.id or cachedTexture.size.x < wanted.x or cachedTexture.size.y < wanted.y) {
+				if (cachedTexture.id) UnloadTextureFromAtlas(cachedTexture);
+				cachedTexture = LoadRenderTextureOnAtlas(wanted.x * textureAspect, wanted.y * textureAspect);
+				textureSize = wanted;
 				updateTexture();
-			} else if (!cachedTexture.id) {
-				cachedTexture = LoadRenderTextureOnAtlas(RealSize.x * textureAspect, RealSize.y * textureAspect);
-				updateTexture();
-			} else if (conditionToUpdate) {
+			} else if (conditionToUpdate or sizeChanged) {
+				textureSize = wanted;
 				updateTexture();
 			}
 
-			Vector2 leftSizeFull = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / 4 };
 			bool bothCondition = FilterChanged or (lastLeftFull.x != leftSizeFull.x or lastLeftFull.y != leftSizeFull.y) or FontFace.isChanged() or lastLeft.Offset != SizeOfLeftInfo.Offset or lastLeft.Scale != SizeOfLeftInfo.Scale;
 			bool conditionToUpdateMin = lastMin != minimalGraphValue or bothCondition;
 			bool conditionToUpdateMax = lastMax != maximalGraphValue or bothCondition;
@@ -484,8 +496,8 @@ public:
 
 			*/
 
-			Rectangle sourceRec = { 0.0f, 0.0f, (float)textureSize.x, (float)textureSize.y };
-			Rectangle destRec = { RealPos.x + leftSizeFull.x + 1 + BorderThickness, RealPos.y + 1 + BorderThickness, (float)RealSize.x - leftSizeFull.x - 2 - BorderThickness, (float)RealSize.y - 2 - BorderThickness };
+			Rectangle sourceRec = { 0.0f, 0.0f, textureSize.x, textureSize.y };
+			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), textureSize.x, textureSize.y };
 
 			Rectangle sourceRecMin = { 0.0f, 0.0f, (float)textureSizeMin.x, (float)textureSizeMin.y };
 			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
@@ -502,10 +514,10 @@ public:
 				}
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, sourceRec, destRec, { 0,0 }, 0, { 255,255,255,255 });
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, { 255,255,255,255 }, Roundness);
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, sourceRecMin, destRecMin, { 0,0 }, 0, c);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, sourceRecMax, destRecMax, { 0,0 }, 0, c);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, { 0,0 }, 0, c, Roundness);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, { 0,0 }, 0, c, Roundness);
 			}
 		}
 	}

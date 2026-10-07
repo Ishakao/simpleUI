@@ -5316,8 +5316,8 @@ inline void SUI_SetMinimalWindowSize(int newX, int newY) {
 	windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
 }
 
-inline bool ALLOW_DEBUG = true;
-inline bool ALLOW_FPS = true;
+inline bool ALLOW_DEBUG = false;
+inline bool ALLOW_FPS = false;
 
 inline void UpdateHigher(Instance* StartInstance) {
 	Object2D* best = nullptr;

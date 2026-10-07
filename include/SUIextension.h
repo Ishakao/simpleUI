@@ -219,6 +219,23 @@ class GraphBuilder : public Object2D {
 		minimalGraphValue = mi;
 		maximalGraphValue = ma;
 	}
+protected:
+	GraphBuilder(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	GraphBuilder(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+	~GraphBuilder() override {
+		if (cachedTexture.id != 0) {
+			UnloadTextureFromAtlas(cachedTexture);
+		}
+
+		if (cachedMin.id != 0) {
+			UnloadTextureFromAtlas(cachedMin);
+		}
+
+		if (cachedMax.id != 0) {
+			UnloadTextureFromAtlas(cachedMax);
+		}
+	}
+	GraphBuilder() = delete;
 public:
 	void setSequenceColor(size_t id, Color c) {
 		auto it = sequences.find(id);
@@ -514,23 +531,6 @@ public:
 		GraphBuilder* i = new GraphBuilder(parent);
 		return i;
 	}
-
-	GraphBuilder(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	GraphBuilder(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-	~GraphBuilder() {
-		if (cachedTexture.id != 0) {
-			UnloadTextureFromAtlas(cachedTexture);
-		}
-
-		if (cachedMin.id != 0) {
-			UnloadTextureFromAtlas(cachedMin);
-		}
-
-		if (cachedMax.id != 0) {
-			UnloadTextureFromAtlas(cachedMax);
-		}
-	}
-	GraphBuilder() = delete;
 };
 
 class ToggleSwitcher : public Object2D {
@@ -586,6 +586,11 @@ class ToggleSwitcher : public Object2D {
 			}
 		}
 	}
+protected:
+	ToggleSwitcher(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
+	ToggleSwitcher(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
+	~ToggleSwitcher() override = default;
+	ToggleSwitcher() = delete;
 public:
 	float AnimationSpeed = 0.3;									// 0 means instant toggle
 	bool Enabled = true;										// Allows user to click
@@ -683,9 +688,4 @@ public:
 		ToggleSwitcher* i = new ToggleSwitcher(parent);
 		return i;
 	}
-
-	ToggleSwitcher(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
-	ToggleSwitcher(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Roundness = 1; Active = true; };
-	~ToggleSwitcher() {}
-	ToggleSwitcher() = delete;
 };

@@ -23,6 +23,7 @@
 // Self rectangles batcher and shaders. Now rounded rectangles are so optimized (minimal CPU overload)			//
 // Textures atlassing (excluding TextureLabel)																	//
 // Improved performance on big quantity of rectangles															//
+// Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -35,17 +36,19 @@
 #define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !MultiCheckBox, !ComboBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
-#ifdef _WIN32
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_RECT_PACK_IMPLEMENTATION
+// use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation
+
+#ifdef SIMPLEUI_IMPLEMENTATION
+	#define STB_IMAGE_WRITE_IMPLEMENTATION
+	#define STB_RECT_PACK_IMPLEMENTATION
 #endif
 
 #include "stb_image_write.h"
 #include "stb_rect_pack.h"
 
 namespace RAYLIB_FUNCTIONAL {
-#include <raylib.h>
-#include <rlgl.h>
+	#include <raylib.h>
+	#include <rlgl.h>
 }
 
 using RAYLIB_FUNCTIONAL::Vector2;
@@ -207,8 +210,8 @@ class TextureLabel;
 class LineEx;
 class Atlas;
 
-void FlushRectanglesBatch();
-void updateObject2DVector(Object2D*);
+inline void FlushRectanglesBatch();
+inline void updateObject2DVector(Object2D*);
 
 struct RoundRectData {
 	Vector2 Pos, Size;
@@ -298,108 +301,108 @@ struct SpecialVector2 {
 struct AtlasTexture;
 
 namespace SIMPLEUI_GLOBAL {
-	int winWidth = 0;
-	int winHeight = 0;
-	int defaultSpacing = 0;
-	float dt = 0;
-	SpecialVector2 changeWindowSize = { 0,0 };
-	bool changeWindowSizeB = false;
-	bool windowSizeChanged = false;
-	long accurateFPS = 0;
-	bool programRunning = true;
-	SpecialVector2 mousePosition;
-	SpecialVector2 mouseScreenPosition;
-	SpecialVector2 windowPosition;
-	constexpr const char* BASIC_FONT_NAME = "Arial";
-	constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
-	std::unordered_map<int, Shader> Shaders;
-	long currentUniqueObjectID = 0;
-	bool sceneDirty = false; // true in frame where any object size or position changed
+	inline int winWidth = 0;
+	inline int winHeight = 0;
+	inline int defaultSpacing = 0;
+	inline float dt = 0;
+	inline SpecialVector2 changeWindowSize = { 0,0 };
+	inline bool changeWindowSizeB = false;
+	inline bool windowSizeChanged = false;
+	inline long accurateFPS = 0;
+	inline bool programRunning = true;
+	inline SpecialVector2 mousePosition;
+	inline SpecialVector2 mouseScreenPosition;
+	inline SpecialVector2 windowPosition;
+	inline constexpr const char* BASIC_FONT_NAME = "Arial";
+	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
+	inline std::unordered_map<int, Shader> Shaders;
+	inline long currentUniqueObjectID = 0;
+	inline bool sceneDirty = false; // true in frame where any object size or position changed
 
-	int TextureRoundnessShader = -1;
-	int RectangleRoundnessShader = -1;
-	int CurrentCustomShader = -1;
-	std::vector<RoundRectData> CurrentRectanglesBatch;
+	inline int TextureRoundnessShader = -1;
+	inline int RectangleRoundnessShader = -1;
+	inline int CurrentCustomShader = -1;
+	inline std::vector<RoundRectData> CurrentRectanglesBatch;
 
-	std::mutex ImagesLoadingMtx;
-	std::unordered_map<std::string, std::pair<Image, AtlasTexture>> loadedImages;
-	std::unordered_map<std::string, Image> pendingImages;
+	inline std::mutex ImagesLoadingMtx;
+	inline std::unordered_map<std::string, std::pair<Image, AtlasTexture>> loadedImages;
+	inline std::unordered_map<std::string, Image> pendingImages;
 
-	size_t framesSinceStart = 0;
+	inline size_t framesSinceStart = 0;
 
-	TextBox* FocusedTextBox = nullptr;
-	Object2D* PreviousHigherObject = nullptr;
-	Object2D* higherObject = nullptr;
+	inline TextBox* FocusedTextBox = nullptr;
+	inline Object2D* PreviousHigherObject = nullptr;
+	inline Object2D* higherObject = nullptr;
 
-	std::vector<uint8_t> deletedObjectsByID;
+	inline std::vector<uint8_t> deletedObjectsByID;
 
-	std::vector<Atlas*> AtlasArray;
-	size_t AtlasTextureId = 1;
+	inline std::vector<Atlas*> AtlasArray;
+	inline size_t AtlasTextureId = 1;
 }
 
 namespace RL_FUNCTIONS_PLUS {
-	void BeginShaderMode(Shader shader) {
+	inline void BeginShaderMode(Shader shader) {
 		SIMPLEUI_GLOBAL::CurrentCustomShader = shader.id;
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::BeginShaderMode(shader);
 	}
 
-	void EndShaderMode() {
+	inline void EndShaderMode() {
 		FlushRectanglesBatch();
 		SIMPLEUI_GLOBAL::CurrentCustomShader = -1;
 		RAYLIB_FUNCTIONAL::EndShaderMode();
 	}
 
-	void BeginTextureMode(RenderTexture2D texture) {
+	inline void BeginTextureMode(RenderTexture2D texture) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::BeginTextureMode(texture);
 	}
 
-	void EndTextureMode() {
+	inline void EndTextureMode() {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::EndTextureMode();
 	}
 
-	void BeginBlendMode(int mode) {
+	inline void BeginBlendMode(int mode) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::BeginBlendMode(mode);
 	}
 
-	void EndBlendMode() {
+	inline void EndBlendMode() {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::EndBlendMode();
 	}
 
-	void BeginScissorMode(int x, int y, int width, int height) {
+	inline void BeginScissorMode(int x, int y, int width, int height) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::BeginScissorMode(x, y, width, height);
 	}
 
-	void EndScissorMode() {
+	inline void EndScissorMode() {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::EndScissorMode();
 	}
 
-	void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
+	inline void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
 	}
 
-	void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
 	}
 
-	void DrawTextureProNoFlush(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	inline void DrawTextureProNoFlush(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, {0,0}, r, c);
 	}
 
-	void DrawTexture(Texture2D t, int x, int y, Color c) {
+	inline void DrawTexture(Texture2D t, int x, int y, Color c) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::DrawTexture(t, x, y, c);
 	}
 
-	void SetShaderValue(Shader shader, int a, const void* ptr, int type) {
+	inline void SetShaderValue(Shader shader, int a, const void* ptr, int type) {
 		FlushRectanglesBatch();
 		RAYLIB_FUNCTIONAL::SetShaderValue(shader, a, ptr, type);
 	}
@@ -550,7 +553,7 @@ public:
 };
 
 namespace RL_FUNCTIONS_PLUS {
-	void DrawTexturePro(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	inline void DrawTexturePro(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		if (!t.currentAtlas) return;
 
 		Texture2D tex = t.currentAtlas->texture();
@@ -563,7 +566,7 @@ namespace RL_FUNCTIONS_PLUS {
 		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, src, d, o, r, c);
 	}
 
-	void DrawTextureProNoFlush(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
+	inline void DrawTextureProNoFlush(AtlasTexture t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
 		if (!t.currentAtlas) return;
 
 		Texture2D tex = t.currentAtlas->texture();
@@ -577,7 +580,7 @@ namespace RL_FUNCTIONS_PLUS {
 	}
 }
 
-AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
+inline AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
 	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
 		AtlasTexture t = atlas->add(image);
 		if (t.id) return t;
@@ -595,7 +598,7 @@ AtlasTexture LoadTextureOnAtlas(const Image& image, int sizeOfAtlas = DEFAULT_AT
 	return {};
 }
 
-AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
+inline AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas = DEFAULT_ATLAS_SIZE) {
 	for (Atlas* atlas : SIMPLEUI_GLOBAL::AtlasArray) {
 		AtlasTexture t = atlas->add(width, height);
 		if (t.id) return t;
@@ -613,7 +616,7 @@ AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAtlas = D
 	return {};
 }
 
-void UnloadTextureFromAtlas(AtlasTexture& t) {
+inline void UnloadTextureFromAtlas(AtlasTexture& t) {
 	if (t.currentAtlas and t.id) {
 		t.currentAtlas->remove(t);
 		t.currentAtlas = nullptr;
@@ -868,8 +871,8 @@ public:
 
 namespace Tasks {
 	class Task;
-	std::mutex TasksMutex;
-	std::vector<Task*> ActiveTasks;
+	inline std::mutex TasksMutex;
+	inline std::vector<Task*> ActiveTasks;
 
 	class Task {
 	public:
@@ -894,13 +897,13 @@ namespace Tasks {
 		~Task() {}
 	};
 
-	Task* Create(float TimeInSeconds, std::function<void(void)> f) {
+	inline Task* Create(float TimeInSeconds, std::function<void(void)> f) {
 		Task* t = new Task(TimeInSeconds, f);
 
 		return t;
 	}
 
-	void UpdateTasks(float dt) {
+	inline void UpdateTasks(float dt) {
 		TasksMutex.lock();
 		for (int i = 0; i < ActiveTasks.size();) {
 			if (ActiveTasks[i]->TimeLeft <= 0) {
@@ -1037,7 +1040,7 @@ namespace Animate {
 		Out,
 	};
 
-	float getTime(Function f, Ease e, float t) {
+	inline float getTime(Function f, Ease e, float t) {
 		t = std::clamp(t, 0.0f, 1.0f);
 
 		if (f == Linear) { return t; }
@@ -1088,9 +1091,9 @@ namespace Animate {
 	}
 
 	class Animation;
-	std::unordered_map<void*, Animation*> ActiveAnimations;
+	inline std::unordered_map<void*, Animation*> ActiveAnimations;
 
-	void deleteCurrent(void* ptr) {
+	inline void deleteCurrent(void* ptr) {
 		auto an = ActiveAnimations.find(ptr);
 		if (an != ActiveAnimations.end()) {
 			delete an->second;
@@ -1141,44 +1144,44 @@ namespace Animate {
 		Animation(SpecialVector2::num_y* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 	};
 
-	Animation* Create(int* ptr, float time, int endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(int* ptr, float time, int endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "int", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(float* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(float* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "float", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(Color* ptr, float time, Color endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(Color* ptr, float time, Color endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "color", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(SpecialVector2* ptr, float time, SpecialVector2 endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(SpecialVector2* ptr, float time, SpecialVector2 endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "vector2", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(SpecialVector2::num_x* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(SpecialVector2::num_x* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "numx", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
-	Animation* Create(SpecialVector2::num_y* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
+	inline Animation* Create(SpecialVector2::num_y* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
 		Animation* s = new Animation(ptr, time, endValue, "numy", func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 
-	void UpdateAnimations(float t) {
+	inline void UpdateAnimations(float t) {
 		for (auto it = ActiveAnimations.begin(); it != ActiveAnimations.end();) {
 			if (it->second->Update()) {
 				Animation* sas = it->second;
@@ -1284,49 +1287,8 @@ enum InstanceType : int {
 #endif
 };
 
-Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
-
-template<typename Z>
-inline void Delete(Z* ptr) {
-	if (!ptr) return;
-
-	if (ptr->Parent) {
-		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
-		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
-
-		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
-		if (it != ptr->Parent->childsAddedInFrame.end()) {
-			ptr->Parent->childsAddedInFrame.erase(it);
-		}
-
-		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
-
-		if (scrollChild and scrollChild != ptr) {
-			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
-		}
-
-		for (int i = 0; i < ptr->Parent->Children.size(); i++) {
-			if (ptr->Parent->Children[i] == ptr) {
-				ptr->Parent->Children.erase(ptr->Parent->Children.begin() + i);
-				break;
-			}
-		}
-	}
-
-	std::vector<Instance*> z = ptr->Children;
-	for (int i = 0; i < z.size(); i++) {
-		Instance* child = z[i];
-		Delete(child);
-	}
-
-	ptr->setParent(nullptr);
-	ptr->Children.clear();
-	z.clear();
-
-	delete ptr;
-	ptr = nullptr;
-}
-
+inline Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
+inline void Delete(Instance* ptr);
 inline void updateChildren(Instance*);
 
 template<typename F>
@@ -1377,9 +1339,11 @@ struct InstanceCallback {
 };
 
 class Instance {
+	friend void Delete(Instance* ptr);
 protected:
 	size_t lastUpdateFrame = 0;
 	bool updateWhenWillBeVisible = true;
+	bool __ParentObject{};
 
 	virtual void basicCloneOperation(Instance* copyfrom) {
 		this->Parent = nullptr;
@@ -1398,6 +1362,11 @@ protected:
 			c->Clone()->setParent(this);
 		}
 	}
+
+	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) { SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0); };
+	Instance(Instance* p);
+	Instance() = delete;
+	virtual ~Instance() {}
 private:
 	std::vector<std::pair<EventType, InstanceCallback>> events;
 public:
@@ -1423,14 +1392,6 @@ public:
 
 	std::string Name = "Instance";
 	InstanceType Class = InstanceType::INSTANCE;
-
-	bool __ParentObject{};
-
-	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) { SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0); };
-	Instance(Instance* p);
-	Instance() = delete;
-
-	virtual ~Instance() {}
 
 	void setParent(Instance* ptr);
 
@@ -1614,8 +1575,18 @@ public:
 	}
 };
 
-Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr) {
-	while (ptr->Parent != nullptr and !ptr->__ParentObject) {
+// Create or get root object. It always a default Instance named "Root"
+inline Instance* GetRoot() {
+	static Instance* root = nullptr;
+	if (!root) {
+		root = Instance::New(nullptr);
+		root->Name = "Root";
+	}
+	return root;
+}
+
+inline Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr) {
+	while (ptr->Parent != nullptr) {
 		if (ptr->Parent->Class == SCROLLFRAME) return ptr;
 		ptr = ptr->Parent;
 	}
@@ -1649,6 +1620,12 @@ inline bool Is2DInheritor(Instance* obj) {
 class StringValue : public Instance {
 	constexpr static const char* DefaultName = "StringValue";
 	constexpr static InstanceType DefaultClass = STRING_VALUE;
+protected:
+	StringValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	StringValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	StringValue() = delete;
+	~StringValue() override = default;
 public:
 	std::string Value = "";
 
@@ -1663,16 +1640,17 @@ public:
 		StringValue* i = new StringValue(parent);
 		return i;
 	}
-
-	StringValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	StringValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	StringValue() = delete;
 };
 
 class ObjectValue : public Instance {
 	constexpr static const char* DefaultName = "ObjectValue";
 	constexpr static InstanceType DefaultClass = OBJECT_VALUE;
+protected:
+	ObjectValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	ObjectValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	ObjectValue() = delete;
+	~ObjectValue() override = default;
 public:
 	Instance* Value = nullptr;
 
@@ -1687,17 +1665,18 @@ public:
 		ObjectValue* i = new ObjectValue(parent);
 		return i;
 	}
-
-	ObjectValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	ObjectValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	ObjectValue() = delete;
 };
 
 template<typename T>
 class AddressValue : public Instance {
 	constexpr static const char* DefaultName = "AddressValue";
 	constexpr static InstanceType DefaultClass = ADDRESS_VALUE;
+protected:
+	AddressValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	AddressValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	AddressValue() = delete;
+	~AddressValue() override = default;
 public:
 	T* Value = nullptr;
 
@@ -1712,16 +1691,17 @@ public:
 		AddressValue* i = new AddressValue(parent);
 		return i;
 	}
-
-	AddressValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	AddressValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	AddressValue() = delete;
 };
 
 class BoolValue : public Instance {
 	constexpr static const char* DefaultName = "BoolValue";
 	constexpr static InstanceType DefaultClass = BOOL_VALUE;
+protected:
+	BoolValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	BoolValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	BoolValue() = delete;
+	~BoolValue() override = default;
 public:
 	bool Value = 0;
 
@@ -1736,16 +1716,17 @@ public:
 		BoolValue* i = new BoolValue(parent);
 		return i;
 	}
-
-	BoolValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	BoolValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	BoolValue() = delete;
 };
 
 class IntValue : public Instance {
 	constexpr static const char* DefaultName = "IntValue";
 	constexpr static InstanceType DefaultClass = INT_VALUE;
+protected:
+	IntValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	IntValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	IntValue() = delete;
+	~IntValue() override = default;
 public:
 	int Value = 0;
 
@@ -1760,16 +1741,17 @@ public:
 		IntValue* i = new IntValue(parent);
 		return i;
 	}
-
-	IntValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	IntValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	IntValue() = delete;
 };
 
 class FloatValue : public Instance {
 	constexpr static const char* DefaultName = "FloatValue";
 	constexpr static InstanceType DefaultClass = FLOAT_VALUE;
+protected:
+	FloatValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	FloatValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	FloatValue() = delete;
+	~FloatValue() override = default;
 public:
 	float Value = 0.0f;
 
@@ -1784,16 +1766,17 @@ public:
 		FloatValue* i = new FloatValue(parent);
 		return i;
 	}
-
-	FloatValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	FloatValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	FloatValue() = delete;
 };
 
 class Vector2Value : public Instance {
 	constexpr static const char* DefaultName = "Vector2Value";
 	constexpr static InstanceType DefaultClass = VECTOR2_VALUE;
+protected:
+	Vector2Value(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	Vector2Value(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	Vector2Value() = delete;
+	~Vector2Value() override = default;
 public:
 	SpecialVector2 Value = { 0,0 };
 
@@ -1808,16 +1791,17 @@ public:
 		Vector2Value* i = new Vector2Value(parent);
 		return i;
 	}
-
-	Vector2Value(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	Vector2Value(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	Vector2Value() = delete;
 };
 
 class ColorValue : public Instance {
 	constexpr static const char* DefaultName = "ColorValue";
 	constexpr static InstanceType DefaultClass = COLOR_VALUE;
+protected:
+	ColorValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	ColorValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	ColorValue() = delete;
+	~ColorValue() override = default;
 public:
 	Color Value = { 255,255,255,255 };
 
@@ -1832,16 +1816,17 @@ public:
 		ColorValue* i = new ColorValue(parent);
 		return i;
 	}
-
-	ColorValue(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	ColorValue(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	ColorValue() = delete;
 };
 
 class Folder : public Instance {
 	constexpr static const char* DefaultName = "Folder";
 	constexpr static InstanceType DefaultClass = FOLDER;
+protected:
+	Folder(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
+	Folder(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
+
+	Folder() = delete;
+	~Folder() override = default;
 public:
 	Folder* Clone() const {
 		Folder* i = new Folder(*this);
@@ -1854,11 +1839,6 @@ public:
 		Folder* i = new Folder(parent);
 		return i;
 	}
-
-	Folder(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	Folder(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	Folder() = delete;
 };
 
 inline SpecialVector2 getCanvasRealPos(Object2D*);
@@ -1872,7 +1852,7 @@ enum SUI_EEC {
 	EEC_IF_DESCENDANT_HIGHER // Entered if current object is ancestor of highest ZIndex object on mouse
 };
 
-void DrawRoundRectBatch(const RoundRectData& r) {
+inline void DrawRoundRectBatch(const RoundRectData& r) {
 	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
 	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
 }
@@ -1954,7 +1934,7 @@ namespace RectGPU {
 	}
 }
 
-void FlushRectanglesBatch() {
+inline void FlushRectanglesBatch() {
 	auto& batch = SIMPLEUI_GLOBAL::CurrentRectanglesBatch;
 	if (batch.empty()) return;
 
@@ -2053,6 +2033,23 @@ protected:
 
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
 	}
+
+	Object2D(bool a) : Instance(a) { 
+		Name = DefaultName;
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	};
+
+	Object2D(Instance* p) : Instance(p) { 
+		Name = DefaultName;
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	}
+
+	Object2D() = delete;
+	~Object2D() override = default;
 public:
 	void VectorChanged() {
 		PosOrSizeChanged();
@@ -2294,25 +2291,9 @@ public:
 		Object2D* i = new Object2D(parent);
 		return i;
 	}
-
-	Object2D(bool a) : Instance(a) {
-		Name = DefaultName;
-		Class = DefaultClass;
-
-		updateAncestorWhichParentIsScroll();
-	};
-
-	Object2D(Instance* p) : Instance(p) {
-		Name = DefaultName;
-		Class = DefaultClass;
-
-		updateAncestorWhichParentIsScroll();
-	}
-
-	Object2D() = delete;
 };
 
-void updateObject2DVector(Object2D* o) {
+inline void updateObject2DVector(Object2D* o) {
 	o->VectorChanged();
 }
 
@@ -2334,8 +2315,6 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 				}
 				break;
 			}
-
-			if (obj->__ParentObject) break;
 
 			SpecialVector2 parentPos = {
 				obj->Position.x - obj->AnchorPosition.x * obj->Size.x,
@@ -2363,7 +2342,19 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 
 		return { {pos1.x * SIMPLEUI_GLOBAL::winWidth, pos1.y * SIMPLEUI_GLOBAL::winHeight}, {pos2.x * SIMPLEUI_GLOBAL::winWidth, pos2.y * SIMPLEUI_GLOBAL::winHeight} };
 	}
+protected:
+	LineEx(bool a) : Instance(a) {
+		Name = DefaultName;
+		Class = DefaultClass;
+	};
 
+	LineEx(Instance* p) : Instance(p) {
+		Name = DefaultName;
+		Class = DefaultClass;
+	}
+
+	LineEx() = delete;
+	~LineEx() override = default;
 public:
 	SpecialVector2 Position1{};
 	SpecialVector2 Position2{};
@@ -2400,11 +2391,6 @@ public:
 		LineEx* i = new LineEx(parent);
 		return i;
 	}
-
-	LineEx(bool a) : Instance(a) { Name = DefaultName; Class = DefaultClass; };
-	LineEx(Instance* p) : Instance(p) { Name = DefaultName; Class = DefaultClass; }
-
-	LineEx() = delete;
 };
 
 inline void updateChildren(Instance* parent) {
@@ -2682,6 +2668,18 @@ private:
 			}
 		}
 	}
+protected:
+	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; };
+	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; }
+
+	ScrollFrame() = delete;
+	~ScrollFrame() override {
+		for (auto& _ : Grid) {
+			for (auto& [_, s] : _.second) {
+				delete s;
+			}
+		}
+	}
 public:
 	void UpdateSectors(Instance* child) {
 		toUpdateSectors.insert({ child->uniqueID, child });
@@ -2951,19 +2949,6 @@ public:
 		ScrollFrame* i = new ScrollFrame(parent);
 		return i;
 	}
-
-	~ScrollFrame() {
-		for (auto& _ : Grid) {
-			for (auto& [_, s] : _.second) {
-				delete s;
-			}
-		}
-	}
-
-	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; };
-	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; }
-
-	ScrollFrame() = delete;
 };
 
 inline void Object2D::updateAncestorWhichParentIsScroll() {
@@ -3090,6 +3075,16 @@ class TextLabel : public Object2D {
 			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
+protected:
+	TextLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	TextLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+
+	TextLabel() = delete;
+	~TextLabel() override {
+		if (cachedText.id != 0) {
+			UnloadTextureFromAtlas(cachedText);
+		}
+	}
 public:
 	SUI_Text Text = "";
 	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
@@ -3174,15 +3169,6 @@ public:
 		TextLabel* i = new TextLabel(parent);
 		return i;
 	}
-
-	TextLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	TextLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-	~TextLabel() {
-		if (cachedText.id != 0) {
-			UnloadTextureFromAtlas(cachedText);
-		}
-	}
-	TextLabel() = delete;
 };
 
 enum TextBoxType {
@@ -3332,6 +3318,16 @@ class TextBox : public Object2D {
 
 		RL_FUNCTIONS_PLUS::EndTextureMode();
 		if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+	}
+protected:
+	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
+	TextBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; }
+
+	TextBox() = delete;
+	~TextBox() override {
+		if (cachedText.id != 0) {
+			UnloadTextureFromAtlas(cachedText);
+		}
 	}
 public:
 	Color CursorColor = { 0,0,0,255 };
@@ -4038,12 +4034,6 @@ public:
 		}
 	};
 
-	~TextBox() {
-		if (cachedText.id != 0) {
-			UnloadTextureFromAtlas(cachedText);
-		}
-	}
-
 	size_t size() {
 		updateCharOffsets();
 		return charOffsets.size();
@@ -4094,11 +4084,6 @@ public:
 		TextBox* i = new TextBox(parent);
 		return i;
 	}
-
-	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
-	TextBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; }
-
-	TextBox() = delete;
 };
 
 enum ImageOverlayFormat {
@@ -4119,6 +4104,16 @@ class ImageLabel : public Object2D {
 		if (tex.id == 0 and imageIfMemory.data and currentPair.empty()) {
 			tex = LoadTextureOnAtlas(imageIfMemory);
 		}
+	}
+protected:
+	ImageLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	ImageLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+
+	ImageLabel() = delete;
+
+	~ImageLabel() override {
+		if (tex.id != 0 and imageIfMemory.data) UnloadTextureFromAtlas(tex);
+		if (imageIfMemory.data) UnloadImage(imageIfMemory);
 	}
 public:
 	ImageOverlayFormat Overlay = ImageOverlayFormat::IMAGE_FIT;
@@ -4280,16 +4275,6 @@ public:
 		ImageLabel* i = new ImageLabel(parent);
 		return i;
 	}
-
-	ImageLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	ImageLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-
-	ImageLabel() = delete;
-
-	~ImageLabel() {
-		if (tex.id != 0 and imageIfMemory.data) UnloadTextureFromAtlas(tex);
-		if (imageIfMemory.data) UnloadImage(imageIfMemory);
-	}
 };
 
 class TextureLabel : public Object2D {
@@ -4310,6 +4295,15 @@ class TextureLabel : public Object2D {
 			texture = LoadTextureFromImage(img);
 			UnloadImage(img);
 		}
+	}
+protected:
+	TextureLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	TextureLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
+
+	TextureLabel() = delete;
+
+	~TextureLabel() override {
+		if (texture.id != 0 and owner) UnloadTexture(texture);
 	}
 public:
 	float Rotation = 0;
@@ -4392,18 +4386,9 @@ public:
 		return i;
 	}
 
-	static TextureLabel* New(TextureLabel* parent = nullptr) {
+	static TextureLabel* New(Instance* parent = nullptr) {
 		TextureLabel* i = new TextureLabel(parent);
 		return i;
-	}
-
-	TextureLabel(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
-	TextureLabel(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
-
-	TextureLabel() = delete;
-
-	~TextureLabel() {
-		if (texture.id != 0 and owner) UnloadTexture(texture);
 	}
 };
 
@@ -4466,7 +4451,50 @@ inline void Instance::setParent(Instance* ptr) {
 	}
 }
 
-Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
+inline void Delete(Instance* ptr) {
+	if (!ptr) return;
+	if (ptr == GetRoot()) {
+		std::cout << YELLOW_ANSI << "Root object has resistance from deleting" << DEFAULT_ANSI << std::endl;
+		return;
+	}
+
+	if (ptr->Parent) {
+		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
+		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
+
+		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
+		if (it != ptr->Parent->childsAddedInFrame.end()) {
+			ptr->Parent->childsAddedInFrame.erase(it);
+		}
+
+		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
+
+		if (scrollChild and scrollChild != ptr) {
+			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+		}
+
+		for (int i = 0; i < ptr->Parent->Children.size(); i++) {
+			if (ptr->Parent->Children[i] == ptr) {
+				ptr->Parent->Children.erase(ptr->Parent->Children.begin() + i);
+				break;
+			}
+		}
+	}
+
+	std::vector<Instance*> z = ptr->Children;
+	for (int i = 0; i < z.size(); i++) {
+		Instance* child = z[i];
+		Delete(child);
+	}
+
+	ptr->setParent(nullptr);
+	ptr->Children.clear();
+	z.clear();
+
+	delete ptr;
+}
+
+inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 	if (p) {
@@ -4754,7 +4782,7 @@ inline void DrawFrame(Instance* StartInstance) {
 inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
 	static TextLabel* labelFPS = nullptr;
 	if (!labelFPS) {
-		labelFPS = new TextLabel(s);
+		labelFPS = TextLabel::New(s);
 		labelFPS->BackgroundTransparency = 1;
 		labelFPS->TextSize = -1;
 		new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, []() {
@@ -4777,14 +4805,14 @@ inline void toggleFPS(Instance* s, Color textColor = { 0,0,0,255 }) {
 }
 
 inline namespace debug {
-	int typeFPS[4]{
+	inline int typeFPS[4]{
 		60,
 		144,
 		-1,
 		0
 	};
-	Color DefaultDebugColor = { 153, 204, 255, 255 };
-	Color typeColor[9] = {
+	inline Color DefaultDebugColor = { 153, 204, 255, 255 };
+	inline Color typeColor[9] = {
 		DefaultDebugColor,
 		{255,255,255,255},
 		{255,102,102,255},
@@ -4795,14 +4823,14 @@ inline namespace debug {
 		{153,153,255,255},
 		{0,51,102,255}
 	};
-	int currentColor = 0;
+	inline int currentColor = 0;
 
-	ScrollFrame* console = nullptr;
-	std::vector<std::string> textQueue;
+	inline ScrollFrame* console = nullptr;
+	inline std::vector<std::string> textQueue;
 
-	void print(const std::string& text) {
+	inline void print(const std::string& text) {
 		if (!console) { textQueue.push_back(text); return; }
-		TextLabel* sas = new TextLabel(console);
+		TextLabel* sas = TextLabel::New(console);
 		sas->BackgroundTransparency = 1;
 		sas->TextColor = typeColor[currentColor]; sas->TextSize = -1;
 		sas->FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
@@ -4816,21 +4844,21 @@ inline namespace debug {
 		console->CanvasPosition.y = console->CanvasSize.y - 1;
 	}
 
-	Object2D* debugMenu = nullptr;
-	bool Animations = true; // SOON
-	int currentFPSindex = 3;
-	bool lowGraphicsMode = false; // SOON
+	inline Object2D* debugMenu = nullptr;
+	inline bool Animations = true; // SOON
+	inline int currentFPSindex = 3;
+	inline bool lowGraphicsMode = false; // SOON
 
-	int getCurrentMaxFPS() {
+	inline int getCurrentMaxFPS() {
 		return typeFPS[currentFPSindex] == 0 ? GetMonitorRefreshRate(GetCurrentMonitor()) : typeFPS[currentFPSindex];
 	}
 
-	Object2D* treeFrame = nullptr;
-	Instance* currentInstance = nullptr;
+	inline Object2D* treeFrame = nullptr;
+	inline Instance* currentInstance = nullptr;
 
-	void initDebug(Instance* s) {
+	inline void initDebug(Instance* s) {
 		if (debugMenu) return;
-		debugMenu = new Object2D(s);
+		debugMenu = Object2D::New(s);
 		debugMenu->Size = SpecialVector2{ 1,1 };
 		debugMenu->BackgroundTransparency = 0.9;
 		debugMenu->BackgroundColor = DefaultDebugColor;
@@ -4838,7 +4866,7 @@ inline namespace debug {
 		debugMenu->ZIndex = 100000;
 		debugMenu->Name = "debugMenu";
 
-		TextLabel* lowerName = new TextLabel(debugMenu);
+		TextLabel* lowerName = TextLabel::New(debugMenu);
 		lowerName->Name = "debugName";
 		lowerName->SetText("(F2) Debug Menu");
 		lowerName->BackgroundColor = { 0,0,0,255 };
@@ -4854,7 +4882,7 @@ inline namespace debug {
 		*       Settings        *
 		************************/
 
-		Object2D* SettingsFrame = new Object2D(debugMenu);
+		Object2D* SettingsFrame = Object2D::New(debugMenu);
 		SettingsFrame->Size = SpecialVector2{ 0.4, 0.25 };
 		SettingsFrame->Position = SpecialVector2{ 0.04, 0.03 };
 		SettingsFrame->BackgroundTransparency = 0.2;
@@ -4863,7 +4891,7 @@ inline namespace debug {
 		SettingsFrame->BorderThickness = 3;
 		SettingsFrame->Name = "SettingsFrame";
 
-		TextLabel* SettingsName = new TextLabel(SettingsFrame);
+		TextLabel* SettingsName = TextLabel::New(SettingsFrame);
 		SettingsName->Name = "SettingsName";
 		SettingsName->SetText("Settings");
 		SettingsName->TextSize = -1;
@@ -4876,7 +4904,7 @@ inline namespace debug {
 		SettingsName->BackgroundColor = { 0,0,0,255 };
 		SettingsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 
-		TextLabel* AnimLabel = new TextLabel(SettingsFrame);
+		TextLabel* AnimLabel = TextLabel::New(SettingsFrame);
 		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
 		AnimLabel->BackgroundTransparency = 1;
 		AnimLabel->BackgroundColor = { 0,0,0,255 };
@@ -4888,7 +4916,7 @@ inline namespace debug {
 		AnimLabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		AnimLabel->Name = "animLabel";
 
-		TextLabel* AnimButton = new TextLabel(SettingsFrame);
+		TextLabel* AnimButton = TextLabel::New(SettingsFrame);
 		AnimButton->Size = SpecialVector2{ 0.19, 0.15 };
 		AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
 		AnimButton->Position = SpecialVector2{ 0.8, 0.125 };
@@ -4902,7 +4930,7 @@ inline namespace debug {
 		AnimButton->AddEvent(MOUSE_CLICK, [](Instance* t) {Animations = !Animations; }, MOUSE_LEFT);
 		AnimButton->Roundness = 0.3;
 
-		TextLabel* LGMlabel = new TextLabel(SettingsFrame);
+		TextLabel* LGMlabel = TextLabel::New(SettingsFrame);
 		LGMlabel->Size = SpecialVector2{ 0.7, 0.2 };
 		LGMlabel->BackgroundTransparency = 1;
 		LGMlabel->BackgroundColor = { 0,0,0,255 };
@@ -4914,7 +4942,7 @@ inline namespace debug {
 		LGMlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		LGMlabel->Name = "LGMlabel";
 
-		TextLabel* LGMbutton = new TextLabel(SettingsFrame);
+		TextLabel* LGMbutton = TextLabel::New(SettingsFrame);
 		LGMbutton->Size = SpecialVector2{ 0.19, 0.15 };
 		LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
 		LGMbutton->Position = SpecialVector2{ 0.8, 0.325 };
@@ -4928,7 +4956,7 @@ inline namespace debug {
 		LGMbutton->AddEvent(MOUSE_CLICK, [](Instance* t) {lowGraphicsMode = !lowGraphicsMode; }, MOUSE_LEFT);
 		LGMbutton->Roundness = 0.3;
 
-		TextLabel* FPSlabel = new TextLabel(SettingsFrame);
+		TextLabel* FPSlabel = TextLabel::New(SettingsFrame);
 		FPSlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		FPSlabel->BackgroundTransparency = 1;
 		FPSlabel->BackgroundColor = { 0,0,0,255 };
@@ -4940,14 +4968,15 @@ inline namespace debug {
 		FPSlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSlabel->Name = "FPSlabel";
 
-		Object2D* FPSframe = new TextLabel(SettingsFrame);
+		Object2D* FPSframe = TextLabel::New(SettingsFrame);
 		FPSframe->Size = SpecialVector2{ 0.3, 0.2 };
 		FPSframe->BackgroundTransparency = 1;
 		FPSframe->BackgroundColor = { 0,0,0,255 };
 		FPSframe->Roundness = 0.3;
 		FPSframe->Position = SpecialVector2{ 0.7, 0.5 };
 		FPSframe->Name = "FPSlabel";
-		TextLabel* FPSleft = new TextLabel(FPSframe);
+
+		TextLabel* FPSleft = TextLabel::New(FPSframe);
 		FPSleft->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSleft->BackgroundTransparency = 1;
 		FPSleft->BackgroundColor = { 0,0,0,255 };
@@ -4960,7 +4989,8 @@ inline namespace debug {
 		FPSleft->Name = "FPSleft";
 		FPSleft->Active = true;
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
-		TextLabel* FPSquantity = new TextLabel(FPSframe);
+
+		TextLabel* FPSquantity = TextLabel::New(FPSframe);
 		FPSquantity->Size = SpecialVector2{ 0.5, 1 };
 		FPSquantity->BackgroundTransparency = 1;
 		FPSquantity->BackgroundColor = { 0,0,0,255 };
@@ -4971,7 +5001,8 @@ inline namespace debug {
 		FPSquantity->TextColor = DefaultDebugColor;
 		FPSquantity->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		FPSquantity->Name = "FPSquantity";
-		TextLabel* FPSright = new TextLabel(FPSframe);
+
+		TextLabel* FPSright = TextLabel::New(FPSframe);
 		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
 		FPSright->BackgroundTransparency = 1;
 		FPSright->BackgroundColor = { 0,0,0,255 };
@@ -4985,7 +5016,7 @@ inline namespace debug {
 		FPSright->Active = true;
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
 
-		TextLabel* Colorlabel = new TextLabel(SettingsFrame);
+		TextLabel* Colorlabel = TextLabel::New(SettingsFrame);
 		Colorlabel->Size = SpecialVector2{ 0.65, 0.2 };
 		Colorlabel->BackgroundTransparency = 1;
 		Colorlabel->BackgroundColor = { 0,0,0,255 };
@@ -4997,14 +5028,15 @@ inline namespace debug {
 		Colorlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 		Colorlabel->Name = "Colorlabel";
 
-		Object2D* Colorframe = new TextLabel(SettingsFrame);
+		Object2D* Colorframe = TextLabel::New(SettingsFrame);
 		Colorframe->Size = SpecialVector2{ 0.3, 0.2 };
 		Colorframe->BackgroundTransparency = 1;
 		Colorframe->BackgroundColor = { 0,0,0,255 };
 		Colorframe->Roundness = 0.3;
 		Colorframe->Position = SpecialVector2{ 0.7, 0.7 };
 		Colorframe->Name = "Colorframe";
-		TextLabel* Colorleft = new TextLabel(Colorframe);
+
+		TextLabel* Colorleft = TextLabel::New(Colorframe);
 		Colorleft->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorleft->BackgroundTransparency = 1;
 		Colorleft->BackgroundColor = { 0,0,0,255 };
@@ -5017,13 +5049,15 @@ inline namespace debug {
 		Colorleft->Name = "Colorleft";
 		Colorleft->Active = true;
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
-		Object2D* ColorBlock = new TextLabel(Colorframe);
+
+		Object2D* ColorBlock = TextLabel::New(Colorframe);
 		ColorBlock->Size = SpecialVector2{ 0.5, 0.8 };
 		ColorBlock->BackgroundColor = DefaultDebugColor;
 		ColorBlock->Position = SpecialVector2{ 0.25, 0.1 };
 		ColorBlock->Roundness = 0.3;
 		ColorBlock->Name = "ColorBlock";
-		TextLabel* Colorright = new TextLabel(Colorframe);
+
+		TextLabel* Colorright = TextLabel::New(Colorframe);
 		Colorright->Size = SpecialVector2{ 0.25, 0.6 };
 		Colorright->BackgroundTransparency = 1;
 		Colorright->BackgroundColor = { 0,0,0,255 };
@@ -5041,7 +5075,7 @@ inline namespace debug {
 		*       logs      *
 		******************/
 
-		Object2D* LogsFrame = new Object2D(debugMenu);
+		Object2D* LogsFrame = Object2D::New(debugMenu);
 		LogsFrame->Size = SpecialVector2{ 0.4, 0.6 };
 		LogsFrame->Position = SpecialVector2{ 0.04, 0.3 };
 		LogsFrame->BackgroundTransparency = 0.2;
@@ -5050,7 +5084,7 @@ inline namespace debug {
 		LogsFrame->BorderThickness = 3;
 		LogsFrame->Name = "LogsFrame";
 
-		TextLabel* LogsName = new TextLabel(LogsFrame);
+		TextLabel* LogsName = TextLabel::New(LogsFrame);
 		LogsName->Name = "LogsName";
 		LogsName->SetText("Logs");
 		LogsName->TextSize = -1;
@@ -5062,7 +5096,7 @@ inline namespace debug {
 		LogsName->BackgroundTransparency = 1;
 		LogsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
 
-		console = new ScrollFrame(LogsFrame);
+		console = ScrollFrame::New(LogsFrame);
 		console->BackgroundColor = { 0,0,0,255 };
 		console->BackgroundTransparency = 0.1;
 		console->BorderThickness = 3;
@@ -5082,7 +5116,7 @@ inline namespace debug {
 		* Objects hierarchy *
 		********************/
 
-		treeFrame = new Object2D(debugMenu);
+		treeFrame = Object2D::New(debugMenu);
 		treeFrame->Size = SpecialVector2{ 0.49, 0.87 };
 		treeFrame->Position = SpecialVector2{ 0.47, 0.03 };
 		treeFrame->BackgroundTransparency = 0.2;
@@ -5091,7 +5125,8 @@ inline namespace debug {
 		treeFrame->BorderThickness = 3;
 		treeFrame->Name = "treeFrame";
 		treeFrame->Active = true;
-		TextLabel* treeName = new TextLabel(treeFrame);
+
+		TextLabel* treeName = TextLabel::New(treeFrame);
 		treeName->Name = "treeName";
 		treeName->SetText("Objects hierarchy");
 		treeName->TextSize = -1;
@@ -5102,21 +5137,24 @@ inline namespace debug {
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
 		treeName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
-		Object2D* manageMenu = new Object2D(treeFrame);
+
+		Object2D* manageMenu = Object2D::New(treeFrame);
 		manageMenu->Name = "manageMenu";
 		manageMenu->Position = SpecialVector2{ 0, 0.06 };
 		manageMenu->Size = SpecialVector2{ 1, 0.05 };
 		manageMenu->BorderThickness = 3;
 		manageMenu->BackgroundTransparency = 1;
 		manageMenu->BorderColor = DefaultDebugColor;
-		ScrollFrame* way = new ScrollFrame(manageMenu);
+
+		ScrollFrame* way = ScrollFrame::New(manageMenu);
 		way->Name = "directory";
 		way->BackgroundTransparency = 1;
 		way->Position = SpecialVector2{ 0, 0 };
 		way->Size = SpecialVector2{ 1, 1 };
 		way->Direction = 'X';
 		way->SliderColor = { 255,255,255,255 };
-		ScrollFrame* treeScroll = new ScrollFrame(treeFrame);
+
+		ScrollFrame* treeScroll = ScrollFrame::New(treeFrame);
 		treeScroll->Name = "treeScroll";
 		treeScroll->Position = SpecialVector2{ 0, 0.12 };
 		treeScroll->Size = SpecialVector2{ 0.5, 0.88 };
@@ -5190,12 +5228,11 @@ inline namespace debug {
 				while (obj != nullptr) {
 					objects.push_back(obj);
 
-					if (obj->__ParentObject) break;
 					obj = obj->Parent;
 				}
 
 				for (int i = objects.size() - 1; i >= 0; i--) {
-					TextLabel* element = new TextLabel(way);
+					TextLabel* element = TextLabel::New(way);
 					element->Name = objects[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = typeColor[currentColor];
@@ -5205,7 +5242,7 @@ inline namespace debug {
 					element->Active = true;
 
 					if (i != 0) {
-						TextLabel* element2 = new TextLabel(way);
+						TextLabel* element2 = TextLabel::New(way);
 						element2->Name = ">";
 						element2->BackgroundTransparency = 1;
 						element2->TextColor = typeColor[currentColor];
@@ -5228,7 +5265,7 @@ inline namespace debug {
 				for (int i = 0; i < currentInstance->Children.size(); i++) {
 					if (currentInstance->Children[i]->Name == "debugMenu") { dec = true; continue; }
 					objects2.push_back(currentInstance->Children[i]);
-					TextLabel* element = new TextLabel(treeScroll);
+					TextLabel* element = TextLabel::New(treeScroll);
 					element->Name = currentInstance->Children[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = typeColor[currentColor];
@@ -5248,7 +5285,7 @@ inline namespace debug {
 		currentInstance = s;
 	}
 
-	void toggleDebug(Instance* s) {
+	inline void toggleDebug(Instance* s) {
 		if (!debugMenu) {
 			initDebug(s);
 		}
@@ -5264,25 +5301,25 @@ inline void updateSignals() {
 	}
 }
 
-void SUI_SetWindowSize(int newW, int newH) {
+inline void SUI_SetWindowSize(int newW, int newH) {
 	SIMPLEUI_GLOBAL::changeWindowSize = SpecialVector2{ (float)newW, (float)newH };
 	SIMPLEUI_GLOBAL::changeWindowSizeB = true;
 }
 
-void SUI_SetWindowPosition(int newX, int newY) {
+inline void SUI_SetWindowPosition(int newX, int newY) {
 	SetWindowPosition(newX, newY);
 }
 
 inline SpecialVector2 windowMinimalSize = { 0,0 };
 
-void SUI_SetMinimalWindowSize(int newX, int newY) {
+inline void SUI_SetMinimalWindowSize(int newX, int newY) {
 	windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
 }
 
-bool ALLOW_DEBUG = true;
-bool ALLOW_FPS = true;
+inline bool ALLOW_DEBUG = true;
+inline bool ALLOW_FPS = true;
 
-void UpdateHigher(Instance* StartInstance) {
+inline void UpdateHigher(Instance* StartInstance) {
 	Object2D* best = nullptr;
 	int maxDepth = -1;
 
@@ -5386,7 +5423,11 @@ void UpdateHigher(Instance* StartInstance) {
 	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
-void start(Instance& StartInstance, Vector3 inf, const char* name, const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
+inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
+	if (!StartInstance) {
+		std::cout << RED_ANSI << "start() requires root object. GetRoot() to get root object" << DEFAULT_ANSI << std::endl;
+		return;
+	}
 	SetConsoleUTF8();
 	SetConfigFlags(flags);
 
@@ -5406,8 +5447,8 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 	SetExitKey(KEY_NULL);
 
-	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 100); // Basic font 1
-	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 50); // Basic font 2
+	createFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
+	createFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
 	SIMPLEUI_GLOBAL::TextureRoundnessShader = loadNewShader("", "simpleUI Shaders/texture_roundness.frag"); // Basic shader 1
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
 
@@ -5466,35 +5507,44 @@ void start(Instance& StartInstance, Vector3 inf, const char* name, const char* i
 
 		if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty)) {
 			previousMousePosition = SIMPLEUI_GLOBAL::mousePosition;
-			UpdateHigher(&StartInstance);
+			UpdateHigher(StartInstance);
 		}
 
-		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(&StartInstance, { 125, 180, 220, 255 }); }
-		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(&StartInstance); }
+		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(StartInstance, { 125, 180, 220, 255 }); }
+		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(StartInstance); }
 		if (IsKeyPressed(KEY_F3)) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
 
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
-		DrawFrame(&StartInstance);
+		DrawFrame(StartInstance);
 
 		SIMPLEUI_GLOBAL::sceneDirty = false;
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;
 	}
 
-	/*
+	if (GetRoot()) {
+		GetRoot()->deleteAllChildren();
+	}
 
-	for (int i = 0; i < StartInstance.Children.size();) {
-		Instance* child = StartInstance.Children[i];
-		Delete(child);
+	for (auto pair : SIMPLEUI_GLOBAL::loadedImages) {
+		RAYLIB_FUNCTIONAL::UnloadImage(pair.second.first);
+		UnloadTextureFromAtlas(pair.second.second);
 	}
 
 	for (auto it : Fonts) {
 		UnloadFont(it.second);
 	}
 
+	for (auto atlas : SIMPLEUI_GLOBAL::AtlasArray) {
+		delete atlas;
+	}
+
 	Fonts.clear();
 
-	*/
+	SIMPLEUI_GLOBAL::deletedObjectsByID.clear();
+	SIMPLEUI_GLOBAL::AtlasTextureId = 1;
+	SIMPLEUI_GLOBAL::currentUniqueObjectID = 1;
+	SIMPLEUI_GLOBAL::framesSinceStart = 0;
 
 	CloseWindow();
 }

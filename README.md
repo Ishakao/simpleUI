@@ -28,16 +28,26 @@
 <p>Example of Hello World with bounce animations and TextBox:</p>
 
 ```
+#define EXCLUDE_SIMPLEUI_EXTENSION
+#define SIMPLEUI_IMPLEMENTATION
 #include <simpleUI.h>
 
 int main() {
-	Instance* Root = new Instance(true); // True in constructor means that the object is rooted and it has no parents.
-	Root->Name = "Root";
+	Instance* Root = GetRoot();
 
-	TextLabel* Hello = new TextLabel(Root);
+	loadImage("bg_image", "textures/test.jpg");
+
+	ImageLabel* Background = ImageLabel::New(Root);
+	Background->Size = { 1,1 };
+	Background->BackgroundColor = { 15, 24, 36, 255 };
+	Background->setImage("bg_image");
+	Background->Overlay = IMAGE_STRETCH;
+	Background->ImageTransparency = 0.9;
+
+	TextLabel* Hello = TextLabel::New(Background);
 	Hello->AnchorPosition = { 0.5, 0.5 };
 	Hello->Position = { 0.5, 0.5 };
-	Hello->PositionOFFSET = { -350, 0 };
+	Hello->PositionOFFSET = { -200, 0 };
 	Hello->SizeOFFSET = { 340, 80 };
 	Hello->FontFace = "SegoeB";
 	Hello->Text = " Hello ";
@@ -49,14 +59,16 @@ int main() {
 	Hello->BackgroundColor = { 0, 204, 0, 255 };
 	Hello->AddEvent(MOUSE_ENTER, [Hello](Instance* th) {
 		Animate::Create(&Hello->SizeOFFSET, 0.4, { 400, 100 }, Animate::Bounce, Animate::Out);
+		Animate::Create(&Hello->Roundness, 0.4, 1, Animate::Bounce, Animate::Out);
 	});
 	Hello->AddEvent(MOUSE_LEAVE, [Hello](Instance* th) {
 		Animate::Create(&Hello->SizeOFFSET, 0.4, { 340, 80 }, Animate::Bounce, Animate::Out);
+		Animate::Create(&Hello->Roundness, 0.4, 0.2, Animate::Bounce, Animate::Out);
 	});
-	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) {Hello->Text += "1";}, LEFT);
-	Hello->AddEvent(TEXT_CHANGED, [Hello](Instance* th) {std::cout << !Hello->Text << std::endl;}, LEFT);
+	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) { Hello->Text += "1"; }, MOUSE_LEFT);
+	Hello->AddEvent(TEXT_CHANGED, [Hello](Instance* th) { std::cout << Hello->Text.c_str() << std::endl; });
 
-	TextBox* World = new TextBox(Root);
+	TextBox* World = TextBox::New(Background);
 	World->AnchorPosition = { 0.5, 0.5 };
 	World->Position = { 0.5, 0.5 };
 	World->PositionOFFSET = { 200, 0 };
@@ -82,14 +94,13 @@ int main() {
 		std::cout << "Child added " << child->Name << std::endl;
 	});
 	World->AddEvent(TEXT_CHANGED, [World](Instance* th) { std::cout << !World->Text << std::endl; });
-	Hello->setParent(World);
 
 	ALLOW_FPS = true; // Allows to show FPS label on F1
 	ALLOW_DEBUG = true; // Allows to show debug menu on F2
 
 	addFontToQueqe("SegoeB", "Fonts/segoeuib.ttf", 60); // Loading custom font
 	SUI_SetMinimalWindowSize(600, 400);
-	start(*Root, { 1200, 800, -1 }, "Test program", "Icon.ico", FLAG_WINDOW_RESIZABLE);
+	start(Root, { 1200, 800, -1 }, "Test program", "textures/test.jpg", FLAG_WINDOW_RESIZABLE);
 }
 ```
 

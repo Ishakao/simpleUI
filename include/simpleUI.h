@@ -4443,8 +4443,8 @@ inline void Instance::setParent(Instance* ptr) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
 	if (Parent != nullptr) {
-		for (int i = 0; i < Children.size(); i++) {
-			if (Children[i] == this) {
+		for (int i = 0; i < Parent->Children.size(); i++) {
+			if (Parent->Children[i] == this) {
 				Parent->Children.erase(Parent->Children.begin() + i);
 				break;
 			}

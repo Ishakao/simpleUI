@@ -2318,6 +2318,9 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
+		eventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
 		if (!Visible) {
 			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
 			return;
@@ -2328,9 +2331,6 @@ public:
 		if (updateChildrenZIndex) {
 			updateChildren(this);
 		}
-
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();
@@ -2870,10 +2870,6 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		if (!Visible) {
-			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
-			return;
-		}
 		if (CanvasSize.x < 0) CanvasSize.x = 0; if (CanvasSize.y < 0) CanvasSize.y = 0;
 		if (Direction != 'X' and Direction != 'Y' and Direction != 'B') {
 			Direction = 'Y';
@@ -2881,6 +2877,11 @@ public:
 
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (!Visible) {
+			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			return;
+		}
 
 		SpecialVector2 oldSize = RealSize;
 
@@ -4017,13 +4018,14 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
 		if (!(SIMPLEUI_GLOBAL::FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
-
-		inputHandler();
 
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
+
+		inputHandler();
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();
@@ -4528,7 +4530,7 @@ inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::cu
 	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 	if (p) {
 		p->Children.push_back(this);
-		p->childsAddedInFrame.insert({ p->uniqueID, this });
+		p->childsAddedInFrame.insert({ uniqueID, this });
 		p->updateChildrenZIndex = true;
 
 		ScrollFrame* prob = (p->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(p) : (ScrollFrame*)nullptr);
@@ -4556,119 +4558,119 @@ inline void Object2D::eventHandler() {
 
 	for (const auto& [type, func, mouse] : events) {
 		switch (type) {
-		case TICK: {
-			func(this);
-			break;
-		} case MOUSE_ENTER: {
-			bool entered = false;
-			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
+			case TICK: {
+				func(this);
+				break;
+			} case MOUSE_ENTER: {
+				bool entered = false;
+				if (!mouseCalculated) {
+					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
 
-			if (mouseOnObject) {
+				if (mouseOnObject) {
+					bool enterAllowed = (
+						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+						);
+
+					if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+						entered = true;
+					}
+				}
+
+				if (entered and !MouseEntered) {
+					MouseEntered = true;
+					func(this);
+				}
+				break;
+			} case MOUSE_LEAVE: {
+				if (!mouseCalculated) {
+					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
 				bool enterAllowed = (
 					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
 					);
 
-				if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
-					entered = true;
-				}
-			}
-
-			if (entered and !MouseEntered) {
-				MouseEntered = true;
-				func(this);
-			}
-			break;
-		} case MOUSE_LEAVE: {
-			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			bool enterAllowed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
-				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
-				);
-
-			if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
-				MouseEntered = false;
-				func(this);
-			}
-			break;
-		} case MOUSE_CLICK: {
-			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-				func(this);
-			}
-			break;
-		} case MOUSE_HOLD_START: {
-			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-				if (mouse == MOUSE_LEFT) {
-					startedOnObject1 = true;
-				} else if (mouse == MOUSE_RIGHT) {
-					startedOnObject2 = true;
-				} else if (mouse == MOUSE_MIDDLE) {
-					startedOnObject3 = true;
-				}
-				func(this);
-			}
-
-			if (mouse == MOUSE_LEFT) {
-				hasStartHold1 = true;
-			} else if (mouse == MOUSE_RIGHT) {
-				hasStartHold2 = true;
-			} else if (mouse == MOUSE_MIDDLE) {
-				hasStartHold3 = true;
-			}
-
-			break;
-		} case MOUSE_HOLD_END: {
-			if (IsMouseButtonReleased(mouse)) {
-				if (mouse == MOUSE_LEFT) {
-					mouseReleased1 = func;
-				} else if (mouse == MOUSE_RIGHT) {
-					mouseReleased2 = func;
-				} else if (mouse == MOUSE_MIDDLE) {
-					mouseReleased3 = func;
-				}
-			}
-			break;
-		} case CHILD_ADDED: {
-			for (auto& [id, ptr] : childsAddedInFrame) {
-				func(this, ptr);
-			}
-			break;
-		} case CHILD_REMOVED: {
-			for (auto& [id, ptr] : childsRemovedInFrame) {
-				func(this, ptr);
-			}
-			break;
-		} case TEXT_CHANGED: {
-			if (Class == TEXTLABEL) {
-				if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+				if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
+					MouseEntered = false;
 					func(this);
 				}
-			} else if (Class == TEXTBOX) {
-				if (static_cast<TextBox*>(this)->Text.isChanged()) {
+				break;
+			} case MOUSE_CLICK: {
+				if (!mouseCalculated) {
+					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
 					func(this);
 				}
+				break;
+			} case MOUSE_HOLD_START: {
+				if (!mouseCalculated) {
+					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+					if (mouse == MOUSE_LEFT) {
+						startedOnObject1 = true;
+					} else if (mouse == MOUSE_RIGHT) {
+						startedOnObject2 = true;
+					} else if (mouse == MOUSE_MIDDLE) {
+						startedOnObject3 = true;
+					}
+					func(this);
+				}
+
+				if (mouse == MOUSE_LEFT) {
+					hasStartHold1 = true;
+				} else if (mouse == MOUSE_RIGHT) {
+					hasStartHold2 = true;
+				} else if (mouse == MOUSE_MIDDLE) {
+					hasStartHold3 = true;
+				}
+
+				break;
+			} case MOUSE_HOLD_END: {
+				if (IsMouseButtonReleased(mouse)) {
+					if (mouse == MOUSE_LEFT) {
+						mouseReleased1 = func;
+					} else if (mouse == MOUSE_RIGHT) {
+						mouseReleased2 = func;
+					} else if (mouse == MOUSE_MIDDLE) {
+						mouseReleased3 = func;
+					}
+				}
+				break;
+			} case CHILD_ADDED: {
+				for (auto& [id, ptr] : childsAddedInFrame) {
+					func(this, ptr);
+				}
+				break;
+			} case CHILD_REMOVED: {
+				for (auto& [id, ptr] : childsRemovedInFrame) {
+					func(this, ptr);
+				}
+				break;
+			} case TEXT_CHANGED: {
+				if (Class == TEXTLABEL) {
+					if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				} else if (Class == TEXTBOX) {
+					if (static_cast<TextBox*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				}
+				break;
 			}
-			break;
-		}
 		}
 	}
 

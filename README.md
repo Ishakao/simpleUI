@@ -6,7 +6,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
 </p>
 
-<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of Raylib for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, an advanced event system, and native shader integration.</p>
+<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of Raylib for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, runtime texture atlasses, an advanced event system, and great batcher.</p>
 
 <h2>Features</h2>
 <ul>
@@ -14,6 +14,7 @@
     <li><strong>Z-Index &amp; Layer Management:</strong> Strict control over rendering order and input handling priority.</li>
     <li><strong>Optimization:</strong> This library contains a huge number of optimizations, and even a large project can produce thousands of FPS.</li>
     <li><strong>Efficient Event System:</strong> Optimized detection and spatial filtering for interactive elements under the cursor.</li>
+    <li><strong>Animations (including a lot of math functions), Changed Signals and Tasks.</li>
 </ul>
 
 <h2>Dependencies</h2>
@@ -21,6 +22,7 @@
     <li>C++20 compliant compiler or higher</li>
     <li>Raylib</li>
     <li>stb_image_write (included header implementation)</li>
+    <li>stb_rect_pack (included header implementation)</li>
 </ul>
 
 <h2>Quick Start</h2>
@@ -114,6 +116,11 @@ int main() {
     <li><strong><code>TextBox</code></strong>: Inherits from <code>Object2D</code>. Can receive input from user. Also have a lot of features.</li>
     <li><strong><code>ScrollFrame</code></strong>: Inherits from <code>Object2D</code>. Represents canvas with different directions.</li>
     <li><strong><code>ImageLabel</code></strong>: Inherits from <code>Object2D</code>. Represents object that can show images.</li>
-    <li><strong><code>TextureLabel</code></strong>: Inherits from <code>Object2D</code>. Represents object that can show textures</li>
+    <li><strong><code>TextureLabel</code></strong>: Inherits from <code>Object2D</code>. Represents object that can show textures.</li>
 </ul>
-<h2>Every object has a huge amount of customization which allow you to make the interface interesting and individual</h2>
+<h3>Additional classes from SUIextension.h</h3>
+<ul>
+    <li><strong><code>GraphBuilder</code></strong>: Graphs builder with linear and columnar styles.</li>
+    <li><strong><code>ToggleSwitcher</code></strong>: Simple toggle button with roundness, borders and animations.</li>
+</ul>
+<h4>Every object has a huge amount of customization which allow you to make the interface interesting and individual</h4>

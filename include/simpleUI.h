@@ -25,6 +25,7 @@
 // Improved performance on big quantity of rectangles															//
 // Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
 // Textures draw optimization. Batching for textures and rectangles												//
+// Local Rotation and Origin support																			//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -40,16 +41,16 @@
 // use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation
 
 #ifdef SIMPLEUI_IMPLEMENTATION
-	#define STB_IMAGE_WRITE_IMPLEMENTATION
-	#define STB_RECT_PACK_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_RECT_PACK_IMPLEMENTATION
 #endif
 
 #include "stb_image_write.h"
 #include "stb_rect_pack.h"
 
 namespace RAYLIB_FUNCTIONAL {
-	#include <raylib.h>
-	#include <rlgl.h>
+#include <raylib.h>
+#include <rlgl.h>
 }
 
 using RAYLIB_FUNCTIONAL::Vector2;
@@ -351,6 +352,15 @@ namespace SIMPLEUI_GLOBAL {
 	inline std::vector<Atlas*> AtlasArray;
 	inline size_t AtlasTextureId = 1;
 	inline unsigned int CurrentBatchTexture = 0;
+
+	inline std::vector<Instance*> WillDelete;
+	inline void CollectDeadObjects() {
+		for (int i = 0; i < WillDelete.size(); i++) {
+			delete WillDelete[i];
+		}
+
+		WillDelete.clear();
+	}
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -398,20 +408,30 @@ namespace RL_FUNCTIONS_PLUS {
 		RAYLIB_FUNCTIONAL::EndScissorMode();
 	}
 
-	inline void DrawLineEx(Vector2 s, Vector2 e, float t, Color c) {
+	inline void DrawLineEx(Vector2 s, Vector2 e, float t, Color c, Vector2 Pos, Vector2 Origin, float Rotation) {
 		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::DrawLineEx(s, e, t, c);
+		float rad = Rotation * DEG2RAD;
+		float cs = cosf(rad);
+		float sn = sinf(rad);
+		float ox = Pos.x + Origin.x;
+		float oy = Pos.y + Origin.y;
+		auto rot = [&](Vector2 p) {
+			float dx = p.x - ox;
+			float dy = p.y - oy;
+			return Vector2{ ox + dx * cs - dy * sn, oy + dx * sn + dy * cs };
+		};
+		RAYLIB_FUNCTIONAL::DrawLineEx(rot(s), rot(e), t, c);
 	}
 
 	inline void DrawTexturePro(Texture2D texture, Vector2 position, Vector2 size, Rectangle source, Rectangle destination, Vector2 origin, float rotation, Color color, float roundness) {
-		const RoundRectData rec = { 
-			position, 
-			size, 
+		const RoundRectData rec = {
+			position,
+			size,
 			color, {255,255,255,255},
-			0.0f, roundness, 1.0f, 
-			0, 
-			rotation, 
-			{ origin.x * destination.x, origin.y * destination.y },
+			0.0f, roundness, 1.0f,
+			0,
+			rotation,
+			origin,
 			texture,
 			source,
 			destination
@@ -458,19 +478,19 @@ class Atlas {
 	int padding;
 	bool pleaseGenerateMipmaps = false;
 public:
-	Texture2D texture() { 
+	Texture2D texture() {
 		if (pleaseGenerateMipmaps) {
 			GenTextureMipmaps(&tex.texture);
 			pleaseGenerateMipmaps = false;
 		}
-		return tex.texture; 
+		return tex.texture;
 	}
-	RenderTexture2D renderTexture() { 
+	RenderTexture2D renderTexture() {
 		if (pleaseGenerateMipmaps) {
 			GenTextureMipmaps(&tex.texture);
 			pleaseGenerateMipmaps = false;
 		}
-		return tex; 
+		return tex;
 	}
 
 	Rectangle source(const AtlasTexture& t) const {
@@ -554,7 +574,7 @@ public:
 		if (t.currentAtlas != this) return;
 		RAYLIB_FUNCTIONAL::rlSetBlendFactorsSeparate(RL_ONE, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
 		RL_FUNCTIONS_PLUS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_CUSTOM_SEPARATE);
-		RAYLIB_FUNCTIONAL::DrawRectangle(t.position.x, t.position.y, t.size.x + padding * 2, t.size.y + padding * 2, BLANK);
+		RAYLIB_FUNCTIONAL::DrawRectangle(t.position.x-1, t.position.y-1, t.size.x + padding * 2, t.size.y + padding * 2, BLANK);
 		RL_FUNCTIONS_PLUS::EndBlendMode();
 	}
 
@@ -588,7 +608,7 @@ public:
 };
 
 namespace RL_FUNCTIONS_PLUS {
-	inline void DrawTexturePro(AtlasTexture t, Vector2 pos, Vector2 size, Rectangle s, Rectangle d, Vector2 o, float r, Color c, float rot) {
+	inline void DrawTexturePro(AtlasTexture t, Vector2 pos, Vector2 size, Rectangle s, Rectangle d, Vector2 o, float r, Color c, float rou) {
 		if (!t.currentAtlas) return;
 
 		Texture2D tex = t.currentAtlas->texture();
@@ -598,7 +618,7 @@ namespace RL_FUNCTIONS_PLUS {
 		src.y = tex.height - src.y - src.height;
 		src.height = -src.height;
 
-		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, pos, size, src, d, o, r, c, rot);
+		RL_FUNCTIONS_PLUS::DrawTexturePro(tex, pos, size, src, d, o, r, c, rou);
 	}
 }
 
@@ -949,7 +969,7 @@ struct IChangedSignal {
 
 inline std::vector<IChangedSignal*> ActiveSignals;
 template <typename T>
-class ChangedSignal : IChangedSignal {
+class ChangedSignal : public IChangedSignal {
 public:
 	std::string SignalClass = "~";
 
@@ -1123,6 +1143,15 @@ namespace Animate {
 		}
 	}
 
+	enum class AnimationType {
+		INT = 0,
+		FLOAT,
+		COLOR,
+		VECTOR2,
+		NUMX,
+		NUMY
+	};
+
 	class Animation {
 		void* ptr = nullptr;
 		Function func = Linear;
@@ -1143,62 +1172,72 @@ namespace Animate {
 		SpecialVector2 startValueV{};
 		SpecialVector2 endValueV{};
 
-		const char* type = "int";
+		AnimationType type = AnimationType::INT;
 	public:
 		std::function<void(void)> Completed = []() {};
 
 		bool Update() {
 			currentTime += SIMPLEUI_GLOBAL::dt;
 			if (currentTime >= endTime) {
-				if (type == "int") { *(int*)ptr = endValueI; } else if (type == "float") { *(float*)ptr = endValueF; } else if (type == "color") { *(Color*)ptr = endValueC; } else if (type == "vector2") { *(SpecialVector2*)ptr = endValueV; } else if (type == "numx") { *(SpecialVector2::num_x*)ptr = endValueNX; } else if (type == "numy") { *(SpecialVector2::num_y*)ptr = endValueNY; }
+				if (type == AnimationType::INT) { *(int*)ptr = endValueI; }
+				else if (type == AnimationType::FLOAT) { *(float*)ptr = endValueF; }
+				else if (type == AnimationType::COLOR) { *(Color*)ptr = endValueC; }
+				else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = endValueV; }
+				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = endValueNX; }
+				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
-			if (type == "int") { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); } else if (type == "float") { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); } else if (type == "color") { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); } else if (type == "vector2") { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; } else if (type == "numx") { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); } else if (type == "numy") { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
+			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::FLOAT) { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::COLOR) { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
 			return false;
 		}
 
 		Animation() = delete;
-		Animation(int* ptr, float time, int endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(float* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(Color* ptr, float time, Color endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2* ptr, float time, SpecialVector2 endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2::num_x* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2::num_y* ptr, float time, float endValue, const char* type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(int* ptr, float time, int endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(float* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(Color* ptr, float time, Color endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2* ptr, float time, SpecialVector2 endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_x* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_y* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 	};
 
 	inline Animation* Create(int* ptr, float time, int endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "int", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::INT, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 	inline Animation* Create(float* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "float", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::FLOAT, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 	inline Animation* Create(Color* ptr, float time, Color endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "color", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::COLOR, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 	inline Animation* Create(SpecialVector2* ptr, float time, SpecialVector2 endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "vector2", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::VECTOR2, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 	inline Animation* Create(SpecialVector2::num_x* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "numx", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::NUMX, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
 	inline Animation* Create(SpecialVector2::num_y* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
 		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, "numy", func, ease);
+		Animation* s = new Animation(ptr, time, endValue, AnimationType::NUMY, func, ease);
 		ActiveAnimations.insert({ ptr, s });
 		return s;
 	}
@@ -1362,6 +1401,7 @@ struct InstanceCallback {
 
 class Instance {
 	friend void Delete(Instance* ptr);
+	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
 protected:
 	size_t lastUpdateFrame = 0;
 	bool updateWhenWillBeVisible = true;
@@ -2106,14 +2146,14 @@ protected:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
 	}
 
-	Object2D(bool a) : Instance(a) { 
+	Object2D(bool a) : Instance(a) {
 		Name = DefaultName;
 		Class = DefaultClass;
 
 		updateAncestorWhichParentIsScroll();
 	};
 
-	Object2D(Instance* p) : Instance(p) { 
+	Object2D(Instance* p) : Instance(p) {
 		Name = DefaultName;
 		Class = DefaultClass;
 
@@ -2150,7 +2190,8 @@ public:
 	SpecialVector2 SizeOFFSET{ 0, 0, this };
 
 	float Rotation = 0; // WIP
-	SpecialVector2 Origin = { 0,0 }; // WIP
+	SpecialVector2 Origin = { 0.5,0.5 }; // WIP
+	SpecialVector2 OriginOFFSET = { 0, 0 }; // WIP
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -2256,16 +2297,54 @@ public:
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
 	}
 
+	// Get bounds of background (Requires calculated size and position)
+	Rectangle GetRotatedBounds() {
+		Vector2 pos = RealPos;
+		Vector2 size = RealSize;
+		if (Rotation == 0.0f) return { pos.x, pos.y, size.x, size.y };
+
+		float sn = sinf(Rotation * DEG2RAD);
+		float cs = cosf(Rotation * DEG2RAD);
+		float ox = pos.x + Origin.x;
+		float oy = pos.y + Origin.y;
+
+		float xs[4] = { pos.x, pos.x + size.x, pos.x + size.x, pos.x };
+		float ys[4] = { pos.y, pos.y, pos.y + size.y, pos.y + size.y };
+
+		float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+
+		for (int i = 0; i < 4; i++) {
+			float dx = xs[i] - ox;
+			float dy = ys[i] - oy;
+			float rx = ox + dx * cs - dy * sn;
+			float ry = oy + dx * sn + dy * cs;
+			minX = std::min(minX, rx);
+			maxX = std::max(maxX, rx);
+			minY = std::min(minY, ry);
+			maxY = std::max(maxY, ry);
+		}
+
+		return { minX, minY, maxX - minX, maxY - minY };
+	}
+
 	virtual void Draw() {
 		if (Visible) {
-			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
-			const RoundRectData rec = { RealPos, RealSize, BackgroundColor, BorderColor, BackgroundTransparency, Roundness, BorderTransparency, BorderThickness, Rotation, {Origin.x * RealSize.x, Origin.y * RealSize.y} };
+			const RoundRectData rec = { 
+				RealPos, RealSize, 
+				BackgroundColor, BorderColor, 
+				BackgroundTransparency, Roundness, BorderTransparency, 
+				BorderThickness, 
+				Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
 
 			DrawRoundRectBatch(rec);
 		}
@@ -2296,8 +2375,8 @@ public:
 		float py = pos.y;
 
 		if (Rotation != 0.0f) {
-			float ox = RealPos.x + Origin.x * RealSize.x;
-			float oy = RealPos.y + Origin.y * RealSize.y;
+			float ox = RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x;
+			float oy = RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y;
 			float sn = sinf(Rotation * DEG2RAD);
 			float cs = cosf(Rotation * DEG2RAD);
 			float dx = pos.x - ox;
@@ -2438,7 +2517,7 @@ public:
 	void Draw() {
 		if (Visible and Thickness) {
 			auto [pos1, pos2] = getRealObject2Dposition();
-			DrawLineEx(pos1, pos2, Thickness, LineColor);
+			RL_FUNCTIONS_PLUS::DrawLineEx(pos1, pos2, Thickness, LineColor, { 0,0 }, { 0, 0 }, 0);
 		}
 	}
 
@@ -2838,7 +2917,11 @@ public:
 
 					SpecialVector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
 					SpecialVector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
-					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+					Vector2 o = {
+						Origin.x * RealSize.x + OriginOFFSET.x,
+						Origin.y * RealSize.y + OriginOFFSET.y
+					};
+					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation);
 				}
 			}
 
@@ -2858,9 +2941,14 @@ public:
 						sliderX += (RealSize.x - sliderWidth) * (currentScrollX / maxScrollX);
 					}
 
+					Vector2 o = {
+						  Origin.x * RealSize.x + OriginOFFSET.x,
+						  Origin.y * RealSize.y + OriginOFFSET.y
+					};
+
 					SpecialVector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
 					SpecialVector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
-					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) });
+					RL_FUNCTIONS_PLUS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation);
 				}
 			}
 		}
@@ -2895,7 +2983,7 @@ public:
 			}
 		}
 
-		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) { 
+		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) {
 			for (Instance* child : Children) {
 				UpdateSectors(child);
 			}
@@ -3168,6 +3256,7 @@ public:
 	int Spacing = SIMPLEUI_GLOBAL::defaultSpacing;
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
+	bool RoundText = true;
 
 	const SUI_Text& GetText() const { // Deprecated functional. Now you can use ***->Text;
 		return Text;
@@ -3187,20 +3276,21 @@ public:
 
 	void Draw() override {
 		if (Visible) {
-			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			Object2D::Draw();
+
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
-
-			Object2D::Draw();
 
 			bool dirtyCondition = Text.isChanged() or FontFace.isChanged();
 			Text.restate();
 			FontFace.restate();
 
-			if (lastParams.z != textParams.z or (cachedText.id == 0 and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
+			if (lastParams.z != textParams.z or ((cachedText.id == 0 or !cachedText.currentAtlas) and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
 				updateTexture();
 			} else {
 				if (std::fabsf(lastRealSize.x - RealSize.x) >= TextTextureUpdateAspect or std::fabsf(lastRealSize.y - RealSize.y) >= TextTextureUpdateAspect) {
@@ -3218,7 +3308,12 @@ public:
 				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
 				Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(newSize.x), std::floorf((float)newSize.y) };
 
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, 0);
+				Vector2 o = {
+					Origin.x * RealSize.x + OriginOFFSET.x,
+					Origin.y * RealSize.y + OriginOFFSET.y
+				};
+
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
 			}
 		}
 	}
@@ -3346,13 +3441,17 @@ class TextBox : public Object2D {
 		float reqX = (Type != TextBoxType::TEXTBOX_RESIZING) ? std::max(newSize.x, RealSize.x) : newSize.x;
 		float reqY = (Type != TextBoxType::TEXTBOX_RESIZING) ? std::max(newSize.y, RealSize.y) : newSize.y;
 
-		if (lastNewSize.x < reqX or lastNewSize.y < reqY) {
+		if (lastNewSize.x < reqX or lastNewSize.y < reqY or !cachedText.currentAtlas) {
 			if (cachedText.id != 0) {
 				UnloadTextureFromAtlas(cachedText);
 			}
-
 			cachedText = LoadRenderTextureOnAtlas(reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect);
 			lastNewSize = SpecialVector2{ reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect };
+		}
+
+		if (!cachedText.currentAtlas) {
+			std::cout << RED_ANSI << "Atlas was nullptr" << DEFAULT_ANSI << std::endl;
+			return;
 		}
 
 		bool hadClip = !clipStack.empty();
@@ -3431,14 +3530,16 @@ public:
 
 	void Draw() override {
 		if (!Visible) return;
-		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
-			return;
-		}
 
 		Object2D::Draw();
+
+		Rectangle b = GetRotatedBounds();
+		if (b.x + b.width + BorderThickness < 0
+			or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+			or b.y + b.height + BorderThickness < 0
+			or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			return;
+		}
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged();
 
@@ -3483,17 +3584,28 @@ public:
 				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, clr, 0);
+			Vector2 o = {
+					Origin.x * RealSize.x + OriginOFFSET.x,
+					Origin.y * RealSize.y + OriginOFFSET.y
+			};
+
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, clr, 0);
 		}
 
 		if (Text.empty()) {
 			if (CursorVisible and SIMPLEUI_GLOBAL::FocusedTextBox == this) {
 				if (textParams.z > 1) {
 					float sizeY = textParams.z;
-					DrawLineEx(
+
+					Vector2 o = {
+						Origin.x * RealSize.x + OriginOFFSET.x,
+						Origin.y * RealSize.y + OriginOFFSET.y
+					};
+
+					RL_FUNCTIONS_PLUS::DrawLineEx(
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y - viewY },
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY },
-						CursorSize, CursorColor
+						CursorSize, CursorColor, RealPos, o, Rotation
 					);
 				}
 			}
@@ -3538,10 +3650,15 @@ public:
 				yOffset = totalH - singleH;
 			}
 
-			DrawLineEx(
+			Vector2 o = {
+				Origin.x * RealSize.x + OriginOFFSET.x,
+				Origin.y * RealSize.y + OriginOFFSET.y
+			};
+
+			RL_FUNCTIONS_PLUS::DrawLineEx(
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY },
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset + size.y - viewY },
-				CursorSize, CursorColor
+				CursorSize, CursorColor, RealPos, o, Rotation
 			);
 		}
 	}
@@ -3596,10 +3713,24 @@ public:
 				float viewX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.x : 0.0f;
 				float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
 
+				Vector2 o = {
+					Origin.x * RealSize.x + OriginOFFSET.x,
+					Origin.y * RealSize.y + OriginOFFSET.y
+				};
+
+				float rad = -Rotation * DEG2RAD;
+				float cs = cosf(rad);
+				float sn = sinf(rad);
+				float px = RealPos.x + o.x;
+				float py = RealPos.y + o.y;
+				float mdx = SIMPLEUI_GLOBAL::mousePosition.x - px;
+				float mdy = SIMPLEUI_GLOBAL::mousePosition.y - py;
+				Vector2 localMouse = { px + mdx * cs - mdy * sn, py + mdx * sn + mdy * cs };
+
 				float textStartX = RealPos.x + textParams.x;
 				float textStartY = RealPos.y + textParams.y;
-				float clickX = SIMPLEUI_GLOBAL::mousePosition.x - textStartX + viewX;
-				float clickY = SIMPLEUI_GLOBAL::mousePosition.y - textStartY + viewY;
+				float clickX = localMouse.x - textStartX + viewX;
+				float clickY = localMouse.y - textStartY + viewY;
 
 				int currentLine = clickY / textParams.z + 1;
 
@@ -4192,9 +4323,6 @@ public:
 	float ImageTransparency = 0.0f;
 	Color ImageColor = { 255,255,255,255 };
 	bool RoundImage = false;
-	float Rotation = 0;
-	SpecialVector2 Origin = { 0, 0 };
-	SpecialVector2 OriginOFFSET = { 0, 0 };
 
 	void setImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
@@ -4209,19 +4337,21 @@ public:
 
 	void Draw() override {
 		if (!Visible) return;
+
 		Object2D::Draw();
 
-		if (RealPos.x + RealSize.x + BorderThickness < 0
-			or RealPos.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-			or RealPos.y + RealSize.y + BorderThickness < 0
-			or RealPos.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+		Rectangle b = GetRotatedBounds();
+		if (b.x + b.width + BorderThickness < 0
+			or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+			or b.y + b.height + BorderThickness < 0
+			or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 			return;
 		}
 
 		updateTexture();
 
 		if (tex.id) {
-			Rectangle destRec = { RealPos.x + OriginOFFSET.x + RealSize.x * Origin.x, RealPos.y + OriginOFFSET.y + RealSize.y * Origin.y, RealSize.x, RealSize.y };
+			Rectangle destRec = { RealPos.x, RealPos.y, RealSize.x, RealSize.y };
 			Rectangle srcRec = { 0, 0, tex.size.x, tex.size.y };
 
 			if (Overlay == ImageOverlayFormat::IMAGE_FIT) {
@@ -4338,9 +4468,8 @@ protected:
 		if (texture.id != 0 and owner) UnloadTexture(texture);
 	}
 public:
-	float Rotation = 0;
 	Color TextureColor = { 255,255,255,255 };
-	SpecialVector2 Origin = { 0, 0 };
+	bool RoundTexture = false;
 
 	void Draw() override {
 		if (Visible) {
@@ -4359,10 +4488,11 @@ public:
 				}
 			}
 
-			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
@@ -4370,7 +4500,7 @@ public:
 				return;
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(texture, RealPos, RealSize, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, Origin, Rotation, TextureColor, 0);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(texture, RealPos, RealSize, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, { Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y }, Rotation, TextureColor, {RoundTexture ? Roundness : 0});
 		}
 	}
 
@@ -4512,17 +4642,21 @@ inline void Delete(Instance* ptr) {
 		}
 	}
 
+	ptr->setParent(nullptr);
+
 	std::vector<Instance*> z = ptr->Children;
 	for (int i = 0; i < z.size(); i++) {
 		Instance* child = z[i];
 		Delete(child);
 	}
 
-	ptr->setParent(nullptr);
 	ptr->Children.clear();
 	z.clear();
 
-	delete ptr;
+	if (ptr == SIMPLEUI_GLOBAL::FocusedTextBox) SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
+	if (ptr == SIMPLEUI_GLOBAL::higherObject) SIMPLEUI_GLOBAL::higherObject = nullptr;
+
+	SIMPLEUI_GLOBAL::WillDelete.push_back(ptr);
 }
 
 inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
@@ -4558,119 +4692,119 @@ inline void Object2D::eventHandler() {
 
 	for (const auto& [type, func, mouse] : events) {
 		switch (type) {
-			case TICK: {
-				func(this);
-				break;
-			} case MOUSE_ENTER: {
-				bool entered = false;
-				if (!mouseCalculated) {
-					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-					mouseCalculated = true;
-				}
+		case TICK: {
+			func(this);
+			break;
+		} case MOUSE_ENTER: {
+			bool entered = false;
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
 
-				if (mouseOnObject) {
-					bool enterAllowed = (
-						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
-						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
-						);
-
-					if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
-						entered = true;
-					}
-				}
-
-				if (entered and !MouseEntered) {
-					MouseEntered = true;
-					func(this);
-				}
-				break;
-			} case MOUSE_LEAVE: {
-				if (!mouseCalculated) {
-					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-					mouseCalculated = true;
-				}
-
+			if (mouseOnObject) {
 				bool enterAllowed = (
 					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
 					);
 
-				if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
-					MouseEntered = false;
-					func(this);
+				if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+					entered = true;
 				}
-				break;
-			} case MOUSE_CLICK: {
-				if (!mouseCalculated) {
-					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-					mouseCalculated = true;
-				}
-
-				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-					func(this);
-				}
-				break;
-			} case MOUSE_HOLD_START: {
-				if (!mouseCalculated) {
-					mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
-					mouseCalculated = true;
-				}
-
-				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-					if (mouse == MOUSE_LEFT) {
-						startedOnObject1 = true;
-					} else if (mouse == MOUSE_RIGHT) {
-						startedOnObject2 = true;
-					} else if (mouse == MOUSE_MIDDLE) {
-						startedOnObject3 = true;
-					}
-					func(this);
-				}
-
-				if (mouse == MOUSE_LEFT) {
-					hasStartHold1 = true;
-				} else if (mouse == MOUSE_RIGHT) {
-					hasStartHold2 = true;
-				} else if (mouse == MOUSE_MIDDLE) {
-					hasStartHold3 = true;
-				}
-
-				break;
-			} case MOUSE_HOLD_END: {
-				if (IsMouseButtonReleased(mouse)) {
-					if (mouse == MOUSE_LEFT) {
-						mouseReleased1 = func;
-					} else if (mouse == MOUSE_RIGHT) {
-						mouseReleased2 = func;
-					} else if (mouse == MOUSE_MIDDLE) {
-						mouseReleased3 = func;
-					}
-				}
-				break;
-			} case CHILD_ADDED: {
-				for (auto& [id, ptr] : childsAddedInFrame) {
-					func(this, ptr);
-				}
-				break;
-			} case CHILD_REMOVED: {
-				for (auto& [id, ptr] : childsRemovedInFrame) {
-					func(this, ptr);
-				}
-				break;
-			} case TEXT_CHANGED: {
-				if (Class == TEXTLABEL) {
-					if (static_cast<TextLabel*>(this)->Text.isChanged()) {
-						func(this);
-					}
-				} else if (Class == TEXTBOX) {
-					if (static_cast<TextBox*>(this)->Text.isChanged()) {
-						func(this);
-					}
-				}
-				break;
 			}
+
+			if (entered and !MouseEntered) {
+				MouseEntered = true;
+				func(this);
+			}
+			break;
+		} case MOUSE_LEAVE: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
+			bool enterAllowed = (
+				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+				);
+
+			if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
+				MouseEntered = false;
+				func(this);
+			}
+			break;
+		} case MOUSE_CLICK: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
+			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+				func(this);
+			}
+			break;
+		} case MOUSE_HOLD_START: {
+			if (!mouseCalculated) {
+				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseCalculated = true;
+			}
+
+			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+				if (mouse == MOUSE_LEFT) {
+					startedOnObject1 = true;
+				} else if (mouse == MOUSE_RIGHT) {
+					startedOnObject2 = true;
+				} else if (mouse == MOUSE_MIDDLE) {
+					startedOnObject3 = true;
+				}
+				func(this);
+			}
+
+			if (mouse == MOUSE_LEFT) {
+				hasStartHold1 = true;
+			} else if (mouse == MOUSE_RIGHT) {
+				hasStartHold2 = true;
+			} else if (mouse == MOUSE_MIDDLE) {
+				hasStartHold3 = true;
+			}
+
+			break;
+		} case MOUSE_HOLD_END: {
+			if (IsMouseButtonReleased(mouse)) {
+				if (mouse == MOUSE_LEFT) {
+					mouseReleased1 = func;
+				} else if (mouse == MOUSE_RIGHT) {
+					mouseReleased2 = func;
+				} else if (mouse == MOUSE_MIDDLE) {
+					mouseReleased3 = func;
+				}
+			}
+			break;
+		} case CHILD_ADDED: {
+			for (auto& [id, ptr] : childsAddedInFrame) {
+				func(this, ptr);
+			}
+			break;
+		} case CHILD_REMOVED: {
+			for (auto& [id, ptr] : childsRemovedInFrame) {
+				func(this, ptr);
+			}
+			break;
+		} case TEXT_CHANGED: {
+			if (Class == TEXTLABEL) {
+				if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+					func(this);
+				}
+			} else if (Class == TEXTBOX) {
+				if (static_cast<TextBox*>(this)->Text.isChanged()) {
+					func(this);
+				}
+			}
+			break;
+		}
 		}
 	}
 
@@ -5473,7 +5607,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
-inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
+inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 0 }, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
 	if (!StartInstance) {
 		std::cout << RED_ANSI << "start() requires root object. GetRoot() to get root object" << DEFAULT_ANSI << std::endl;
 		return;
@@ -5567,6 +5701,8 @@ inline void start(Instance* StartInstance=nullptr, Vector3 inf={1280, 720, 0}, c
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
 		DrawFrame(StartInstance);
+
+		SIMPLEUI_GLOBAL::CollectDeadObjects();
 
 		SIMPLEUI_GLOBAL::sceneDirty = false;
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;

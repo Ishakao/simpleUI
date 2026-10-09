@@ -99,7 +99,7 @@ class GraphBuilder : public Object2D {
 							GraphRealPos.y + GraphRealSize.y * (1 - (current - gmin) / (gmax - gmin)) + yof
 						};
 
-						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color);
+						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0);
 					} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 						long double current = seq->sequence[i];
 						float height = GraphRealSize.y * ((current - lmin) / (lmax - lmin)); if (height <= 0) height = 1;
@@ -413,14 +413,15 @@ public:
 
 	void Draw() override {
 		if (Visible) {
-			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			Object2D::Draw();
+
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
-
-			Object2D::Draw();
 
 			if (GraphType != lG) {
 				updateGlobalMinMax();
@@ -514,10 +515,15 @@ public:
 				}
 			}
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, Origin, Rotation, { 255,255,255,255 }, Roundness);
+			Vector2 o = {
+				std::floorf(Origin.x * RealSize.x) + OriginOFFSET.x,
+				std::floorf(Origin.y * RealSize.y) + OriginOFFSET.y
+			};
+
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, Roundness);
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, { 0,0 }, 0, c, Roundness);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, { 0,0 }, 0, c, Roundness);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, Roundness);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, Roundness);
 			}
 		}
 	}
@@ -574,7 +580,6 @@ class ToggleSwitcher : public Object2D {
 			if (canBePressed) {
 				if (ClickOnSlider) {
 					float RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
-					Rectangle rec = { RealBallPosX + SliderBorderThickness, RealPos.y + SliderBorderThickness, RealSize.y - SliderBorderThickness * 2, RealSize.y - SliderBorderThickness * 2 };
 
 					float size = RealSize.y - SliderBorderThickness * 2.0f;
 					float halfSize = size / 2.0f;
@@ -583,8 +588,23 @@ class ToggleSwitcher : public Object2D {
 					float cx = RealBallPosX + SliderBorderThickness + halfSize;
 					float cy = RealPos.y + SliderBorderThickness + halfSize;
 
-					float dx = std::abs(SIMPLEUI_GLOBAL::mousePosition.x - cx);
-					float dy = std::abs(SIMPLEUI_GLOBAL::mousePosition.y - cy);
+					float px = RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x;
+					float py = RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y;
+
+					float mx = SIMPLEUI_GLOBAL::mousePosition.x;
+					float my = SIMPLEUI_GLOBAL::mousePosition.y;
+
+					if (Rotation != 0.0f) {
+						float sn = sinf(-Rotation * DEG2RAD);
+						float cs = cosf(-Rotation * DEG2RAD);
+						float rx = mx - px;
+						float ry = my - py;
+						mx = px + rx * cs - ry * sn;
+						my = py + rx * sn + ry * cs;
+					}
+
+					float dx = std::abs(mx - cx);
+					float dy = std::abs(my - cy);
 
 					float diffX = dx - halfSize + r;
 					float diffY = dy - halfSize + r;
@@ -630,20 +650,33 @@ public:
 
 	void Draw() override {
 		if (Visible) {
-			if (RealPos.x + RealSize.x + BorderThickness < 0
-				or RealPos.x - RealSize.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or RealPos.y + RealSize.y + BorderThickness < 0
-				or RealPos.y - RealSize.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+			Object2D::Draw();
+
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
 				return;
 			}
 
-			Object2D::Draw();
-
-			int RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
+			float RealBallPosX = RealPos.x + (RealSize.x - RealSize.y) * currentSliderPos;
 			Vector2 RealPos1 = { RealBallPosX, std::ceil(RealPos.y) };
 			Vector2 RealSize1 = { RealSize.y, RealSize.y };
 
-			const RoundRectData rec = { RealPos1, RealSize1, SliderColor, SliderBorderColor, SliderTransparency, Roundness, SliderBorderTransparency, SliderBorderThickness };
+			Vector2 pivot = {
+				RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x,
+				RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y
+			};
+
+			const RoundRectData rec = {
+				RealPos1, RealSize1,
+				SliderColor, SliderBorderColor,
+				SliderTransparency, Roundness, SliderBorderTransparency,
+				SliderBorderThickness,
+				Rotation,
+				{ pivot.x - RealPos1.x, pivot.y - RealPos1.y }
+			};
 
 			DrawRoundRectBatch(rec);
 		}

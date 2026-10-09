@@ -49,7 +49,7 @@ class GraphBuilder : public Object2D {
 	void updateTexture() {
 		int quantity = sequences.size();
 		Vector2 GraphRealPos = { 0,0 };
-		Vector2 GraphRealSize = RealSize;
+		Vector2 GraphRealSize = cachedTexture.size;
 		if (cachedTexture.id) {
 			bool hadClip = !clipStack.empty();
 			Clip current;
@@ -57,16 +57,26 @@ class GraphBuilder : public Object2D {
 
 			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
 
+			int xof = cachedTexture.position.x;
+			int yof = cachedTexture.position.y;
+
 			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
 			cachedTexture.currentAtlas->blankArea(cachedTexture);
+			RL_FUNCTIONS_PLUS::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
+
+			auto norm = [](long double v, long double lo, long double hi) {
+				long double d = hi - lo;
+				if (d <= 0) return 0.5L;
+				long double t = (v - lo) / d;
+				if (t < 0) return 0.0L;
+				if (t > 1) return 1.0L;
+				return t;
+			};
 
 			size_t gsize = 0;
 			for (auto [id, seq] : sequences) {
 				if (gsize < seq->sequence.size()) gsize = seq->sequence.size();
 			}
-
-			int xof = cachedTexture.position.x;
-			int yof = cachedTexture.position.y;
 
 			for (auto [id, seq] : sequences) {
 				if (seq->sequence.size() < 2) continue;
@@ -91,12 +101,12 @@ class GraphBuilder : public Object2D {
 						long double prev = seq->sequence[i - 1];
 
 						Vector2 start = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)(i - 1) / (seq->sequence.size() - 1))) * xAspect + xof,
-							GraphRealPos.y + GraphRealSize.y * (1 - (prev - gmin) / (gmax - gmin)) + yof
+							(GraphRealPos.x + GraphRealSize.x * ((float)(i - 1) / (lsize - 1))) * xAspect + xof,
+							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(prev, gmin, gmax)) + yof
 						};
 						Vector2 end = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)(i) / (seq->sequence.size() - 1))) * xAspect + xof,
-							GraphRealPos.y + GraphRealSize.y * (1 - (current - gmin) / (gmax - gmin)) + yof
+							(GraphRealPos.x + GraphRealSize.x * ((float)i / (lsize - 1))) * xAspect + xof,
+							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(current, gmin, gmax)) + yof
 						};
 
 						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0);
@@ -122,6 +132,8 @@ class GraphBuilder : public Object2D {
 				}
 			}
 
+			FlushRectanglesBatch();
+			RL_FUNCTIONS_PLUS::EndScissorMode();
 			RL_FUNCTIONS_PLUS::EndTextureMode();
 
 			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
@@ -423,9 +435,7 @@ public:
 				return;
 			}
 
-			if (GraphType != lG) {
-				updateGlobalMinMax();
-			}
+			bool mm = GraphType != lG;
 
 			bool conditionToUpdate = (GraphDirty) or (Spacing != lS) or (ColumnsRoundness != lR) or (ColumnarDisplayID != lC) or (GraphType != lG) or (lIX != IndependentValuesX) or (lIY != IndependentValuesY);
 			lS = Spacing;
@@ -435,7 +445,9 @@ public:
 			lIX = IndependentValuesX;
 			lIY = IndependentValuesY;
 
-			if (GraphDirty) updateGlobalMinMax();
+			if (mm or GraphDirty) {
+				updateGlobalMinMax();
+			}
 
 			Vector2 leftSizeFull = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / 4 };
 
@@ -497,13 +509,13 @@ public:
 
 			*/
 
-			Rectangle sourceRec = { 0.0f, 0.0f, textureSize.x, textureSize.y };
-			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), textureSize.x, textureSize.y };
+			Rectangle sourceRec = { 0.0f, 0.0f, cachedTexture.size.x, cachedTexture.size.y };
+			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), RealSize.x - leftSizeFull.x - 2 - BorderThickness * 2, RealSize.y - 2 - BorderThickness * 2 };
 
-			Rectangle sourceRecMin = { 0.0f, 0.0f, (float)textureSizeMin.x, (float)textureSizeMin.y };
+			Rectangle sourceRecMin = { 0.0f, 0.0f, textureSizeMin.x, textureSizeMin.y };
 			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
 
-			Rectangle sourceRecMax = { 0.0f, 0.0f, (float)textureSizeMax.x, (float)textureSizeMax.y };
+			Rectangle sourceRecMax = { 0.0f, 0.0f, textureSizeMax.x, textureSizeMax.y };
 			Rectangle destRecMax = { RealPos.x + textParamsMax.x, RealPos.y + textParamsMax.y, textureSizeMax.x, textureSizeMax.y };
 
 			Color c = TextColor;
@@ -563,7 +575,7 @@ class ToggleSwitcher : public Object2D {
 		Value = v;
 		func(Value);
 		if (AnimationSpeed) {
-			Animate::Create(&currentSliderPos, AnimationSpeed, (Value ? 1 : 0), AnimationFunction, AnimationEase);
+			Animate::Animation::Create(&currentSliderPos, AnimationSpeed, (Value ? 1.0f : 0.0f), AnimationFunction, AnimationEase);
 		} else {
 			currentSliderPos = (Value ? 1 : 0);
 		}

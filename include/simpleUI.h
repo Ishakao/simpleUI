@@ -332,6 +332,10 @@ namespace SIMPLEUI_GLOBAL {
 	inline long currentUniqueObjectID = 0;
 	inline bool sceneDirty = false; // true in frame where any object size or position changed
 
+	inline SpecialVector2 windowMinimalSize = { 0,0 };
+	inline bool ALLOW_DEBUG = false;
+	inline bool ALLOW_FPS = false;
+
 	inline int TextureRoundnessShader = -1;
 	inline int RectangleRoundnessShader = -1;
 	inline int CurrentCustomShader = -1;
@@ -913,40 +917,38 @@ public:
 
 namespace Tasks {
 	class Task;
-	inline std::mutex TasksMutex;
 	inline std::vector<Task*> ActiveTasks;
 
 	class Task {
+		Task(float TimeInSeconds, std::function<void(void)> f) : TimeLeft(TimeInSeconds), Callback(f) {
+			ActiveTasks.push_back(this);
+		}
+
+		Task() = delete;
+		Task(const Task& o) = delete;
+		void operator=(const Task& o) = delete;
 	public:
 		float TimeLeft{};
 		std::function<void(void)> Callback{};
 
 		void Cancel() {
-			TasksMutex.lock();
 			auto obj = find(ActiveTasks.begin(), ActiveTasks.end(), this);
 			if (obj != ActiveTasks.end()) {
 				ActiveTasks.erase(obj);
 			}
-			TasksMutex.unlock();
 			delete this;
 		}
 
-		Task(float TimeInSeconds, std::function<void(void)> f) : TimeLeft(TimeInSeconds), Callback(f) {
-			TasksMutex.lock();
-			ActiveTasks.push_back(this);
-			TasksMutex.unlock();
-		}
 		~Task() {}
+
+		static Task* Create(float TimeInSeconds, std::function<void(void)> f) {
+			Task* t = new Task(TimeInSeconds, f);
+
+			return t;
+		}
 	};
 
-	inline Task* Create(float TimeInSeconds, std::function<void(void)> f) {
-		Task* t = new Task(TimeInSeconds, f);
-
-		return t;
-	}
-
 	inline void UpdateTasks(float dt) {
-		TasksMutex.lock();
 		for (int i = 0; i < ActiveTasks.size();) {
 			if (ActiveTasks[i]->TimeLeft <= 0) {
 				ActiveTasks[i]->Callback();
@@ -958,7 +960,6 @@ namespace Tasks {
 				i++;
 			}
 		}
-		TasksMutex.unlock();
 	}
 }
 
@@ -1059,20 +1060,25 @@ enum MouseButtonType {
 };
 
 namespace Animate {
+	template <typename T, typename Y, typename = void>
+	struct is_castable : std::false_type {};
+
+	template <typename T, typename Y>
+	struct is_castable<T, Y, std::void_t<decltype(static_cast<T>(std::declval<Y>()))>> : std::true_type {};
+
+	template <typename T, typename Y>
+	constexpr bool is_castable_v = is_castable<T, Y>::value;
+
 	enum Function {
 		Linear,
-
 		Smooth,
-
 		Quad,
 		Cube,
 		Quart,
 		Quint,
-
 		Sine,
 		Circular,
 		Exponential,
-
 		Back,
 		Bounce
 	};
@@ -1135,13 +1141,11 @@ namespace Animate {
 	class Animation;
 	inline std::unordered_map<void*, Animation*> ActiveAnimations;
 
-	inline void deleteCurrent(void* ptr) {
-		auto an = ActiveAnimations.find(ptr);
-		if (an != ActiveAnimations.end()) {
-			delete an->second;
-			ActiveAnimations.erase(an);
-		}
-	}
+	class SafeAnimation;
+	inline std::unordered_map<void*, SafeAnimation*> ActiveSafeAnimations;
+	inline std::unordered_map<Instance*, std::vector<void*>> ActiveSafeAnimationsLinks;
+
+	inline void deleteCurrent(void* ptr);
 
 	enum class AnimationType {
 		INT = 0,
@@ -1149,8 +1153,20 @@ namespace Animate {
 		COLOR,
 		VECTOR2,
 		NUMX,
-		NUMY
+		NUMY,
+		NONE
 	};
+
+	template<typename T>
+	AnimationType ConvertAnimationType() {
+		if (std::is_same_v<T, int>) return AnimationType::INT;
+		if (std::is_same_v<T, float>) return AnimationType::FLOAT;
+		if (std::is_same_v<T, Color>) return AnimationType::COLOR;
+		if (std::is_same_v<T, SpecialVector2>) return AnimationType::VECTOR2;
+		if (std::is_same_v<T, SpecialVector2::num_x>) return AnimationType::NUMX;
+		if (std::is_same_v<T, SpecialVector2::num_y>) return AnimationType::NUMY;
+		return AnimationType::NONE;
+	}
 
 	class Animation {
 		void* ptr = nullptr;
@@ -1173,8 +1189,88 @@ namespace Animate {
 		SpecialVector2 endValueV{};
 
 		AnimationType type = AnimationType::INT;
+
+		void operator=(const Animation& o) = delete;
+		Animation(const Animation& o) = delete;
+		Animation() = delete;
+		Animation(int* ptr, float time, int endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(float* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(Color* ptr, float time, Color endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2* ptr, float time, SpecialVector2 endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_x* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		Animation(SpecialVector2::num_y* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
 	public:
 		std::function<void(void)> Completed = []() {};
+		bool Update() {
+			currentTime += SIMPLEUI_GLOBAL::dt;
+			if (currentTime >= endTime) {
+				if (type == AnimationType::INT) { *(int*)ptr = endValueI; }
+				else if (type == AnimationType::FLOAT) { *(float*)ptr = endValueF; }
+				else if (type == AnimationType::COLOR) { *(Color*)ptr = endValueC; }
+				else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = endValueV; }
+				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = endValueNX; }
+				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_y*)ptr = endValueNY; }
+				return true;
+			}
+			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::FLOAT) { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::COLOR) { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
+			return false;
+		}
+
+		template<typename T, typename Y>
+		static Animation* Create(T* ptr, float time, Y endValue, Function func = Linear, Ease ease = In) {
+			if (!is_castable_v<Y, T>) {
+				std::cout << RED_ANSI << "Animate, unacceptable types" << DEFAULT_ANSI << std::endl;
+				return nullptr;
+			}
+
+			deleteCurrent((void*)ptr);
+			AnimationType type = ConvertAnimationType<T>();
+			Animation* s = new Animation(ptr, time, endValue, type, func, ease);
+			ActiveAnimations.insert({ ptr, s });
+			return s;
+		}
+	};
+
+	// Same as Animation but stops when object which data animating deleted
+	class SafeAnimation {
+		void* ptr = nullptr;
+		Function func = Linear;
+		Ease ease = In;
+		float currentTime = 0.0f;
+		float endTime = 0.0f;
+
+		int startValueI{};
+		int endValueI{};
+		float startValueF{};
+		float endValueF{};
+		Color startValueC{};
+		Color endValueC{};
+		SpecialVector2::num_x startValueNX{};
+		SpecialVector2::num_x startValueNY{};
+		SpecialVector2::num_y endValueNX{};
+		SpecialVector2::num_y endValueNY{};
+		SpecialVector2 startValueV{};
+		SpecialVector2 endValueV{};
+
+		AnimationType type = AnimationType::INT;
+
+		void operator=(const SafeAnimation& o) = delete;
+		SafeAnimation(const SafeAnimation& o) = delete;
+		SafeAnimation() = delete;
+		SafeAnimation(Instance* link, int* ptr, float time, int endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		SafeAnimation(Instance* link, float* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		SafeAnimation(Instance* link, Color* ptr, float time, Color endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		SafeAnimation(Instance* link, SpecialVector2* ptr, float time, SpecialVector2 endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		SafeAnimation(Instance* link, SpecialVector2::num_x* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+		SafeAnimation(Instance* link, SpecialVector2::num_y* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : LinkedTo(link), type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
+	public:
+		std::function<void(void)> Completed = []() {};
+		const Instance* LinkedTo = nullptr;
 
 		bool Update() {
 			currentTime += SIMPLEUI_GLOBAL::dt;
@@ -1196,51 +1292,33 @@ namespace Animate {
 			return false;
 		}
 
-		Animation() = delete;
-		Animation(int* ptr, float time, int endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueI(*ptr), endValueI(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(float* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueF(*ptr), endValueF(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(Color* ptr, float time, Color endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueC(*ptr), endValueC(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2* ptr, float time, SpecialVector2 endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueV(*ptr), endValueV(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2::num_x* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNX(*ptr), endValueNX(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-		Animation(SpecialVector2::num_y* ptr, float time, float endValue, AnimationType type, Function func = Linear, Ease ease = In) : type(type), startValueNY(*ptr), endValueNY(endValue), ptr(ptr), func(func), ease(ease), endTime(time) {}
-	};
+		template<typename T, typename Y>
+		static SafeAnimation* Create(Instance* Link, T* ptr, float time, Y endValue, Function func = Linear, Ease ease = In) {
+			if (!Link) {
+				std::cout << YELLOW_ANSI << "Animate, SafeAnimation requires Instance" << DEFAULT_ANSI << std::endl;
+				return nullptr;
+			}
 
-	inline Animation* Create(int* ptr, float time, int endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::INT, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
-	inline Animation* Create(float* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::FLOAT, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
-	inline Animation* Create(Color* ptr, float time, Color endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::COLOR, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
-	inline Animation* Create(SpecialVector2* ptr, float time, SpecialVector2 endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::VECTOR2, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
-	inline Animation* Create(SpecialVector2::num_x* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::NUMX, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
-	inline Animation* Create(SpecialVector2::num_y* ptr, float time, float endValue, Function func = Linear, Ease ease = In) {
-		deleteCurrent((void*)ptr);
-		Animation* s = new Animation(ptr, time, endValue, AnimationType::NUMY, func, ease);
-		ActiveAnimations.insert({ ptr, s });
-		return s;
-	}
+			if (!is_castable_v<Y, T>) {
+				std::cout << RED_ANSI << "Animate, unacceptable types" << DEFAULT_ANSI << std::endl;
+				return nullptr;
+			}
+
+			deleteCurrent((void*)ptr);
+			AnimationType type = ConvertAnimationType<T>();
+			SafeAnimation* s = new SafeAnimation(Link, ptr, time, endValue, type, func, ease);
+
+			ActiveSafeAnimations.insert({ ptr, s });
+
+			auto an2 = ActiveSafeAnimationsLinks.find(Link);
+			if (an2 != ActiveSafeAnimationsLinks.end()) {
+				an2->second.push_back(ptr);
+			} else {
+				ActiveSafeAnimationsLinks.insert({ Link, { ptr } });
+			}
+			return s;
+		}
+	};
 
 	inline void UpdateAnimations(float t) {
 		for (auto it = ActiveAnimations.begin(); it != ActiveAnimations.end();) {
@@ -1252,6 +1330,44 @@ namespace Animate {
 			} else {
 				it++;
 			}
+		}
+
+		for (auto it = ActiveSafeAnimations.begin(); it != ActiveSafeAnimations.end();) {
+			if (it->second->Update()) {
+				SafeAnimation* sas = it->second;
+				it = ActiveSafeAnimations.erase(it);
+				sas->Completed();
+				deleteCurrent(it->first);
+			} else {
+				it++;
+			}
+		}
+	}
+
+	inline void deleteCurrent(void* ptr) {
+		auto an = ActiveAnimations.find(ptr);
+		if (an != ActiveAnimations.end()) {
+			delete an->second;
+			ActiveAnimations.erase(an);
+		}
+
+		auto an2 = ActiveSafeAnimations.find(ptr);
+		if (an2 != ActiveSafeAnimations.end()) {
+
+			SafeAnimation* animation = an2->second;
+
+			auto it = ActiveSafeAnimationsLinks.find(const_cast<Instance*>(animation->LinkedTo));
+			if (it != ActiveSafeAnimationsLinks.end()) {
+				for (int i = 0; i < it->second.size(); i++) {
+					if (it->second[i] == ptr) {
+						it->second.erase(it->second.begin() + i);
+						break;
+					}
+				}
+			}
+
+			delete animation;
+			ActiveSafeAnimations.erase(an2);
 		}
 	}
 };
@@ -1337,7 +1453,6 @@ enum InstanceType : int {
 	FOLDER = 40,
 
 	// Additional classes from SUIextension.h
-#ifndef EXCLUDE_SIMPLEUI_EXTENSION
 	GRAPHBUILDER = 100,
 	TOGGLESWITCHER,
 	CHECKBOX,
@@ -1345,7 +1460,6 @@ enum InstanceType : int {
 	COMBOBOX,
 	DROPBOX,
 	PROGRESSBAR
-#endif
 };
 
 inline Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
@@ -3053,8 +3167,8 @@ public:
 						float newY = newTotalY - (RealSize.y * newY1);
 
 						if (Animated) {
-							Animate::Create(&CanvasPositionOFFSET.y, 0.125, newY);
-							Animate::Create(&CanvasPosition.y, 0.125, newY1);
+							Animate::Animation::Create(&CanvasPositionOFFSET.y, 0.125f, newY);
+							Animate::Animation::Create(&CanvasPosition.y, 0.125f, newY1);
 						} else {
 							CanvasPositionOFFSET.y = newY;
 							CanvasPosition.y = newY1;
@@ -3070,8 +3184,8 @@ public:
 						float newX = newTotalX - (RealSize.x * newX1);
 
 						if (Animated) {
-							Animate::Create(&CanvasPositionOFFSET.x, 0.125, newX);
-							Animate::Create(&CanvasPosition.x, 0.125, newX1);
+							Animate::Animation::Create(&CanvasPositionOFFSET.x, 0.125f, newX);
+							Animate::Animation::Create(&CanvasPosition.x, 0.125f, newX1);
 						} else {
 							CanvasPositionOFFSET.x = newX;
 							CanvasPosition.x = newX1;
@@ -4619,6 +4733,15 @@ inline void Delete(Instance* ptr) {
 		return;
 	}
 
+	auto it = Animate::ActiveSafeAnimationsLinks.find(ptr);
+	if (it != Animate::ActiveSafeAnimationsLinks.end()) {
+		while (it->second.size()) {
+			Animate::deleteCurrent(it->second[0]);
+		}
+
+		Animate::ActiveSafeAnimationsLinks.erase(ptr);
+	}
+
 	if (ptr->Parent) {
 		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
 		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
@@ -4944,51 +5067,158 @@ inline void DrawFrame(Instance* StartInstance) {
 	EndDrawing();
 }
 
-inline void toggleFPS(Instance* s) {
-	static TextLabel* labelFPS = nullptr;
-
-	auto upd = []() {
-		if (!labelFPS) return;
-
-		labelFPS->Text = "  " + std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS  ";
-		Color c =
-			(SIMPLEUI_GLOBAL::accurateFPS > 200) ? Color{ 153, 255, 204, 255 } :
-			(SIMPLEUI_GLOBAL::accurateFPS > 120) ? Color{ 0, 255, 0, 255 } :
-			(SIMPLEUI_GLOBAL::accurateFPS > 60) ? Color{ 255, 255, 102, 255 } :
-			(SIMPLEUI_GLOBAL::accurateFPS > 30) ? Color{ 255, 178, 102, 255 } :
-			(SIMPLEUI_GLOBAL::accurateFPS > 15) ? Color{ 255, 102, 102, 255 } :
-			Color{ 255, 0, 0, 255 };
-		labelFPS->TextColor = c;
-	};
-
-	if (!labelFPS) {
-		labelFPS = TextLabel::New(s);
-		labelFPS->BackgroundTransparency = 0.4;
-		labelFPS->BackgroundColor = { 0, 0, 0, 255 };
-		labelFPS->TextSize = -1;
-		labelFPS->Name = "FPS_LABEL";
-		labelFPS->Active = false;
-		labelFPS->SizeOFFSET = SpecialVector2{ 180, 30 };
-		labelFPS->Position = SpecialVector2{ 1, 0 };
-		labelFPS->PositionOFFSET = SpecialVector2{ -180, 0 };
-		labelFPS->ZIndex = 10000000;
-		labelFPS->Visible = false;
-		labelFPS->Roundness = 0.5;
-
-		new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, [upd]() {
-			static int last = 0;
-			if (last != SIMPLEUI_GLOBAL::accurateFPS or last == 0) {
-				upd();
-			}
-		});
-	}
-
-	upd();
-
-	labelFPS->Visible = !labelFPS->Visible;
-}
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+#include "../include/SUIextension.h"
+#endif
 
 inline namespace debug {
+	inline bool fpsVisible = false;
+	inline TextLabel* labelFPS = nullptr;
+	inline Object2D* background = nullptr;
+
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+	inline GraphBuilder* msGRAPH = nullptr;
+	inline size_t msSEQ = -1;
+#endif
+
+	inline void toggleFPS() {
+		auto upd = []() {
+			if (!labelFPS) return;
+
+			labelFPS->Text = "  " + std::to_string(SIMPLEUI_GLOBAL::accurateFPS) + " FPS  ";
+			Color c =
+				(SIMPLEUI_GLOBAL::accurateFPS > 200) ? Color{ 153, 255, 204, 255 } :
+				(SIMPLEUI_GLOBAL::accurateFPS > 120) ? Color{ 0, 255, 0, 255 } :
+				(SIMPLEUI_GLOBAL::accurateFPS > 60) ? Color{ 255, 255, 102, 255 } :
+				(SIMPLEUI_GLOBAL::accurateFPS > 30) ? Color{ 255, 178, 102, 255 } :
+				(SIMPLEUI_GLOBAL::accurateFPS > 15) ? Color{ 255, 102, 102, 255 } :
+				Color{ 255, 0, 0, 255 };
+			labelFPS->TextColor = c;
+		};
+
+		if (!background) {
+			background = Object2D::New(GetRoot());
+			background->BackgroundTransparency = 0.3;
+			background->BackgroundColor = { 30, 30, 30, 255 };
+			background->BorderColor = { 40, 40, 40, 255 };
+			background->BorderTransparency = 0.5;
+			background->BorderThickness = 2;
+			background->Name = "Frametime debug";
+			background->Active = false;
+
+			float Y = 0.3;
+#ifdef EXCLUDE_SIMPLEUI_EXTENSION
+			Y = 0.05;
+#endif
+
+			background->Size = { 0.2, Y };
+			background->Position = { 0.8, 0 };
+			background->PositionOFFSET = { -3, 3 };
+			background->ZIndex = 10000000;
+			background->Visible = false;
+			background->Roundness = 0.075;
+		}
+
+		if (!labelFPS and background) {
+			labelFPS = TextLabel::New(background);
+			labelFPS->BackgroundTransparency = 0.9;
+			labelFPS->BackgroundColor = { 0, 0, 0, 255 };
+			labelFPS->TextSize = -1;
+			labelFPS->Name = "FPS label";
+			labelFPS->Active = false;
+
+			float Y = 0.15;
+#ifdef EXCLUDE_SIMPLEUI_EXTENSION
+			Y = 1;
+#endif
+
+			labelFPS->Size = { 1, Y };
+			labelFPS->Roundness = 0.3;
+
+			new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, [upd]() {
+				static int last = 0;
+				if (last != SIMPLEUI_GLOBAL::accurateFPS or last == 0) {
+					upd();
+				}
+			});
+		}
+
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+		if (!msGRAPH and background) {
+			msGRAPH = GraphBuilder::New(background);
+			msGRAPH->Size = { 0.9, 0.78 };
+			msGRAPH->Position = { 0.05, 0.2 };
+			msGRAPH->BackgroundTransparency = 0.9;
+			msGRAPH->BackgroundColor = { 0, 0, 0, 255 };
+			msGRAPH->Roundness = 0.1;
+			msGRAPH->Name = "Frametime graph";
+			msGRAPH->IndependentValuesX = true;
+			msSEQ = msGRAPH->createSequence("s");
+			msGRAPH->setSequenceThickness(msSEQ, 2);
+			msGRAPH->setSequenceColor(msSEQ, {190, 190, 190, 255});
+			msGRAPH->minimalValueToTextFunction([](long double value) {
+				char buf[32];
+				std::snprintf(buf, sizeof(buf), "%.2f", value * 1000);
+				std::string s = buf;
+				return s + " ms ";
+			});
+			msGRAPH->maximalValueToTextFunction([](long double value) { 
+				char buf[32];
+				std::snprintf(buf, sizeof(buf), "%.2f", value * 1000);
+				std::string s = buf;
+				return s + " ms ";
+			});
+			msGRAPH->SizeOfLeftInfo = { 0, 0.3 };
+			msGRAPH->TextColor = { 190, 190, 190, 255 };
+
+			size_t seq = msGRAPH->createSequence("s");
+			msGRAPH->setSequenceThickness(seq, 2);
+			msGRAPH->setSequenceColor(seq, { 170, 0, 0, 255 });
+			msGRAPH->addValueToSequence(seq, 0.017);
+			msGRAPH->addValueToSequence(seq, 0.017);
+		}
+#endif
+
+		upd();
+
+		if (background) {
+			background->Visible = !background->Visible;
+			fpsVisible = background->Visible;
+		}
+	}
+
+
+	inline void updateGraph() {
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+		if (msGRAPH and msGRAPH->Visible) {
+			size_t size = msGRAPH->getSequenceValues(msSEQ).size();
+			if (size >= 100) {
+				msGRAPH->removeIndexFromSequence(msSEQ, 0);
+			}
+
+			msGRAPH->addValueToSequence(msSEQ, SIMPLEUI_GLOBAL::dt);
+		}
+#endif
+	}
+
+	inline void toggleFrameTimeGraph() {
+#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+		toggleFPS();
+		if (msGRAPH) {
+			msGRAPH->Visible = !msGRAPH->Visible;
+
+			if (labelFPS) {
+				labelFPS->Size.y = msGRAPH->Visible ? 0.15 : 1;
+			}
+
+			if (background) {
+				background->Size.y = msGRAPH->Visible ? 0.3 : 0.05;
+			}
+		}
+		toggleFPS();
+#endif
+	}
+
 	inline int typeFPS[4]{
 		60,
 		144,
@@ -5494,14 +5724,9 @@ inline void SUI_SetWindowPosition(int newX, int newY) {
 	SetWindowPosition(newX, newY);
 }
 
-inline SpecialVector2 windowMinimalSize = { 0,0 };
-
 inline void SUI_SetMinimalWindowSize(int newX, int newY) {
-	windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
+	SIMPLEUI_GLOBAL::windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
 }
-
-inline bool ALLOW_DEBUG = false;
-inline bool ALLOW_FPS = false;
 
 inline void UpdateHigher(Instance* StartInstance) {
 	Object2D* best = nullptr;
@@ -5620,8 +5845,8 @@ inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 
 
 	InitWindow(inf.x, inf.y, name);
 
-	if (windowMinimalSize.x != 0 and windowMinimalSize.y != 0) {
-		SetWindowMinSize(windowMinimalSize.x, windowMinimalSize.y);
+	if (SIMPLEUI_GLOBAL::windowMinimalSize.x != 0 and SIMPLEUI_GLOBAL::windowMinimalSize.y != 0) {
+		SetWindowMinSize(SIMPLEUI_GLOBAL::windowMinimalSize.x, SIMPLEUI_GLOBAL::windowMinimalSize.y);
 	}
 
 	int targetFPS = (inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z;
@@ -5694,15 +5919,20 @@ inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 
 			UpdateHigher(StartInstance);
 		}
 
-		if (IsKeyPressed(KEY_F1) and ALLOW_FPS) { toggleFPS(StartInstance); }
-		if (IsKeyPressed(KEY_F2) and ALLOW_DEBUG) { debug::toggleDebug(StartInstance); }
+		if (IsKeyPressed(KEY_F1) and SIMPLEUI_GLOBAL::ALLOW_FPS) { debug::toggleFPS(); }
+		if (IsKeyPressed(KEY_F2) and SIMPLEUI_GLOBAL::ALLOW_DEBUG) { debug::toggleDebug(StartInstance); }
 		if (IsKeyPressed(KEY_F3)) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
+		if (IsKeyPressed(RAYLIB_FUNCTIONAL::KEY_F4)) { debug::toggleFrameTimeGraph(); }
 
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
 		DrawFrame(StartInstance);
 
 		SIMPLEUI_GLOBAL::CollectDeadObjects();
+
+		if (debug::fpsVisible) {
+			debug::updateGraph();
+		}
 
 		SIMPLEUI_GLOBAL::sceneDirty = false;
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;
@@ -5736,7 +5966,3 @@ inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 
 
 	CloseWindow();
 }
-
-#ifndef EXCLUDE_SIMPLEUI_EXTENSION
-#include "../include/SUIextension.h"
-#endif

@@ -60,14 +60,21 @@ int main() {
 	Hello->BorderColor = { 0, 51, 25, 255 };
 	Hello->BackgroundColor = { 0, 204, 0, 255 };
 	Hello->AddEvent(MOUSE_ENTER, [Hello](Instance* th) {
-		Animate::Create(&Hello->SizeOFFSET, 0.4, { 400, 100 }, Animate::Bounce, Animate::Out);
-		Animate::Create(&Hello->Roundness, 0.4, 1, Animate::Bounce, Animate::Out);
+		Animate::Animation::Create(&Hello->SizeOFFSET, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out);
+		Animate::Animation::Create(&Hello->Roundness, 0.4, 1, Animate::Bounce, Animate::Out);
 	});
 	Hello->AddEvent(MOUSE_LEAVE, [Hello](Instance* th) {
-		Animate::Create(&Hello->SizeOFFSET, 0.4, { 340, 80 }, Animate::Bounce, Animate::Out);
-		Animate::Create(&Hello->Roundness, 0.4, 0.2, Animate::Bounce, Animate::Out);
+		Animate::Animation::Create(&Hello->SizeOFFSET, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
+		Animate::Animation::Create(&Hello->Roundness, 0.4, 0.2, Animate::Bounce, Animate::Out);
 	});
-	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) { Hello->Text += "1"; }, MOUSE_LEFT);
+	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) { 
+		for (int i = 0; i < 5; i++) {
+			// Tasks::Task, task which will call lambda function on timer end. Can be canceled while timer > 0
+			Tasks::Task::Create(0.1 * i, [Hello, i]() {
+				Hello->Text += std::to_string(i+1);
+			});
+		}
+	}, MOUSE_LEFT);
 	Hello->AddEvent(TEXT_CHANGED, [Hello](Instance* th) { std::cout << Hello->Text.c_str() << std::endl; });
 
 	TextBox* World = TextBox::New(Background);
@@ -87,18 +94,19 @@ int main() {
 	World->BackgroundColor = { 0, 102, 204, 255 };
 	World->BorderColor = { 0, 102, 102, 255 };
 	World->AddEvent(MOUSE_ENTER, [World](Instance* th) {
-		Animate::Create(&World->SizeOFFSET, 0.4, { 400, 100 }, Animate::Bounce, Animate::Out);
+		// SafeAnimation linked to object World. This animation will be deleted when called World deletes
+		Animate::SafeAnimation::Create(World, &World->SizeOFFSET, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out); 
 	});
 	World->AddEvent(MOUSE_LEAVE, [World](Instance* th) {
-		Animate::Create(&World->SizeOFFSET, 0.4, { 340, 80 }, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(World, &World->SizeOFFSET, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
 	});
 	World->AddEvent(CHILD_ADDED, [](Instance* th, Instance* child) {
 		std::cout << "Child added " << child->Name << std::endl;
 	});
 	World->AddEvent(TEXT_CHANGED, [World](Instance* th) { std::cout << !World->Text << std::endl; });
 
-	ALLOW_FPS = true; // Allows to show FPS label on F1
-	ALLOW_DEBUG = true; // Allows to show debug menu on F2
+	SIMPLEUI_GLOBAL::ALLOW_FPS = true; // Allows to show FPS label on F1
+	SIMPLEUI_GLOBAL::ALLOW_DEBUG = true; // Allows to show debug menu on F2
 
 	addFontToQueqe("SegoeB", "Fonts/segoeuib.ttf", 60); // Loading custom font
 	SUI_SetMinimalWindowSize(600, 400);

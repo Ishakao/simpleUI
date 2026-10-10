@@ -35,7 +35,7 @@
 #include <cstdarg>
 #include <cstring>
 
-#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !MultiCheckBox, !ComboBox, !ProgressBar, !DropdownBox)
+#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
 // use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation
@@ -1209,7 +1209,7 @@ namespace Animate {
 				else if (type == AnimationType::COLOR) { *(Color*)ptr = endValueC; }
 				else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = endValueV; }
 				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = endValueNX; }
-				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_y*)ptr = endValueNY; }
+				else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
 			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
@@ -1280,7 +1280,7 @@ namespace Animate {
 				else if (type == AnimationType::COLOR) { *(Color*)ptr = endValueC; }
 				else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = endValueV; }
 				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = endValueNX; }
-				else if (type == AnimationType::NUMX) { *(SpecialVector2::num_y*)ptr = endValueNY; }
+				else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
 			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
@@ -1450,14 +1450,12 @@ enum InstanceType : int {
 	VECTOR2_VALUE,
 	COLOR_VALUE,
 
-	FOLDER = 40,
+	FOLDER = 50,
 
 	// Additional classes from SUIextension.h
 	GRAPHBUILDER = 100,
 	TOGGLESWITCHER,
 	CHECKBOX,
-	MULTICHECKBOX,
-	COMBOBOX,
 	DROPBOX,
 	PROGRESSBAR
 };
@@ -1551,7 +1549,7 @@ public:
 	std::unordered_map<long, Instance*> childsRemovedInFrame;
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 
-	bool hasEvent(EventType t) const {
+	virtual bool hasEvent(EventType t) const {
 		for (auto& [type, _] : events) {
 			if (type == t) {
 				return true;
@@ -2109,8 +2107,12 @@ namespace RectGPU {
 		float cy = pos.y + halfH;
 		float ox = pos.x + origin.x;
 		float oy = pos.y + origin.y;
-		float sn = sinf(rotation * DEG2RAD);
-		float cs = cosf(rotation * DEG2RAD);
+		float sn = 0.f;
+		float cs = 1.f;
+		if (rotation != 0.f) {
+			sn = sinf(rotation * DEG2RAD);
+			cs = cosf(rotation * DEG2RAD);
+		}
 		float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 
 		float x0, y0, x1, y1;
@@ -2240,8 +2242,8 @@ protected:
 			}
 		}
 
-		childsRemovedInFrame.clear();
-		childsAddedInFrame.clear();
+		if (!childsRemovedInFrame.empty()) childsRemovedInFrame.clear();
+		if (!childsAddedInFrame.empty()) childsAddedInFrame.clear();
 	}
 
 	void eventHandler() override;
@@ -2281,7 +2283,7 @@ public:
 		PosOrSizeChanged();
 	}
 
-	bool hasEvent(EventType t) const {
+	bool hasEvent(EventType t) const override {
 		for (auto& [type, _, __] : events) {
 			if (type == t) {
 				return true;
@@ -2443,6 +2445,7 @@ public:
 
 	virtual void Draw() {
 		if (Visible) {
+			if (BackgroundTransparency >= 1.f and (BorderThickness == 0 or BorderTransparency >= 1.f)) return;
 			Rectangle b = GetRotatedBounds();
 			if (b.x + b.width + BorderThickness < 0
 				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
@@ -2778,46 +2781,62 @@ private:
 		}
 	}
 
+	static void accumulateBounds(Instance* obj, float px, float py, float pw, float ph, float& minX, float& minY, float& maxX, float& maxY) {
+		float cx = px;
+		float cy = py;
+		float cw = pw;
+		float ch = ph;
+
+		if (Is2DInheritor(obj)) {
+			Object2D* o = static_cast<Object2D*>(obj);
+
+			float w = std::roundf(pw * o->Size.x + o->SizeOFFSET.x);
+			float h = std::roundf(ph * o->Size.y + o->SizeOFFSET.y);
+
+			float ax = std::roundf(w * o->AnchorPosition.x + o->AnchorPositionOFFSET.x);
+			float ay = std::roundf(h * o->AnchorPosition.y + o->AnchorPositionOFFSET.y);
+
+			float x = px + std::roundf(pw * o->Position.x + o->PositionOFFSET.x - ax);
+			float y = py + std::roundf(ph * o->Position.y + o->PositionOFFSET.y - ay);
+
+			minX = std::min(minX, x);
+			minY = std::min(minY, y);
+			maxX = std::max(maxX, x + w);
+			maxY = std::max(maxY, y + h);
+
+			cx = x;
+			cy = y;
+			cw = w;
+			ch = h;
+		}
+
+		for (Instance* child : obj->Children) {
+			accumulateBounds(child, cx, cy, cw, ch, minX, minY, maxX, maxY);
+		}
+	}
+
 	std::vector<std::pair<int, int>> getSectors(Instance* generalObj) const {
 		std::vector<std::pair<int, int>> sectors;
 
-		static std::function<void(Instance*, std::vector<std::pair<int, int>>&)> sectorsCalculate = [](Instance* obj, std::vector<std::pair<int, int>>& sect) {
-			if (Is2DInheritor(obj)) {
-				Object2D* casted = static_cast<Object2D*>(obj);
+		float minX = FLT_MAX;
+		float minY = FLT_MAX;
+		float maxX = -FLT_MAX;
+		float maxY = -FLT_MAX;
 
-				SpecialVector2 parentSize = { 0,0 };
+		accumulateBounds(generalObj, 0, 0, RealSize.x, RealSize.y, minX, minY, maxX, maxY);
 
-				Instance* currentParent = casted->Parent;
+		if (minX > maxX or minY > maxY) return sectors;
 
-				while (currentParent) {
-					if (Is2DInheritor(currentParent)) {
-						parentSize = static_cast<Object2D*>(currentParent)->RealSize;
-						break;
-					} else {
-						currentParent = currentParent->Parent;
-					}
-				}
+		int x0 = (int)std::floor(minX / GridSectorSize);
+		int x1 = (int)std::floor(maxX / GridSectorSize);
+		int y0 = (int)std::floor(minY / GridSectorSize);
+		int y1 = (int)std::floor(maxY / GridSectorSize);
 
-				SpecialVector2 pos = {
-					casted->Position.x * parentSize.x + casted->PositionOFFSET.x,
-					casted->Position.y * parentSize.y + casted->PositionOFFSET.y
-				};
-				casted->getRealObject2Dsize();
-				SpecialVector2 lastpos = { pos.x + casted->RealSize.x, pos.y + casted->RealSize.y };
-
-				for (int i = std::floor(pos.x / GridSectorSize); i <= std::ceil(lastpos.x / GridSectorSize); i++) {
-					for (int j = std::floor(pos.y / GridSectorSize); j <= std::ceil(lastpos.y / GridSectorSize); j++) {
-						sect.push_back({ i, j });
-					}
-				}
+		for (int i = x0; i <= x1; i++) {
+			for (int j = y0; j <= y1; j++) {
+				sectors.push_back({ i, j });
 			}
-
-			for (Instance* child : obj->Children) {
-				sectorsCalculate(child, sect);
-			}
-		};
-
-		sectorsCalculate(generalObj, sectors);
+		}
 
 		return sectors;
 	}
@@ -2925,6 +2944,7 @@ private:
 					sector->Objects.erase(it2);
 				}
 			}
+
 			checkIt->second.clear();
 
 			std::vector<std::pair<int, int>> sectors = getSectors(child);
@@ -2986,6 +3006,8 @@ public:
 			pushed = true;
 		}
 
+		checkAndUpdateCurrentSectors(true); // force update cuz sometimes calculate condition doesn't work
+
 		for (auto& [id, ptr] : toUpdateSectors) {
 			if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 			secUpd(ptr);
@@ -3007,8 +3029,6 @@ public:
 		for (Instance* s : Tick) {
 			s->Update(tempRes);
 		}
-
-		checkAndUpdateCurrentSectors(true); // force update cuz sometimes calculate condition doesn't work
 
 		if (pushed) PopClip();
 

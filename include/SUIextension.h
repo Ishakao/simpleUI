@@ -569,11 +569,11 @@ class ToggleSwitcher : public Object2D {
 
 	bool Value = false;
 	float currentSliderPos = 0;
-	std::function<void(bool)> func = [](bool _) {};
+	std::function<void(Instance*, bool)> func = [](Instance* t, bool _) {};
 
 	void _setValue(bool v) {
 		Value = v;
-		func(Value);
+		func(this, Value);
 		if (AnimationSpeed) {
 			Animate::Animation::Create(&currentSliderPos, AnimationSpeed, (Value ? 1.0f : 0.0f), AnimationFunction, AnimationEase);
 		} else {
@@ -656,7 +656,7 @@ public:
 		_setValue(v);
 	}
 
-	void onToggle(std::function<void(bool)> f) {
+	void onToggle(std::function<void(Instance*, bool)> f) {
 		func = f;
 	}
 

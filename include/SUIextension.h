@@ -422,6 +422,7 @@ public:
 	bool AutoColorForColumnar = true;								// Color of left info will be with current displayed graph (columnar only)
 	bool IndependentValuesX = false;								// true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
 	bool IndependentValuesY = false;								// true means a same Y size for all graphs (even if the max/min values are different) | false means a Y size of graph will depend on aspect from maximal global value
+	bool RoundTextures = false;										// true means round textures (text and graph) depends on background roundness
 
 	void Draw() override {
 		if (Visible) {
@@ -532,10 +533,10 @@ public:
 				std::floorf(Origin.y * RealSize.y) + OriginOFFSET.y
 			};
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, Roundness);
+			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, Roundness);
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, Roundness);
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, (RoundTextures ? Roundness : 0));
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, (RoundTextures ? Roundness : 0));
 			}
 		}
 	}
@@ -743,6 +744,453 @@ public:
 
 	static ToggleSwitcher* New(Instance* parent = nullptr) {
 		ToggleSwitcher* i = new ToggleSwitcher(parent);
+		return i;
+	}
+};
+
+struct CheckBoxItemVisual {
+	Color TrueButtonColor = { 130,130,130,255 };
+	Color TrueButtonBorderColor = { 130,130,130,255 };
+	float TrueButtonBorderTransparency = 0;
+	float TrueButtonTransparency = 0;
+	int TrueButtonBorderThickness = 4;
+
+	Color FalseButtonColor = { 130,130,130,255 };
+	Color FalseButtonBorderColor = { 130,130,130,255 };
+	float FalseButtonBorderTransparency = 0;
+	float FalseButtonTransparency = 1;
+	int FalseButtonBorderThickness = 2;
+};
+
+class CheckBox : public Object2D {
+	constexpr static const char* DefaultName = "CheckBox";
+	constexpr static InstanceType DefaultClass = CHECKBOX;
+	constexpr static float textureAspect = 1.1;
+
+	int buttonLastID = 0;
+
+	struct button {
+		int id = -1;
+		bool Value = false;
+		Animate::Animation* anim = nullptr;
+		std::string Text = "Item";
+		std::string FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
+		Color TextColor = { 255,255,255,255 };
+		CheckBoxItemVisual Visual;
+
+		AtlasTexture tex{};
+		bool textDirty = false;
+
+		Color ButtonColor = { 130,130,130,255 };
+		Color ButtonBorderColor = { 0,0,0,255 };
+		float ButtonBorderTransparency = 0;
+		float ButtonTransparency = 0;
+		int ButtonBorderThickness = 4;
+
+		Animate::Animation* anim1 = nullptr;
+		Animate::Animation* anim2 = nullptr;
+		Animate::Animation* anim3 = nullptr;
+		Animate::Animation* anim4 = nullptr;
+		Animate::Animation* anim5 = nullptr;
+	};
+
+	std::vector<button> buttons;
+
+	void RedrawText(button& but) {
+		if (but.tex.id) {
+			Vector3 textParams = getTextCFrame(but.Text.c_str(), getFont(but.FontFace), { 0,0, but.tex.size.x, but.tex.size.y }, TextAnchorEnum::E, -1, 0);
+
+			bool hadClip = !clipStack.empty();
+			Clip current;
+			if (hadClip) current = clipStack.back();
+
+			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
+
+			RL_FUNCTIONS_PLUS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
+			but.tex.currentAtlas->blankArea(but.tex);
+
+			DrawTextEx(getFont(but.FontFace), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
+
+			RL_FUNCTIONS_PLUS::EndTextureMode();
+
+			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+		}
+	}
+
+	bool lA = true;
+	std::function<void(Instance*, int, bool)> func = [](Instance* t, int id, bool value) {};
+
+	void AnimateButton(button& b, bool value) {
+		if (value) {
+			b.anim1 = Animate::Animation::Create(&b.ButtonColor, AnimationSpeed, b.Visual.TrueButtonColor, AnimationFunction, AnimationEase);
+			b.anim2 = Animate::Animation::Create(&b.ButtonBorderColor, AnimationSpeed, b.Visual.TrueButtonBorderColor, AnimationFunction, AnimationEase);
+			b.anim3 = Animate::Animation::Create(&b.ButtonBorderTransparency, AnimationSpeed, b.Visual.TrueButtonBorderTransparency, AnimationFunction, AnimationEase);
+			b.anim4 = Animate::Animation::Create(&b.ButtonTransparency, AnimationSpeed, b.Visual.TrueButtonTransparency, AnimationFunction, AnimationEase);
+			b.anim5 = Animate::Animation::Create(&b.ButtonBorderThickness, AnimationSpeed, b.Visual.TrueButtonBorderThickness, AnimationFunction, AnimationEase);
+		} else {
+			b.anim1 = Animate::Animation::Create(&b.ButtonColor, AnimationSpeed, b.Visual.FalseButtonColor, AnimationFunction, AnimationEase);
+			b.anim2 = Animate::Animation::Create(&b.ButtonBorderColor, AnimationSpeed, b.Visual.FalseButtonBorderColor, AnimationFunction, AnimationEase);
+			b.anim3 = Animate::Animation::Create(&b.ButtonBorderTransparency, AnimationSpeed, b.Visual.FalseButtonBorderTransparency, AnimationFunction, AnimationEase);
+			b.anim4 = Animate::Animation::Create(&b.ButtonTransparency, AnimationSpeed, b.Visual.FalseButtonTransparency, AnimationFunction, AnimationEase);
+			b.anim5 = Animate::Animation::Create(&b.ButtonBorderThickness, AnimationSpeed, b.Visual.FalseButtonBorderThickness, AnimationFunction, AnimationEase);
+		}
+	}
+
+	void checkClick() {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+			bool canBePressed = (
+				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
+				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
+				);
+
+			if (!canBePressed) return;
+
+			float rowHeight = RealSize.y / buttons.size();
+			float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+			float side = buttonSize * ButtonSizeScale;
+			float offset = (buttonSize - side) / 2.0f;
+			float halfSize = side / 2.0f;
+			float r = (MultiChoice ? MultiChoiceRoundness : 1) * halfSize;
+
+			SpecialVector2 pivot = {
+				RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x,
+				RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y
+			};
+
+			float mx = SIMPLEUI_GLOBAL::mousePosition.x;
+			float my = SIMPLEUI_GLOBAL::mousePosition.y;
+
+			if (Rotation != 0.0f) {
+				float sn = sinf(-Rotation * DEG2RAD);
+				float cs = cosf(-Rotation * DEG2RAD);
+				float rx = mx - pivot.x;
+				float ry = my - pivot.y;
+				mx = pivot.x + rx * cs - ry * sn;
+				my = pivot.y + rx * sn + ry * cs;
+			}
+
+			float buttonX = RealPos.x + (AnchorToLeft ? 0 : RealSize.x - buttonSize) + offset + halfSize;
+
+			int i = 0;
+			for (button& but : buttons) {
+				float cy = RealPos.y + rowHeight * i + offset + halfSize;
+
+				float dx = std::abs(mx - buttonX);
+				float dy = std::abs(my - cy);
+
+				float diffX = dx - halfSize + r;
+				float diffY = dy - halfSize + r;
+
+				bool isHovered = (dx <= halfSize and dy <= halfSize) and ((diffX <= 0.0f or diffY <= 0.0f) or (diffX * diffX + diffY * diffY <= r * r));
+
+				if (isHovered) {
+					but.Value = !but.Value;
+					func(this, but.id, but.Value);
+
+					if (but.Value and !MultiChoice) {
+						for (button& b : buttons) {
+							if (b.id != but.id and b.Value) {
+								b.Value = false;
+								AnimateButton(b, false);
+							}
+						}
+					}
+
+					AnimateButton(but, but.Value);
+
+					return;
+				}
+				i++;
+			}
+		}
+	}
+protected:
+	CheckBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; };
+	CheckBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; };
+	~CheckBox() override {
+		for (button& but : buttons) {
+			UnloadTextureFromAtlas(but.tex);
+			Animate::deleteCurrent(&but.ButtonBorderColor);
+			Animate::deleteCurrent(&but.ButtonColor);
+			Animate::deleteCurrent(&but.ButtonBorderTransparency);
+			Animate::deleteCurrent(&but.ButtonTransparency);
+			Animate::deleteCurrent(&but.ButtonBorderThickness);
+		}
+	}
+	CheckBox() = delete;
+public:
+	float AnimationSpeed = 0.3;									// 0 means instant button fill
+	bool Enabled = true;										// Allows user to click
+	bool MultiChoice = false;
+	float ButtonsScaleX = 0.2;									// ButtonScaleX means how much size buttons will take
+	float ButtonSizeScale = 0.65;								// ButtonSizeScale means how big button will be, where 1 is maximum button size by current ButtonsScaleX
+	float MultiChoiceRoundness = 0.3;
+	bool AnchorToLeft = true;									// true means anchoring items to left side | false means anchoring items to right side
+	bool RoundTexture = false;									// true means crop part of text which falls aside from the background border
+	Animate::Function AnimationFunction = Animate::Linear;
+	Animate::Ease AnimationEase = Animate::In;
+	MouseButtonType ButtonType = MouseButtonType::MOUSE_LEFT;	// Which button will toggle switcher
+
+	int AddItem(const std::string& Text, CheckBoxItemVisual Visual) {
+		button but = {
+			buttonLastID,
+			false,
+			nullptr,
+			Text,
+			SIMPLEUI_GLOBAL::BASIC_FONT_NAME,
+			{ 255,255,255,255 },
+			Visual,
+			AtlasTexture{},
+			true,
+
+			Visual.FalseButtonColor,
+			Visual.FalseButtonBorderColor,
+			Visual.FalseButtonBorderTransparency,
+			Visual.FalseButtonTransparency,
+			Visual.FalseButtonBorderThickness,
+		};
+
+		buttons.push_back(but);
+
+		return buttonLastID++;
+	}
+
+	void RemoveItem(int id) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				buttons.erase(buttons.begin() + i);
+				break;
+			}
+		}
+	}
+
+	void ChangeVisual(int id, CheckBoxItemVisual visual) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				but.Visual = visual;
+				break;
+			}
+		}
+	}
+
+	void ChangeText(int id, const std::string& text) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				but.Text = text;
+				but.textDirty = true;
+				break;
+			}
+		}
+	}
+
+	void ChangeFontFace(int id, const std::string& font) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				but.FontFace = font;
+				but.textDirty = true;
+				break;
+			}
+		}
+	}
+
+	void ChangeTextColor(int id, Color color) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				but.TextColor = color;
+				break;
+			}
+		}
+	}
+
+	bool GetValue(int id) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				return but.Value;
+			}
+		}
+
+		return false;
+	}
+
+	void SetValue(int id, bool value) {
+		for (int i = 0; i < buttons.size(); i++) {
+			button& but = buttons[i];
+			if (but.id == id) {
+				but.Value = !but.Value;
+
+				if (but.Value and !MultiChoice) {
+					for (button& b : buttons) {
+						if (b.id != but.id and b.Value) {
+							b.Value = false;
+							AnimateButton(b, false);
+						}
+					}
+				}
+
+				AnimateButton(but, but.Value);
+				return;
+			}
+		}
+	}
+
+	void OnToggle(std::function<void(Instance*, int, bool)> f) {
+		func = f;
+	}
+
+	void Draw() override {
+		if (Visible) {
+			Object2D::Draw();
+
+			Rectangle b = GetRotatedBounds();
+			if (b.x + b.width + BorderThickness < 0
+				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.y + b.height + BorderThickness < 0
+				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				return;
+			}
+
+			for (button& but : buttons) {
+				float rowHeight = RealSize.y / buttons.size();
+				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+
+				SpecialVector2 currentTextureButtonSize = {
+					RealSize.x - buttonSize,
+					buttonSize
+				};
+
+				if (but.tex.size.x * textureAspect < currentTextureButtonSize.x or but.tex.size.y * textureAspect < currentTextureButtonSize.y) {
+					UnloadTextureFromAtlas(but.tex);
+					but.tex = LoadRenderTextureOnAtlas(currentTextureButtonSize.x * textureAspect, currentTextureButtonSize.y * textureAspect);
+					but.textDirty = true;
+				}
+
+				if (but.textDirty or lA != AnchorToLeft) {
+					RedrawText(but);
+					lA = AnchorToLeft;
+					but.textDirty = false;
+				}
+			}
+
+			SpecialVector2 o = {
+				Origin.x * RealSize.x + OriginOFFSET.x,
+				Origin.y * RealSize.y + OriginOFFSET.y
+			};
+
+			SpecialVector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
+
+			int i = 0;
+			for (button& but : buttons) {
+				float rowHeight = RealSize.y / buttons.size();
+				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+
+				SpecialVector2 currentTextureButtonSize = {
+					RealSize.x - buttonSize,
+					buttonSize
+				};
+
+				float buttonSizeOffset = (buttonSize - buttonSize * ButtonSizeScale) / 2;
+
+				SpecialVector2 rectPos = {
+					RealPos.x + (AnchorToLeft ? 0 : currentTextureButtonSize.x) + buttonSizeOffset,
+					RealPos.y + rowHeight * i + buttonSizeOffset
+				};
+
+				const RoundRectData rec = {
+					rectPos, {buttonSize * ButtonSizeScale, buttonSize * ButtonSizeScale},
+					but.ButtonColor, but.ButtonBorderColor,
+					but.ButtonTransparency, (MultiChoice ? MultiChoiceRoundness : 1), but.ButtonBorderTransparency,
+					but.ButtonBorderThickness,
+					Rotation,
+					{ pivot.x - rectPos.x, pivot.y - rectPos.y }
+				};
+
+				DrawRoundRectBatch(rec);
+
+				RL_FUNCTIONS_PLUS::DrawTexturePro(but.tex, RealPos, RealSize,
+					{ 0, 0, but.tex.size.x, but.tex.size.y },
+					{ RealPos.x + (AnchorToLeft ? buttonSize : 0), RealPos.y + rowHeight * i, currentTextureButtonSize.x, currentTextureButtonSize.y },
+					o,
+					Rotation,
+					but.TextColor,
+					(RoundTexture ? Roundness : 0)
+				);
+
+				i++;
+			}
+		}
+	}
+
+	void Update(bool posOrSizeChanged) override {
+		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
+
+		if (!Visible) {
+			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			return;
+		}
+
+		SameUpdate();
+
+		if (updateChildrenZIndex) {
+			updateChildren(this);
+		}
+
+		eventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+			getRealObject2Dsize();
+			getRealObject2Dposition();
+		}
+
+		checkClick();
+
+		Draw();
+
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		posOrSizeChangedResult = false;
+		updateWhenWillBeVisible = false;
+
+		for (int i = 0; i < Children.size(); i++) {
+			Instance* child = Children[i];
+			child->Update(tempRes);
+		}
+	}
+
+	CheckBox* Clone() const override {
+		CheckBox* i = new CheckBox(*this);
+		i->UpdateAllVectorPointers();
+		i->posOrSizeChangedResult = true;
+
+		i->basicCloneOperation(const_cast<CheckBox*>(this));
+
+		for (button& but : i->buttons) {
+			UnloadTextureFromAtlas(but.tex);
+			but.textDirty = true;
+			but.anim1 = nullptr;
+			but.anim2 = nullptr;
+			but.anim3 = nullptr;
+			but.anim4 = nullptr;
+			but.anim5 = nullptr;
+			but.ButtonBorderColor = but.Value ? but.Visual.TrueButtonBorderColor : but.Visual.FalseButtonBorderColor;
+			but.ButtonBorderThickness = but.Value ? but.Visual.TrueButtonBorderThickness : but.Visual.FalseButtonBorderThickness;
+			but.ButtonBorderTransparency = but.Value ? but.Visual.TrueButtonBorderTransparency : but.Visual.FalseButtonBorderTransparency;
+			but.ButtonColor = but.Value ? but.Visual.TrueButtonColor : but.Visual.FalseButtonColor;
+			but.ButtonTransparency = but.Value ? but.Visual.TrueButtonTransparency : but.Visual.FalseButtonTransparency;
+		}
+
+		return i;
+	}
+
+	static CheckBox* New(Instance* parent = nullptr) {
+		CheckBox* i = new CheckBox(parent);
 		return i;
 	}
 };

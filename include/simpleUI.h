@@ -35,7 +35,7 @@
 #include <cstdarg>
 #include <cstring>
 
-#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, !CheckBox, !ProgressBar, !DropdownBox)
+#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, CheckBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
 // use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation

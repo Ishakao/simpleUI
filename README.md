@@ -130,5 +130,6 @@ int main() {
 <ul>
     <li><strong><code>GraphBuilder</code></strong>: Graphs builder with linear and columnar styles.</li>
     <li><strong><code>ToggleSwitcher</code></strong>: Simple toggle button with roundness, borders and animations.</li>
+    <li><strong><code>CheckBox</code></strong>: CheckBox/MultiBox object with toggle animations and left-right anchors.</li>
 </ul>
 <h4>Every object has a huge amount of customization which allow you to make the interface interesting and individual</h4>

@@ -180,6 +180,7 @@ using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC2;
 #define BLUE_ANSI "\033[36m"
 #define DEFAULT_ANSI "\033[0m"
 #define DEFAULT_ATLAS_SIZE 2048
+#define FLT_MAX          3.402823466e+38F        // max value
 
 template<typename T, typename = void>
 struct is_streamable : std::false_type {};
@@ -215,6 +216,18 @@ class Atlas;
 inline void FlushRectanglesBatch();
 inline void updateObject2DVector(Object2D*);
 
+enum SUI_EEC {
+	EEC_DEFAULT = 0,			 // Entered if current object is highest by ZIndex on mouse
+	EEC_EVERY_ENTER,			 // Entered if current object on mouse
+	EEC_IF_DESCENDANT_HIGHER	 // Entered if current object is ancestor of highest ZIndex object on mouse
+};
+
+enum BorderPlacement {
+	BORDER_INNER = 0,		// Border will be in rectangle area
+	BORDER_MIDDLE,			// Half of border will be on area and other half will be out of area
+	BORDER_OUTER			// Border will be out of area
+};
+
 struct RoundRectData {
 	// Base rectangle data
 	Vector2 Pos, Size;
@@ -229,6 +242,8 @@ struct RoundRectData {
 	Rectangle Source;
 	Rectangle Destination;
 	// Texture color = Color
+
+	BorderPlacement borderType;
 };
 
 inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
@@ -365,6 +380,9 @@ namespace SIMPLEUI_GLOBAL {
 
 		WillDelete.clear();
 	}
+
+	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
+	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -1516,19 +1534,30 @@ class Instance {
 	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
 protected:
 	size_t lastUpdateFrame = 0;
+public:
+	Instance* Parent = nullptr;
+	std::vector<Instance*> Children;
+	long uniqueID = -1;
+	InstanceType Class = InstanceType::INSTANCE;
+	bool updateChildrenZIndex = true;
+protected:
 	bool updateWhenWillBeVisible = true;
 	bool __ParentObject{};
-
+private:
+	std::vector<std::pair<EventType, InstanceCallback>> events;
+public:
+	std::string Name = "Instance";
+protected:
 	virtual void basicCloneOperation(Instance* copyfrom) {
 		this->Parent = nullptr;
 		this->Children.clear();
-		this->childsRemovedInFrame.clear();
-		this->childsAddedInFrame.clear();
 		updateWhenWillBeVisible = true;
 		SIMPLEUI_GLOBAL::sceneDirty = true;
 
 		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+		SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
+		SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
 
 		if (!copyfrom) return;
 
@@ -1537,16 +1566,17 @@ protected:
 		}
 	}
 
-	Instance(bool a) : __ParentObject(true), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) { SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0); };
+	Instance(bool a) : uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++), __ParentObject(true) {
+		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+		SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
+		SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
+	}
+
 	Instance(Instance* p);
 	Instance() = delete;
 	virtual ~Instance() {}
-private:
-	std::vector<std::pair<EventType, InstanceCallback>> events;
+
 public:
-	long uniqueID = -1;
-	std::unordered_map<long, Instance*> childsAddedInFrame;
-	std::unordered_map<long, Instance*> childsRemovedInFrame;
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 
 	virtual bool hasEvent(EventType t) const {
@@ -1555,17 +1585,8 @@ public:
 				return true;
 			}
 		}
-
 		return false;
 	}
-
-	bool updateChildrenZIndex = true;
-
-	Instance* Parent = nullptr;
-	std::vector<Instance*> Children;
-
-	std::string Name = "Instance";
-	InstanceType Class = InstanceType::INSTANCE;
 
 	void setParent(Instance* ptr);
 
@@ -1575,7 +1596,6 @@ public:
 				return obj;
 			}
 		}
-
 		return nullptr;
 	}
 
@@ -1585,89 +1605,70 @@ public:
 				return obj;
 			}
 		}
-
 		return nullptr;
 	}
 
 	bool isAncestorOf(Instance* other) const {
 		Instance* ptr = other;
-
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == this) return true;
 			ptr = ptr->Parent;
 		}
-
 		return false;
 	}
 
 	Instance* findFirstAncestorOfClass(InstanceType cls) {
 		Instance* ptr = this;
-
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent->Class == cls) return ptr->Parent;
 			ptr = ptr->Parent;
 		}
-
 		return nullptr;
 	}
 
 	Instance* findFirstDescendantOfClass(InstanceType cls) {
-		std::function<Instance* (Instance*)> l = [=](Instance* ptr) -> Instance* {
+		std::function<Instance* (Instance*)> l = [&](Instance* ptr) -> Instance* {
 			for (Instance* child : ptr->Children) {
 				if (child->Class == cls) {
 					return child;
 				}
-
 				Instance* res = l(child);
-
 				if (res) {
 					return res;
 				}
 			}
-
 			return nullptr;
 		};
-
 		return l(this);
 	}
 
 	Instance* findFirstDescendant(const std::string& name) {
-		std::function<Instance* (Instance*)> l;
-
-		l = [&](Instance* ptr) -> Instance* {
+		std::function<Instance* (Instance*)> l = [&](Instance* ptr) -> Instance* {
 			for (Instance* child : ptr->Children) {
 				if (child->Name == name) {
 					return child;
 				}
-
 				Instance* res = l(child);
-
 				if (res) {
 					return res;
 				}
 			}
-
 			return nullptr;
 		};
-
 		return l(this);
 	}
 
 	std::vector<Instance*> getDescendants(const std::function<bool(Instance*)>& condition = [](Instance* _) { return true; }) {
 		std::vector<Instance*> out;
-
 		std::function<void(Instance*)> l = [&](Instance* ptr) {
 			for (Instance* child : ptr->Children) {
 				if (condition(child)) {
 					out.push_back(child);
 				}
-
 				l(child);
 			}
 		};
-
 		l(this);
-
 		return out;
 	}
 
@@ -1679,12 +1680,10 @@ public:
 
 	bool isDescendantOf(Instance* maybeAncestor) const {
 		const Instance* ptr = this;
-
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == maybeAncestor) return true;
 			ptr = ptr->Parent;
 		}
-
 		return false;
 	}
 
@@ -1695,18 +1694,18 @@ public:
 			if (type == TICK) {
 				func(this);
 			} else if (type == CHILD_ADDED) {
-				for (auto& [id, ptr] : childsAddedInFrame) {
+				for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
 					func(this, ptr);
 				}
 			} else if (type == CHILD_REMOVED) {
-				for (auto& [id, ptr] : childsRemovedInFrame) {
+				for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
 					func(this, ptr);
 				}
 			}
 		}
 
-		childsAddedInFrame.clear();
-		childsRemovedInFrame.clear();
+		SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
+		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].clear();
 	}
 
 	void SetSizePosUpdateFlag() {
@@ -1744,7 +1743,6 @@ public:
 	virtual Instance* Clone() const {
 		Instance* i = new Instance(*this);
 		i->basicCloneOperation(const_cast<Instance*>(this));
-
 		return i;
 	}
 };
@@ -2020,12 +2018,6 @@ inline SpecialVector2 getScrollFrameRS(Instance*);
 inline SpecialVector2 getScrollFrameRP(Instance*);
 inline bool isScrollFrameCropping(Instance*);
 
-enum SUI_EEC {
-	EEC_DEFAULT = 0, // Entered if current object is highest by ZIndex on mouse
-	EEC_EVERY_ENTER, // Entered if current object on mouse
-	EEC_IF_DESCENDANT_HIGHER // Entered if current object is ancestor of highest ZIndex object on mouse
-};
-
 inline void DrawRoundRectBatch(const RoundRectData& r) {
 	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
 	if (r.Texture.id) {
@@ -2067,8 +2059,6 @@ namespace RectGPU {
 		vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, MaxQuads * 4 * (int)sizeof(RectVertex), true);
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, 3, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, x));
 		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 2, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, u));
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4, RL_UNSIGNED_BYTE, true, (int)sizeof(RectVertex), offsetof(RectVertex, r));
 		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 4, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, lx));
@@ -2108,7 +2098,7 @@ namespace RectGPU {
 		float ox = pos.x + origin.x;
 		float oy = pos.y + origin.y;
 		float sn = 0.f;
-		float cs = 1.f;
+		float cs = 1.0f;
 		if (rotation != 0.f) {
 			sn = sinf(rotation * DEG2RAD);
 			cs = cosf(rotation * DEG2RAD);
@@ -2180,7 +2170,8 @@ inline void FlushRectanglesBatch() {
 
 		unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
 		if (r.BorderThickness > 0 and borderA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin, RectGPU::QuadTex{});
+			int pixBordOffset = std::roundf(r.BorderThickness * ((r.borderType == BorderPlacement::BORDER_INNER) ? 0 : ((r.borderType == BorderPlacement::BORDER_MIDDLE) ? 0.5 : 1)));
+			RectGPU::PushQuad({ r.Pos.x - pixBordOffset, r.Pos.y - pixBordOffset }, { r.Size.x + pixBordOffset * 2, r.Size.y + pixBordOffset * 2 }, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin, RectGPU::QuadTex{});
 		}
 	}
 
@@ -2242,8 +2233,8 @@ protected:
 			}
 		}
 
-		if (!childsRemovedInFrame.empty()) childsRemovedInFrame.clear();
-		if (!childsAddedInFrame.empty()) childsAddedInFrame.clear();
+		SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
+		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].clear();
 	}
 
 	void eventHandler() override;
@@ -2305,9 +2296,9 @@ public:
 	SpecialVector2 Size{ 0, 0, this };
 	SpecialVector2 SizeOFFSET{ 0, 0, this };
 
-	float Rotation = 0; // WIP
-	SpecialVector2 Origin = { 0.5,0.5 }; // WIP
-	SpecialVector2 OriginOFFSET = { 0, 0 }; // WIP
+	float Rotation = 0; // Local object rotation
+	SpecialVector2 Origin = { 0.5,0.5 }; // Local object origin
+	SpecialVector2 OriginOFFSET = { 0, 0 }; // Local object origin in pixels
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -2319,6 +2310,7 @@ public:
 	short BorderThickness{};
 	float BorderTransparency{};
 	Color BorderColor{};
+	BorderPlacement BorderType = BorderPlacement::BORDER_INNER;
 
 	int ZIndex = 0;
 	bool Active = false;
@@ -2368,17 +2360,6 @@ public:
 			Object2D* obj = static_cast<Object2D*>(current);
 
 			SpecialVector2 parentSizePx = obj->RealSize;
-
-			SpecialVector2 parentAnchorPx = {
-				std::roundf(obj->RealSize.x * obj->AnchorPosition.x + obj->AnchorPositionOFFSET.x),
-				std::roundf(obj->RealSize.y * obj->AnchorPosition.y + obj->AnchorPositionOFFSET.y)
-			};
-
-			SpecialVector2 parentLocalPx = {
-				std::roundf(obj->Position.x * parentSizePx.x + obj->PositionOFFSET.x - parentAnchorPx.x),
-				std::roundf(obj->Position.y * parentSizePx.y + obj->PositionOFFSET.y - parentAnchorPx.y)
-			};
-
 			SpecialVector2 parentPosPx = obj->RealPos;
 
 			SpecialVector2 myLocalPx = {
@@ -2421,8 +2402,8 @@ public:
 
 		float sn = sinf(Rotation * DEG2RAD);
 		float cs = cosf(Rotation * DEG2RAD);
-		float ox = pos.x + Origin.x;
-		float oy = pos.y + Origin.y;
+		float ox = pos.x + Origin.x * size.x + OriginOFFSET.x;
+		float oy = pos.y + Origin.y * size.y + OriginOFFSET.y;
 
 		float xs[4] = { pos.x, pos.x + size.x, pos.x + size.x, pos.x };
 		float ys[4] = { pos.y, pos.y, pos.y + size.y, pos.y + size.y };
@@ -2445,7 +2426,7 @@ public:
 
 	virtual void Draw() {
 		if (Visible) {
-			if (BackgroundTransparency >= 1.f and (BorderThickness == 0 or BorderTransparency >= 1.f)) return;
+			if (BackgroundTransparency >= 1.0f and (BorderThickness == 0 or BorderTransparency >= 1.0f)) return;
 			Rectangle b = GetRotatedBounds();
 			if (b.x + b.width + BorderThickness < 0
 				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
@@ -2454,7 +2435,7 @@ public:
 				return;
 			}
 
-			const RoundRectData rec = { 
+			RoundRectData rec = { 
 				RealPos, RealSize, 
 				BackgroundColor, BorderColor, 
 				BackgroundTransparency, Roundness, BorderTransparency, 
@@ -2462,6 +2443,8 @@ public:
 				Rotation, 
 				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
 			};
+
+			rec.borderType = BorderType;
 
 			DrawRoundRectBatch(rec);
 		}
@@ -2727,7 +2710,7 @@ class ScrollFrame : public Object2D {
 	struct ScrollSector {
 		int X = 0;
 		int Y = 0;
-		std::unordered_map<long, Instance*> Objects;
+		std::vector<std::pair<long, Instance*>> Objects;
 	};
 
 	std::unordered_map<int, std::unordered_map<int, ScrollSector*>> Grid;
@@ -2752,17 +2735,21 @@ private:
 	void SectorsRemoveChild(long childID) {
 		if (childID == -1) return;
 
-		auto it4 = toUpdateSectors.find(childID);
-		if (it4 != toUpdateSectors.end()) {
-			toUpdateSectors.erase(it4);
+		for (int i = 0; i < toUpdateSectors.size(); i++) {
+			if (toUpdateSectors[i].first == childID) {
+				toUpdateSectors.erase(toUpdateSectors.begin() + i);
+				break;
+			}
 		}
 
 		auto it = SectorsOnObject.find(childID);
 		if (it != SectorsOnObject.end()) {
 			for (ScrollSector* sector : it->second) {
-				auto it2 = sector->Objects.find(childID);
-				if (it2 != sector->Objects.end()) {
-					sector->Objects.erase(it2);
+				for (int i = 0; i < sector->Objects.size(); i++) {
+					if (sector->Objects[i].first == childID) {
+						sector->Objects.erase(sector->Objects.begin() + i);
+						break;
+					}
 				}
 			}
 			SectorsOnObject.erase(it);
@@ -2862,9 +2849,10 @@ private:
 			sector->Y = y;
 
 			Grid[x][y] = sector;
+			sectorsDirty = true;
 		}
 
-		sector->Objects.insert({ obj->uniqueID, obj });
+		sector->Objects.push_back({ obj->uniqueID, obj });
 
 		auto it3 = SectorsOnObject.find(obj->uniqueID);
 
@@ -2879,16 +2867,18 @@ private:
 	SpecialVector2 lastCanvasFullPosition{};
 	SpecialVector2 lastCanvasPos{};
 	bool lastVisible = false;
+	bool sectorsDirty = false;
 
 	void checkAndUpdateCurrentSectors(bool force = false) {
 		SpecialVector2 fullSize = RealSize;
 		SpecialVector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
 
 		if (force or lastVisible != Visible or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
-			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y) {
+			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y or sectorsDirty) {
 			lastFullSize = fullSize;
 			lastCanvasFullPosition = fullPos;
 			lastVisible = Visible;
+			sectorsDirty = false;
 			sectorsOnView.clear();
 			SpecialVector2 pos = fullPos;
 			SpecialVector2 lastpos = { fullPos.x + fullSize.x, fullPos.y + fullSize.y };
@@ -2925,7 +2915,7 @@ private:
 		}
 	}
 
-	std::unordered_map<long, Instance*> toUpdateSectors;
+	std::vector <std::pair<long, Instance*>> toUpdateSectors;
 	void secUpd(Instance* child) {
 		if (!child) return;
 
@@ -2939,9 +2929,11 @@ private:
 			}
 		} else { // updating current sector
 			for (ScrollSector* sector : checkIt->second) {
-				auto it2 = sector->Objects.find(child->uniqueID);
-				if (it2 != sector->Objects.end()) {
-					sector->Objects.erase(it2);
+				for (int i = 0; i < sector->Objects.size(); i++) {
+					if (sector->Objects[i].first == child->uniqueID) {
+						sector->Objects.erase(sector->Objects.begin() + i);
+						break;
+					}
 				}
 			}
 
@@ -2967,7 +2959,7 @@ protected:
 	}
 public:
 	void UpdateSectors(Instance* child) {
-		toUpdateSectors.insert({ child->uniqueID, child });
+		toUpdateSectors.push_back({ child->uniqueID, child });
 	}
 
 	void UpdateObjectTickState(Instance* child) {
@@ -2976,8 +2968,15 @@ public:
 
 		if (hasTick and it == isTick.end()) {
 			isTick.insert({ child->uniqueID, child });
+			Tick.push_back(child);
 		} else if (!hasTick and it != isTick.end()) {
 			isTick.erase(it);
+			for (int i = 0; i < Tick.size(); i++) {
+				if (Tick[i] == child) {
+					Tick.erase(Tick.begin() + i);
+					break;
+				}
+			}
 		}
 	}
 
@@ -3005,15 +3004,14 @@ public:
 			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
 			pushed = true;
 		}
-
-		checkAndUpdateCurrentSectors(true); // force update cuz sometimes calculate condition doesn't work
-
+	   
 		for (auto& [id, ptr] : toUpdateSectors) {
 			if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 			secUpd(ptr);
 		}
-
 		toUpdateSectors.clear();
+
+		checkAndUpdateCurrentSectors();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -3105,8 +3103,6 @@ public:
 			return;
 		}
 
-		SpecialVector2 oldSize = RealSize;
-
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
@@ -3117,17 +3113,11 @@ public:
 			}
 		}
 
-		if (oldSize.x != RealSize.x or oldSize.y != RealSize.y) {
-			for (Instance* child : Children) {
-				UpdateSectors(child);
-			}
-		}
-
-		for (auto& [id, ptr] : childsAddedInFrame) {
+		for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
 			SectorsAddChild(ptr);
 		}
 
-		for (auto& [id, ptr] : childsRemovedInFrame) {
+		for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
 			SectorsRemoveChild(id);
 		}
 
@@ -3233,6 +3223,7 @@ public:
 		i->Tick.clear();
 		i->isTick.clear();
 		i->sectorsOnView.clear();
+		i->toUpdateSectors.clear();
 		i->lastFullSize.x = -123123;
 
 		i->basicCloneOperation(const_cast<ScrollFrame*>(this));
@@ -4730,13 +4721,13 @@ inline void Instance::setParent(Instance* ptr) {
 			}
 		}
 
-		Parent->childsRemovedInFrame.insert({ this->uniqueID, this });
+		SIMPLEUI_GLOBAL::childsRemovedInFrame[Parent->uniqueID].insert({this->uniqueID, this});
 	}
 
 	Parent = ptr;
 	if (ptr) {
 		ptr->Children.push_back(this);
-		ptr->childsAddedInFrame.insert({ this->uniqueID, this });
+		SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->uniqueID].insert({this->uniqueID, this});
 		ptr->updateChildrenZIndex = true;
 
 		ScrollFrame* prob = (ptr->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(ptr) : (ScrollFrame*)nullptr);
@@ -4763,12 +4754,14 @@ inline void Delete(Instance* ptr) {
 	}
 
 	if (ptr->Parent) {
-		ptr->Parent->childsRemovedInFrame.insert({ ptr->uniqueID, ptr });
+		SIMPLEUI_GLOBAL::childsRemovedInFrame[ptr->Parent->uniqueID].insert({ptr->uniqueID, ptr});
 		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
 
-		auto it = ptr->Parent->childsAddedInFrame.find(ptr->uniqueID);
-		if (it != ptr->Parent->childsAddedInFrame.end()) {
-			ptr->Parent->childsAddedInFrame.erase(it);
+		auto& m = SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->Parent->uniqueID];
+
+		auto it = m.find(ptr->uniqueID);
+		if (it != m.end()) {
+			m.erase(it);
 		}
 
 		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
@@ -4805,9 +4798,12 @@ inline void Delete(Instance* ptr) {
 inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
+	SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
+	SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
+
 	if (p) {
 		p->Children.push_back(this);
-		p->childsAddedInFrame.insert({ uniqueID, this });
+		SIMPLEUI_GLOBAL::childsAddedInFrame[p->uniqueID].insert({uniqueID, this});
 		p->updateChildrenZIndex = true;
 
 		ScrollFrame* prob = (p->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(p) : (ScrollFrame*)nullptr);
@@ -4927,12 +4923,12 @@ inline void Object2D::eventHandler() {
 			}
 			break;
 		} case CHILD_ADDED: {
-			for (auto& [id, ptr] : childsAddedInFrame) {
+			for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
 				func(this, ptr);
 			}
 			break;
 		} case CHILD_REMOVED: {
-			for (auto& [id, ptr] : childsRemovedInFrame) {
+			for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
 				func(this, ptr);
 			}
 			break;
@@ -5208,16 +5204,39 @@ inline namespace debug {
 	}
 
 
+	inline std::vector<double> msBuffer;
+	inline double msAccum = 0.0;
+	inline constexpr double msFlushInterval = 0.1;
+	inline constexpr size_t msMaxPoints = 1000;
+
 	inline void updateGraph() {
 #ifndef EXCLUDE_SIMPLEUI_EXTENSION
-		if (msGRAPH and msGRAPH->Visible) {
-			size_t size = msGRAPH->getSequenceValues(msSEQ).size();
-			if (size >= 100) {
-				msGRAPH->removeIndexFromSequence(msSEQ, 0);
-			}
-
-			msGRAPH->addValueToSequence(msSEQ, SIMPLEUI_GLOBAL::dt);
+		if (!msGRAPH or !msGRAPH->Visible) {
+			msBuffer.clear();
+			msAccum = 0.0;
+			return;
 		}
+
+		msBuffer.push_back(SIMPLEUI_GLOBAL::dt);
+		msAccum += SIMPLEUI_GLOBAL::dt;
+
+		if (msAccum < msFlushInterval) return;
+
+		size_t current = msGRAPH->getSequenceValues(msSEQ).size();
+		size_t incoming = std::min(msBuffer.size(), msMaxPoints);
+		size_t skip = msBuffer.size() - incoming;
+
+		size_t overflow = (current + incoming > msMaxPoints) ? current + incoming - msMaxPoints : 0;
+		for (size_t i = 0; i < overflow; i++) {
+			msGRAPH->removeIndexFromSequence(msSEQ, 0);
+		}
+
+		for (size_t i = skip; i < msBuffer.size(); i++) {
+			msGRAPH->addValueToSequence(msSEQ, msBuffer[i]);
+		}
+
+		msBuffer.clear();
+		msAccum = 0.0;
 #endif
 	}
 
@@ -5764,7 +5783,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 					int nextDepth = localDepth;
 					bool isTarget = false;
 
-					if (scroll->childsRemovedInFrame.contains(id)) continue;
+					if (SIMPLEUI_GLOBAL::childsRemovedInFrame[scroll->uniqueID].contains(id)) continue;
 
 					if (!Is2DInheritor(child)) {
 						if (getTop(child, nextDepth)) {

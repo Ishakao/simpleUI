@@ -710,8 +710,10 @@ public:
 			updateChildren(this);
 		}
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		if (!events.empty()) {
+			eventHandler();
+			if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();
@@ -1142,8 +1144,10 @@ public:
 			updateChildren(this);
 		}
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		if (!events.empty()) {
+			eventHandler();
+			if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
 			getRealObject2Dsize();

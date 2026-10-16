@@ -15,7 +15,7 @@
 // Text class for management TextLabel and TextBox (TEXT_CHANGED events optimization)							//
 // Additional events for objects (like TEXT_CHANGED on text-objects)											//
 // Textures RAM & VRAM optimization																				//
-// A few CPU optimizations																						//
+// A lot of CPU performance improvement																			//
 // Spacial Grid optimization for ScrollFrame (millions of objects with thousands of FPS)					    //
 // TextBox input can be on any language (any UTF-8 character)													//
 // TextBox now supports clipboard and Y viewport																//
@@ -179,8 +179,9 @@ using RAYLIB_FUNCTIONAL::SHADER_UNIFORM_VEC2;
 #define YELLOW_ANSI "\033[33m"
 #define BLUE_ANSI "\033[36m"
 #define DEFAULT_ANSI "\033[0m"
+#define SCROLLFRAME_GRID_SIZE 512
 #define DEFAULT_ATLAS_SIZE 2048
-#define FLT_MAX          3.402823466e+38F        // max value
+#define FLT_MAX          3.402823466e+38F        // max value  (from float.h)
 
 template<typename T, typename = void>
 struct is_streamable : std::false_type {};
@@ -383,6 +384,9 @@ namespace SIMPLEUI_GLOBAL {
 
 	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
 	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
+
+	std::vector<TextBox*> TextBoxesToUpdateTexture;
+	std::vector<TextLabel*> TextLabelsToUpdateTexture;
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -1534,6 +1538,7 @@ class Instance {
 	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
 protected:
 	size_t lastUpdateFrame = 0;
+	bool DontSeekParent = false;
 public:
 	Instance* Parent = nullptr;
 	std::vector<Instance*> Children;
@@ -1672,11 +1677,7 @@ public:
 		return out;
 	}
 
-	void deleteAllChildren() {
-		while (Children.size() > 0) {
-			Delete(Children[0]);
-		}
-	}
+	void deleteAllChildren();
 
 	bool isDescendantOf(Instance* maybeAncestor) const {
 		const Instance* ptr = this;
@@ -2703,9 +2704,10 @@ inline void PopClip() {
 }
 
 class ScrollFrame : public Object2D {
+	friend inline void Instance::deleteAllChildren();
 	constexpr static const char* DefaultName = "ScrollFrame";
 	constexpr static InstanceType DefaultClass = SCROLLFRAME;
-	constexpr static unsigned int GridSectorSize = 512;
+	constexpr static unsigned int GridSectorSize = SCROLLFRAME_GRID_SIZE;
 
 	struct ScrollSector {
 		int X = 0;
@@ -2735,10 +2737,14 @@ private:
 	void SectorsRemoveChild(long childID) {
 		if (childID == -1) return;
 
-		for (int i = 0; i < toUpdateSectors.size(); i++) {
-			if (toUpdateSectors[i].first == childID) {
-				toUpdateSectors.erase(toUpdateSectors.begin() + i);
-				break;
+		auto upit = toUpdateSectorsC.find(childID);
+		if (upit != toUpdateSectorsC.end()) {
+			toUpdateSectorsC.erase(upit);
+			for (int i = 0; i < toUpdateSectors.size(); i++) {
+				if (toUpdateSectors[i].first == childID) {
+					toUpdateSectors.erase(toUpdateSectors.begin() + i);
+					break;
+				}
 			}
 		}
 
@@ -2915,7 +2921,9 @@ private:
 		}
 	}
 
-	std::vector <std::pair<long, Instance*>> toUpdateSectors;
+	std::unordered_map<long, Instance*> toUpdateSectorsC;
+	std::vector<std::pair<long, Instance*>> toUpdateSectors;
+
 	void secUpd(Instance* child) {
 		if (!child) return;
 
@@ -2959,7 +2967,11 @@ protected:
 	}
 public:
 	void UpdateSectors(Instance* child) {
+		auto it = toUpdateSectorsC.find(child->uniqueID);
+		if (it != toUpdateSectorsC.end()) return;
+
 		toUpdateSectors.push_back({ child->uniqueID, child });
+		toUpdateSectorsC.insert({ child->uniqueID, child });
 	}
 
 	void UpdateObjectTickState(Instance* child) {
@@ -2984,8 +2996,6 @@ public:
 	SpecialVector2 CanvasPosition = { 0,0 };
 	SpecialVector2 CanvasSizeOFFSET = { 0,0 };
 	SpecialVector2 CanvasPositionOFFSET = { 0,0 };
-	SpecialVector2 CanvasAbsoluteSize = { 0,0 };
-	SpecialVector2 CanvasAbsolutePosition = { 0,0 };
 	float ScrollSpeed = 0.25;
 	float ScrollSpeedOFFSET = 0;
 	bool CropDescendants = true;
@@ -2999,36 +3009,39 @@ public:
 	void Draw(bool posOrSizeChanged) {
 		Object2D::Draw();
 
-		bool pushed = false;
-		if (CropDescendants) {
-			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
-			pushed = true;
-		}
-	   
-		for (auto& [id, ptr] : toUpdateSectors) {
-			if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
-			secUpd(ptr);
-		}
-		toUpdateSectors.clear();
-
-		checkAndUpdateCurrentSectors();
-
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
-		for (ScrollSector* s : sectorsOnView) {
-			for (auto& [id, ptr] : s->Objects) {
+		if (CropDescendants) {
+			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
+
+			for (auto& [id, ptr] : toUpdateSectors) {
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
-				ptr->Update(tempRes);
+				secUpd(ptr);
+			}
+			toUpdateSectors.clear();
+			toUpdateSectorsC.clear();
+
+			checkAndUpdateCurrentSectors();
+
+			for (ScrollSector* s : sectorsOnView) {
+				for (auto& [id, ptr] : s->Objects) {
+					if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
+					ptr->Update(tempRes);
+				}
+			}
+
+			for (Instance* s : Tick) {
+				s->Update(tempRes);
+			}
+
+			PopClip();
+		} else {
+			for (Instance* child : Children) {
+				child->Update(tempRes);
 			}
 		}
-
-		for (Instance* s : Tick) {
-			s->Update(tempRes);
-		}
-
-		if (pushed) PopClip();
 
 		if (SliderTransparency != 1 and SliderSize != 0) {
 			if (CanvasSize.y > 1 or CanvasSizeOFFSET.y > RealSize.y) {
@@ -3224,6 +3237,7 @@ public:
 		i->isTick.clear();
 		i->sectorsOnView.clear();
 		i->toUpdateSectors.clear();
+		i->toUpdateSectorsC.clear();
 		i->lastFullSize.x = -123123;
 
 		i->basicCloneOperation(const_cast<ScrollFrame*>(this));
@@ -3283,6 +3297,7 @@ inline bool isScrollFrameCropping(Instance* sc) {
 }
 
 class TextLabel : public Object2D {
+	friend inline void start(Instance*, Vector3, const char*, const char*, unsigned int);
 	constexpr static float TextTextureUpdateAspect = 1.1;
 	constexpr static const char* DefaultName = "TextLabel";
 	constexpr static InstanceType DefaultClass = TEXTLABEL;
@@ -3416,7 +3431,7 @@ public:
 			FontFace.restate();
 
 			if (lastParams.z != textParams.z or ((cachedText.id == 0 or !cachedText.currentAtlas) and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
-				updateTexture();
+				SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
 			} else {
 				if (std::fabsf(lastRealSize.x - RealSize.x) >= TextTextureUpdateAspect or std::fabsf(lastRealSize.y - RealSize.y) >= TextTextureUpdateAspect) {
 					lastRealSize = RealSize;
@@ -3427,7 +3442,7 @@ public:
 
 			if (textParams.z > 1) {
 				if (cachedText.id == 0) {
-					updateTexture();
+					return;
 				}
 
 				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
@@ -3452,7 +3467,7 @@ public:
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
-		i->updateTexture();
+		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(i);
 
 		return i;
 	}
@@ -3478,6 +3493,7 @@ enum TextBoxNextLine {
 };
 
 class TextBox : public Object2D {
+	friend inline void start(Instance*, Vector3, const char*, const char*, unsigned int);
 	constexpr static float TextTextureUpdateAspect = 1.3;
 	constexpr static const char* DefaultName = "TextBox";
 	constexpr static InstanceType DefaultClass = TEXTBOX;
@@ -3669,9 +3685,9 @@ public:
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged();
 
 		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this))) {
-			updateTexture();
+			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
 		} else if (Text.isChanged()) {
-			updateTexture();
+			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
 		} else {
 			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
 				updateTextParams();
@@ -3687,34 +3703,32 @@ public:
 		float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
 
 		if (textParams.z > 1) {
-			if (cachedText.id == 0) {
-				updateTexture();
+			if (cachedText.id != 0) {
+				SpecialVector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
+
+				Rectangle sourceRec = {
+					std::floorf(viewX),
+					std::floorf(viewY),
+					std::floorf(sizeToDraw.x),
+					std::floorf(sizeToDraw.y)
+				};
+
+				Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(sizeToDraw.x), std::floorf(sizeToDraw.y) };
+
+				Color clr;
+				if (Text == "") {
+					clr = { PlaceholderTextColor.r, PlaceholderTextColor.g, PlaceholderTextColor.b, (unsigned char)(PlaceholderTextColor.a * (1 - TextTransparency)) };
+				} else {
+					clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
+				}
+
+				Vector2 o = {
+						Origin.x * RealSize.x + OriginOFFSET.x,
+						Origin.y * RealSize.y + OriginOFFSET.y
+				};
+
+				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, clr, 0);
 			}
-
-			SpecialVector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
-
-			Rectangle sourceRec = {
-				std::floorf(viewX),
-				std::floorf(viewY),
-				std::floorf(sizeToDraw.x),
-				std::floorf(sizeToDraw.y)
-			};
-
-			Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(sizeToDraw.x), std::floorf(sizeToDraw.y) };
-
-			Color clr;
-			if (Text == "") {
-				clr = { PlaceholderTextColor.r, PlaceholderTextColor.g, PlaceholderTextColor.b, (unsigned char)(PlaceholderTextColor.a * (1 - TextTransparency)) };
-			} else {
-				clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
-			}
-
-			Vector2 o = {
-					Origin.x * RealSize.x + OriginOFFSET.x,
-					Origin.y * RealSize.y + OriginOFFSET.y
-			};
-
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, clr, 0);
 		}
 
 		if (Text.empty()) {
@@ -4404,6 +4418,7 @@ public:
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
+		SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(i);
 
 		return i;
 	}
@@ -4713,7 +4728,7 @@ inline void Instance::setParent(Instance* ptr) {
 
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
-	if (Parent != nullptr) {
+	if (Parent != nullptr and !DontSeekParent) {
 		for (int i = 0; i < Parent->Children.size(); i++) {
 			if (Parent->Children[i] == this) {
 				Parent->Children.erase(Parent->Children.begin() + i);
@@ -4730,9 +4745,10 @@ inline void Instance::setParent(Instance* ptr) {
 		SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->uniqueID].insert({this->uniqueID, this});
 		ptr->updateChildrenZIndex = true;
 
-		ScrollFrame* prob = (ptr->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(ptr) : (ScrollFrame*)nullptr);
-		if (prob) {
-			prob->UpdateSectors(this);
+		Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
+
+		if (asc) {
+			static_cast<ScrollFrame*>(asc)->UpdateSectors(this);
 		}
 	}
 }
@@ -4753,9 +4769,10 @@ inline void Delete(Instance* ptr) {
 		Animate::ActiveSafeAnimationsLinks.erase(ptr);
 	}
 
-	if (ptr->Parent) {
+	SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
+
+	if (ptr->Parent and !ptr->DontSeekParent) {
 		SIMPLEUI_GLOBAL::childsRemovedInFrame[ptr->Parent->uniqueID].insert({ptr->uniqueID, ptr});
-		SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
 
 		auto& m = SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->Parent->uniqueID];
 
@@ -4779,20 +4796,39 @@ inline void Delete(Instance* ptr) {
 	}
 
 	ptr->setParent(nullptr);
-
-	std::vector<Instance*> z = ptr->Children;
-	for (int i = 0; i < z.size(); i++) {
-		Instance* child = z[i];
-		Delete(child);
-	}
-
-	ptr->Children.clear();
-	z.clear();
+	ptr->deleteAllChildren();
 
 	if (ptr == SIMPLEUI_GLOBAL::FocusedTextBox) SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
 	if (ptr == SIMPLEUI_GLOBAL::higherObject) SIMPLEUI_GLOBAL::higherObject = nullptr;
 
 	SIMPLEUI_GLOBAL::WillDelete.push_back(ptr);
+}
+
+inline void Instance::deleteAllChildren() {
+	for (int i = 0; i < Children.size(); i++) {
+		Children[i]->DontSeekParent = true;
+		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].insert({ Children[i]->uniqueID, Children[i] });
+		Delete(Children[i]);
+	}
+
+	Children.clear();
+	SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
+
+	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
+
+	if (scrollChild and scrollChild != this) {
+		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+	}
+
+	if (Class == SCROLLFRAME) {
+		static_cast<ScrollFrame*>(this)->Grid.clear();
+		static_cast<ScrollFrame*>(this)->SectorsOnObject.clear();
+		static_cast<ScrollFrame*>(this)->Tick.clear();
+		static_cast<ScrollFrame*>(this)->isTick.clear();
+		static_cast<ScrollFrame*>(this)->sectorsOnView.clear();
+		static_cast<ScrollFrame*>(this)->toUpdateSectors.clear();
+		static_cast<ScrollFrame*>(this)->toUpdateSectorsC.clear();
+	}
 }
 
 inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
@@ -5774,10 +5810,19 @@ inline void UpdateHigher(Instance* StartInstance) {
 	std::function<bool(Instance*, int)> getTop = [&getTop, &best, &maxDepth](Instance* parent, int localDepth) -> bool {
 		bool foundInThisBranch = false;
 
-		if (parent->Class == SCROLLFRAME) {
+		if (parent->Class == SCROLLFRAME and static_cast<ScrollFrame*>(parent)->CropDescendants) {
 			ScrollFrame* scroll = static_cast<ScrollFrame*>(parent);
 
 			for (auto sector : scroll->sectorsOnView) {
+				Vector2 mousePosOnScroll = { 
+					SIMPLEUI_GLOBAL::mousePosition.x - scroll->RealPos.x + scroll->CanvasPosition.x * scroll->RealSize.x + scroll->CanvasPositionOFFSET.x, 
+					SIMPLEUI_GLOBAL::mousePosition.y - scroll->RealPos.y + scroll->CanvasPosition.y * scroll->RealSize.y + scroll->CanvasPositionOFFSET.y 
+				};
+				if (!(sector->X * SCROLLFRAME_GRID_SIZE <= mousePosOnScroll.x and (sector->X + 1) * SCROLLFRAME_GRID_SIZE > mousePosOnScroll.x and
+					sector->Y * SCROLLFRAME_GRID_SIZE <= mousePosOnScroll.y and (sector->Y + 1) * SCROLLFRAME_GRID_SIZE > mousePosOnScroll.y)) {
+					continue;
+				}
+
 				for (auto& [id, child] : sector->Objects) {
 					if (child == parent) continue;
 					int nextDepth = localDepth;
@@ -5871,24 +5916,25 @@ inline void UpdateHigher(Instance* StartInstance) {
 	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
-inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 0 }, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE + FLAG_MSAA_4X_HINT) {
-	if (!StartInstance) {
-		std::cout << RED_ANSI << "start() requires root object. GetRoot() to get root object" << DEFAULT_ANSI << std::endl;
+inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280, 720, 0 }, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {
+	if (!StartInstance and !GetRoot()) {
+		std::cout << RED_ANSI << "start() requires root object and creating scene from root (use GetRoot())" << DEFAULT_ANSI << std::endl;
 		return;
 	}
+
 	SetConsoleUTF8();
 	SetConfigFlags(flags);
 
-	SIMPLEUI_GLOBAL::winWidth = inf.x;
-	SIMPLEUI_GLOBAL::winHeight = inf.y;
+	SIMPLEUI_GLOBAL::winWidth = windowData.x;
+	SIMPLEUI_GLOBAL::winHeight = windowData.y;
 
-	InitWindow(inf.x, inf.y, name);
+	InitWindow(windowData.x, windowData.y, name);
 
 	if (SIMPLEUI_GLOBAL::windowMinimalSize.x != 0 and SIMPLEUI_GLOBAL::windowMinimalSize.y != 0) {
 		SetWindowMinSize(SIMPLEUI_GLOBAL::windowMinimalSize.x, SIMPLEUI_GLOBAL::windowMinimalSize.y);
 	}
 
-	int targetFPS = (inf.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : inf.z;
+	int targetFPS = (windowData.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : windowData.z;
 	SetTargetFPS(targetFPS);
 
 	Image ic = RAYLIB_FUNCTIONAL::LoadImage(iconName);
@@ -5934,17 +5980,13 @@ inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 
 			previousWinSize = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
 		}
 
-		static long middleFPS = 0;
-		middleFPS += 1 / SIMPLEUI_GLOBAL::dt;
-		static double cd = 0;
-		cd += SIMPLEUI_GLOBAL::dt;
+		static double acc = 0;
 		static int frames = 0;
+		acc += SIMPLEUI_GLOBAL::dt;
 		frames++;
-
-		if (cd >= 0.1) {
-			cd = 0;
-			SIMPLEUI_GLOBAL::accurateFPS = middleFPS / frames;
-			middleFPS = 0;
+		if (acc >= 0.1) {
+			SIMPLEUI_GLOBAL::accurateFPS = (long)(frames / acc + 0.5);
+			acc = 0;
 			frames = 0;
 		}
 
@@ -5972,6 +6014,17 @@ inline void start(Instance* StartInstance = nullptr, Vector3 inf = { 1280, 720, 
 		if (debug::fpsVisible) {
 			debug::updateGraph();
 		}
+
+		for (TextLabel* t : SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture) {
+			t->updateTexture();
+		}
+
+		for (TextBox* t : SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture) {
+			t->updateTexture();
+		}
+
+		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
+		SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
 
 		SIMPLEUI_GLOBAL::sceneDirty = false;
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;

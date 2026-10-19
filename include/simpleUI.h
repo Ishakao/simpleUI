@@ -199,7 +199,7 @@ void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	} else {
 		std::cerr << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	}
-	throw(1);
+	throw;
 }
 
 #define SIMPLEUI_THROW(x) SIMPLEUI_THROW_WITH_INFO(x, __LINE__, __FILE__);
@@ -385,8 +385,8 @@ namespace SIMPLEUI_GLOBAL {
 	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
 	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
 
-	std::vector<TextBox*> TextBoxesToUpdateTexture;
-	std::vector<TextLabel*> TextLabelsToUpdateTexture;
+	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
+	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -764,7 +764,7 @@ inline Shader getShader(int id) {
 	auto it = SIMPLEUI_GLOBAL::Shaders.find(id);
 	if (it == SIMPLEUI_GLOBAL::Shaders.end()) {
 		std::cout << YELLOW_ANSI << "Shader: " << id << " was not found" << DEFAULT_ANSI << std::endl;
-		return SIMPLEUI_GLOBAL::Shaders.find(1)->second;
+		abort();
 	}
 	return it->second;
 }
@@ -843,14 +843,11 @@ public:
 	}
 
 	const SUI_Text& operator=(const std::string& other) {
-		if (text.size() != other.size()) {
+		if (text != other) {
+			text = other;
 			changed = true;
-		} else {
-			changed = text != other;
 		}
-
-		text = other;
-		return other;
+		return *this;
 	}
 
 	const SUI_Text& operator=(const char* other) {
@@ -973,10 +970,10 @@ namespace Tasks {
 	inline void UpdateTasks(float dt) {
 		for (int i = 0; i < ActiveTasks.size();) {
 			if (ActiveTasks[i]->TimeLeft <= 0) {
+				ActiveTasks.erase(ActiveTasks.begin() + i);
+
 				ActiveTasks[i]->Callback();
 				delete ActiveTasks[i];
-
-				ActiveTasks.erase(ActiveTasks.begin() + i);
 			} else {
 				ActiveTasks[i]->TimeLeft -= dt;
 				i++;

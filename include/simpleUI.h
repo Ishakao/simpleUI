@@ -970,10 +970,11 @@ namespace Tasks {
 	inline void UpdateTasks(float dt) {
 		for (int i = 0; i < ActiveTasks.size();) {
 			if (ActiveTasks[i]->TimeLeft <= 0) {
+				Task* t = ActiveTasks[i];
 				ActiveTasks.erase(ActiveTasks.begin() + i);
-
-				ActiveTasks[i]->Callback();
-				delete ActiveTasks[i];
+				
+				t->Callback();
+				delete t;
 			} else {
 				ActiveTasks[i]->TimeLeft -= dt;
 				i++;

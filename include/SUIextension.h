@@ -699,6 +699,11 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
+		if (lastVisible != Visible) {
+			SIMPLEUI_GLOBAL::sceneDirty = true;
+			lastVisible = Visible;
+		}
+
 		if (!Visible) {
 			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
 			return;
@@ -722,7 +727,9 @@ public:
 
 		checkClick();
 
-		Draw();
+		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
+		}
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -1133,6 +1140,11 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
+		if (lastVisible != Visible) {
+			SIMPLEUI_GLOBAL::sceneDirty = true;
+			lastVisible = Visible;
+		}
+
 		if (!Visible) {
 			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
 			return;
@@ -1156,7 +1168,9 @@ public:
 
 		checkClick();
 
-		Draw();
+		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
+		}
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;

@@ -329,6 +329,10 @@ struct SpecialVector2 {
 
 struct AtlasTexture;
 
+struct Clip {
+	int x, y, w, h;
+};
+
 namespace SIMPLEUI_GLOBAL {
 	inline int winWidth = 0;
 	inline int winHeight = 0;
@@ -385,8 +389,19 @@ namespace SIMPLEUI_GLOBAL {
 	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
 	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
 
+	inline std::vector<Clip> ToDrawScissor;
+	inline std::vector<Object2D*> ObjectsToDraw; // nullptr next ScrollFrame clip from stack
+	inline bool UpdateDrawThisFrame = true;
+
 	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
 	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
+
+	inline int benchMode = 0;
+	inline Color WindowColor = { 255,255,255,255 };
+}
+
+inline void ChangeWindowColor(Color c) {
+	SIMPLEUI_GLOBAL::WindowColor = c;
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -972,7 +987,7 @@ namespace Tasks {
 			if (ActiveTasks[i]->TimeLeft <= 0) {
 				Task* t = ActiveTasks[i];
 				ActiveTasks.erase(ActiveTasks.begin() + i);
-				
+
 				t->Callback();
 				delete t;
 			} else {
@@ -2017,56 +2032,51 @@ inline SpecialVector2 getScrollFrameRS(Instance*);
 inline SpecialVector2 getScrollFrameRP(Instance*);
 inline bool isScrollFrameCropping(Instance*);
 
-inline void DrawRoundRectBatch(const RoundRectData& r) {
-	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
-	if (r.Texture.id) {
-		auto& cur = SIMPLEUI_GLOBAL::CurrentBatchTexture;
-		if (cur and cur != r.Texture.id) FlushRectanglesBatch();
-		cur = r.Texture.id;
-	}
-	SIMPLEUI_GLOBAL::CurrentRectanglesBatch.push_back(r);
-}
+inline void FlushRectanglesBatch();
 
-struct RectVertex {
-	float x, y, z;
-	float lx, ly, hx, hy;
-	float u, v, useTex;
+struct RectInstance {
+	float x, y, w, h;
+	float ox, oy, rot, z;
+	float dx, dy, dw, dh;
+	float u0, v0, u1, v1;
 	unsigned char r, g, b, a;
+	unsigned char br, bg, bb, ba;
+	float inset;
 };
 
 namespace RectGPU {
-	constexpr int MaxQuads = 16384;
+	constexpr int MaxQuads = 65536;
 	inline unsigned int vao = 0;
 	inline unsigned int vbo = 0;
-	inline std::vector<RectVertex> verts;
+	inline std::vector<RectInstance> insts;
 
 	inline void Init() {
-		std::vector<unsigned short> idx(MaxQuads * 6);
-		for (int i = 0; i < MaxQuads; i++) {
-			unsigned short b = (unsigned short)(i * 4);
-			idx[i * 6 + 0] = b;
-			idx[i * 6 + 1] = b + 1;
-			idx[i * 6 + 2] = b + 3;
-			idx[i * 6 + 3] = b + 1;
-			idx[i * 6 + 4] = b + 2;
-			idx[i * 6 + 5] = b + 3;
-		}
+		float corners[8] = { 0, 0, 0, 1, 1, 1, 1, 0 };
+		unsigned short idx[6] = { 0, 1, 3, 1, 2, 3 };
 
 		vao = RAYLIB_FUNCTIONAL::rlLoadVertexArray();
 		RAYLIB_FUNCTIONAL::rlEnableVertexArray(vao);
 
-		vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, MaxQuads * 4 * (int)sizeof(RectVertex), true);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, 3, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, x));
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4, RL_UNSIGNED_BYTE, true, (int)sizeof(RectVertex), offsetof(RectVertex, r));
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 4, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, lx));
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2, 3, RL_FLOAT, false, (int)sizeof(RectVertex), offsetof(RectVertex, u));
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2);
+		RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(corners, sizeof(corners), false);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(0, 2, RL_FLOAT, false, 2 * sizeof(float), 0);
+		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(0);
 
-		RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx.data(), (int)(idx.size() * sizeof(unsigned short)), false);
+		vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, MaxQuads * (int)sizeof(RectInstance), true);
+		int stride = (int)sizeof(RectInstance);
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(6, 4, RL_FLOAT, false, stride, offsetof(RectInstance, x));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(7, 4, RL_FLOAT, false, stride, offsetof(RectInstance, ox));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(8, 4, RL_FLOAT, false, stride, offsetof(RectInstance, dx));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(9, 4, RL_FLOAT, false, stride, offsetof(RectInstance, u0));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(10, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, r));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(11, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, br));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(12, 1, RL_FLOAT, false, stride, offsetof(RectInstance, inset));
 
+		for (int i = 6; i <= 12; i++) {
+			RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(i);
+			RAYLIB_FUNCTIONAL::rlSetVertexAttributeDivisor(i, 1);
+		}
+
+		RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx, sizeof(idx), false);
 		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
 	}
 
@@ -2089,122 +2099,99 @@ namespace RectGPU {
 		float use = 0;
 	};
 
-	inline void PushQuad(Vector2 pos, Vector2 size, float roundness, float borderThickness, Color c, float rotation, Vector2 origin, const QuadTex& t) {
-		float halfW = size.x * 0.5f;
-		float halfH = size.y * 0.5f;
-		float cx = pos.x + halfW;
-		float cy = pos.y + halfH;
-		float ox = pos.x + origin.x;
-		float oy = pos.y + origin.y;
-		float sn = 0.f;
-		float cs = 1.0f;
-		if (rotation != 0.f) {
-			sn = sinf(rotation * DEG2RAD);
-			cs = cosf(rotation * DEG2RAD);
-		}
-		float z = floorf(borderThickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
-
-		float x0, y0, x1, y1;
-		if (t.use > 0.5f) {
-			x0 = t.dest.x - cx;
-			y0 = t.dest.y - cy;
-			x1 = x0 + t.dest.width;
-			y1 = y0 + t.dest.height;
-		} else {
-			x0 = -halfW - 1.0f;
-			y0 = -halfH - 1.0f;
-			x1 = halfW + 1.0f;
-			y1 = halfH + 1.0f;
-		}
-
-		auto corner = [&](float lx, float ly, float fx, float fy) {
-			float dx = cx + lx - ox;
-			float dy = cy + ly - oy;
-			verts.push_back({
-				ox + dx * cs - dy * sn, oy + dx * sn + dy * cs, z,
-				lx, ly, halfW, halfH,
-				t.u0 + (t.u1 - t.u0) * fx, t.v0 + (t.v1 - t.v0) * fy, t.use,
-				c.r, c.g, c.b, c.a
-			});
-		};
-
-		corner(x0, y0, 0, 0);
-		corner(x0, y1, 0, 1);
-		corner(x1, y1, 1, 1);
-		corner(x1, y0, 1, 0);
+	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t) {
+		float z = floorf(thickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
+		float dw = t.use > 0.5f ? t.dest.width : 0.0f;
+		insts.push_back({
+			pos.x, pos.y, size.x, size.y,
+			origin.x, origin.y, rotation * DEG2RAD, z,
+			t.dest.x, t.dest.y, dw, t.dest.height,
+			t.u0, t.v0, t.u1, t.v1,
+			fill.r, fill.g, fill.b, fill.a,
+			border.r, border.g, border.b, border.a,
+			inset
+		});
 	}
 }
 
+inline void DrawRoundRectBatch(const RoundRectData& r) {
+	SIMPLEUI_GLOBAL::CurrentCustomShader = SIMPLEUI_GLOBAL::RectangleRoundnessShader;
+	if (r.Texture.id) {
+		auto& cur = SIMPLEUI_GLOBAL::CurrentBatchTexture;
+		if (cur and cur != r.Texture.id) FlushRectanglesBatch();
+		cur = r.Texture.id;
+	}
+
+	RectGPU::QuadTex qt;
+	if (r.Texture.id) {
+		Rectangle s = r.Source;
+		if (s.width < 0) s.x -= s.width;
+		if (s.height < 0) s.y -= s.height;
+		float tw = (float)r.Texture.width;
+		float th = (float)r.Texture.height;
+		qt.dest = r.Destination;
+		qt.u0 = s.x / tw;
+		qt.v0 = s.y / th;
+		qt.u1 = (s.x + s.width) / tw;
+		qt.v1 = (s.y + s.height) / th;
+		qt.use = 1.0f;
+	}
+
+	unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
+	unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
+	bool hasBorder = r.BorderThickness > 0 and borderA;
+	if (!fillA and !hasBorder) return;
+
+	float off = 0.0f;
+	if (hasBorder) {
+		float k = (r.borderType == BorderPlacement::BORDER_INNER) ? 0.0f : ((r.borderType == BorderPlacement::BORDER_MIDDLE) ? 0.5f : 1.0f);
+		off = std::roundf(r.BorderThickness * k);
+	}
+
+	RectGPU::PushInstance(
+		{ r.Pos.x - off, r.Pos.y - off },
+		{ r.Size.x + off * 2, r.Size.y + off * 2 },
+		r.Roundness, hasBorder ? (float)r.BorderThickness : 0.0f, off,
+		{ r.Color.r, r.Color.g, r.Color.b, fillA },
+		{ r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA },
+		r.Rotation, { r.Origin.x + off, r.Origin.y + off }, qt);
+}
+
 inline void FlushRectanglesBatch() {
-	auto& batch = SIMPLEUI_GLOBAL::CurrentRectanglesBatch;
-	if (batch.empty()) return;
+	auto& v = RectGPU::insts;
+	if (v.empty()) return;
 
 	static Shader shader = getShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 	if (!RectGPU::vao) RectGPU::Init();
 
-	auto& v = RectGPU::verts;
+	RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
+	RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
+
+	RAYLIB_FUNCTIONAL::rlSetUniformMatrix(shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_MATRIX_MVP], RectGPU::Mul(RAYLIB_FUNCTIONAL::rlGetMatrixModelview(), RAYLIB_FUNCTIONAL::rlGetMatrixProjection()));
+
+	int diffuseLoc = shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_COLOR_DIFFUSE];
+	if (diffuseLoc >= 0) {
+		float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		RAYLIB_FUNCTIONAL::rlSetUniform(diffuseLoc, white, RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, 1);
+	}
+
+	unsigned int texId = SIMPLEUI_GLOBAL::CurrentBatchTexture ? SIMPLEUI_GLOBAL::CurrentBatchTexture : RAYLIB_FUNCTIONAL::rlGetTextureIdDefault();
+	RAYLIB_FUNCTIONAL::rlActiveTextureSlot(0);
+	RAYLIB_FUNCTIONAL::rlEnableTexture(texId);
+
+	size_t done = 0;
+	while (done < RectGPU::insts.size()) {
+		int n = (int)std::min<size_t>(RectGPU::MaxQuads, RectGPU::insts.size() - done);
+		RAYLIB_FUNCTIONAL::rlUpdateVertexBuffer(RectGPU::vbo, RectGPU::insts.data() + done, n * (int)sizeof(RectInstance), 0);
+		RAYLIB_FUNCTIONAL::rlEnableVertexArray(RectGPU::vao);
+		RAYLIB_FUNCTIONAL::rlDrawVertexArrayElementsInstanced(0, 6, nullptr, n);
+		done += n;
+	}
+
+	RAYLIB_FUNCTIONAL::rlDisableVertexArray();
+	RAYLIB_FUNCTIONAL::rlDisableTexture();
+
 	v.clear();
-	v.reserve(batch.size() * 8);
-
-	for (const auto& r : batch) {
-		RectGPU::QuadTex qt;
-		if (r.Texture.id) {
-			Rectangle s = r.Source;
-			if (s.width < 0) s.x -= s.width;
-			if (s.height < 0) s.y -= s.height;
-			float tw = (float)r.Texture.width;
-			float th = (float)r.Texture.height;
-			qt.dest = r.Destination;
-			qt.u0 = s.x / tw;
-			qt.v0 = s.y / th;
-			qt.u1 = (s.x + s.width) / tw;
-			qt.v1 = (s.y + s.height) / th;
-			qt.use = 1.0f;
-		}
-
-		unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
-		if (fillA) {
-			RectGPU::PushQuad(r.Pos, r.Size, r.Roundness, 0.0f, { r.Color.r, r.Color.g, r.Color.b, fillA }, r.Rotation, r.Origin, qt);
-		}
-
-		unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
-		if (r.BorderThickness > 0 and borderA) {
-			int pixBordOffset = std::roundf(r.BorderThickness * ((r.borderType == BorderPlacement::BORDER_INNER) ? 0 : ((r.borderType == BorderPlacement::BORDER_MIDDLE) ? 0.5 : 1)));
-			RectGPU::PushQuad({ r.Pos.x - pixBordOffset, r.Pos.y - pixBordOffset }, { r.Size.x + pixBordOffset * 2, r.Size.y + pixBordOffset * 2 }, r.Roundness, (float)r.BorderThickness, { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA }, r.Rotation, r.Origin, RectGPU::QuadTex{});
-		}
-	}
-
-	if (!v.empty()) {
-		RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
-		RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
-
-		RAYLIB_FUNCTIONAL::rlSetUniformMatrix(shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_MATRIX_MVP], RectGPU::Mul(RAYLIB_FUNCTIONAL::rlGetMatrixModelview(), RAYLIB_FUNCTIONAL::rlGetMatrixProjection()));
-
-		int diffuseLoc = shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_COLOR_DIFFUSE];
-		if (diffuseLoc >= 0) {
-			float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-			RAYLIB_FUNCTIONAL::rlSetUniform(diffuseLoc, white, RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, 1);
-		}
-
-		unsigned int texId = SIMPLEUI_GLOBAL::CurrentBatchTexture ? SIMPLEUI_GLOBAL::CurrentBatchTexture : RAYLIB_FUNCTIONAL::rlGetTextureIdDefault();
-		RAYLIB_FUNCTIONAL::rlActiveTextureSlot(0);
-		RAYLIB_FUNCTIONAL::rlEnableTexture(texId);
-
-		size_t totalQuads = v.size() / 4;
-		size_t done = 0;
-		while (done < totalQuads) {
-			int n = (int)std::min<size_t>(RectGPU::MaxQuads, totalQuads - done);
-			RAYLIB_FUNCTIONAL::rlUpdateVertexBuffer(RectGPU::vbo, v.data() + done * 4, n * 4 * (int)sizeof(RectVertex), 0);
-			RAYLIB_FUNCTIONAL::rlEnableVertexArray(RectGPU::vao);
-			RAYLIB_FUNCTIONAL::rlDrawVertexArrayElements(0, n * 6, nullptr);
-			done += n;
-		}
-
-		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
-		RAYLIB_FUNCTIONAL::rlDisableTexture();
-	}
-
-	batch.clear();
 	SIMPLEUI_GLOBAL::CurrentBatchTexture = 0;
 }
 
@@ -2219,6 +2206,7 @@ class Object2D : public Instance {
 	bool lastActive = Active;
 	int lastZIndex = ZIndex;
 protected:
+	bool lastVisible = false;
 	bool posOrSizeChangedResult = false;
 	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
@@ -2424,29 +2412,29 @@ public:
 	}
 
 	virtual void Draw() {
-		if (Visible) {
-			if (BackgroundTransparency >= 1.0f and (BorderThickness == 0 or BorderTransparency >= 1.0f)) return;
+		if (!Visible) return;
+		if (BackgroundTransparency >= 1.0f and (BorderThickness == 0 or BorderTransparency >= 1.0f)) return;
+
+		float bt = (float)BorderThickness;
+		if (Rotation == 0.0f) {
+			if (RealPos.x + RealSize.x + bt < 0 or RealPos.x - bt > SIMPLEUI_GLOBAL::winWidth or RealPos.y + RealSize.y + bt < 0 or RealPos.y - bt > SIMPLEUI_GLOBAL::winHeight) return;
+		} else {
 			Rectangle b = GetRotatedBounds();
-			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
-				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
-				return;
-			}
-
-			RoundRectData rec = { 
-				RealPos, RealSize, 
-				BackgroundColor, BorderColor, 
-				BackgroundTransparency, Roundness, BorderTransparency, 
-				BorderThickness, 
-				Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
-			};
-
-			rec.borderType = BorderType;
-
-			DrawRoundRectBatch(rec);
+			if (b.x + b.width + bt < 0 or b.x - bt > SIMPLEUI_GLOBAL::winWidth or b.y + b.height + bt < 0 or b.y - bt > SIMPLEUI_GLOBAL::winHeight) return;
 		}
+
+		RoundRectData rec = {
+			RealPos, RealSize,
+			BackgroundColor, BorderColor,
+			BackgroundTransparency, Roundness, BorderTransparency,
+			BorderThickness,
+			Rotation,
+			{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+		};
+
+		rec.borderType = BorderType;
+
+		DrawRoundRectBatch(rec);
 	}
 
 	bool pointInObject(SpecialVector2 pos) {
@@ -2499,6 +2487,11 @@ public:
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
+		if (lastVisible != Visible) {
+			SIMPLEUI_GLOBAL::sceneDirty = true;
+			lastVisible = Visible;
+		}
+
 		if (!Visible) {
 			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
 			return;
@@ -2515,7 +2508,9 @@ public:
 			getRealObject2Dposition();
 		}
 
-		Draw();
+		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
+		}
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -2670,9 +2665,6 @@ inline Font getFont(const std::string& name) {
 	return Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
 }
 
-struct Clip {
-	int x, y, w, h;
-};
 inline std::vector<Clip> clipStack;
 
 inline Clip Intersect(const Clip& a, const Clip& b) {
@@ -3012,7 +3004,10 @@ public:
 		updateWhenWillBeVisible = false;
 
 		if (CropDescendants) {
-			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
+			if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+				SIMPLEUI_GLOBAL::ToDrawScissor.push_back({(int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y});
+				SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1)));
+			}
 
 			for (auto& [id, ptr] : toUpdateSectors) {
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
@@ -3034,7 +3029,10 @@ public:
 				s->Update(tempRes);
 			}
 
-			PopClip();
+			if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+				SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(nullptr);
+				SIMPLEUI_GLOBAL::ToDrawScissor.push_back({});
+			}
 		} else {
 			for (Instance* child : Children) {
 				child->Update(tempRes);
@@ -3108,6 +3106,11 @@ public:
 
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+
+		if (lastVisible != Visible) {
+			SIMPLEUI_GLOBAL::sceneDirty = true;
+			lastVisible = Visible;
+		}
 
 		if (!Visible) {
 			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
@@ -3680,11 +3683,13 @@ public:
 			return;
 		}
 
-		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged();
+		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged() or Text.isChanged();
 
-		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.x != textParams.x or lastParams.y != textParams.y or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this))) {
-			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
-		} else if (Text.isChanged()) {
+		Text.restate();
+		FontFace.restate();
+		PlaceholderText.restate();
+
+		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this))) {
 			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
 		} else {
 			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
@@ -4291,6 +4296,11 @@ public:
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
 
+		if (lastVisible != Visible) {
+			SIMPLEUI_GLOBAL::sceneDirty = true;
+			lastVisible = Visible;
+		}
+
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
 
 		inputHandler();
@@ -4358,15 +4368,13 @@ public:
 			lastCursorIndex = CursorIndex;
 		}
 
-		Draw();
+		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
+			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
+		}
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
-
-		Text.restate();
-		FontFace.restate();
-		PlaceholderText.restate();
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
@@ -4758,6 +4766,8 @@ inline void Delete(Instance* ptr) {
 		return;
 	}
 
+	SIMPLEUI_GLOBAL::sceneDirty = true;
+
 	auto it = Animate::ActiveSafeAnimationsLinks.find(ptr);
 	if (it != Animate::ActiveSafeAnimationsLinks.end()) {
 		while (it->second.size()) {
@@ -5110,11 +5120,38 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 }
 
 inline void DrawFrame(Instance* StartInstance) {
+	if (SIMPLEUI_GLOBAL::sceneDirty) {
+		SIMPLEUI_GLOBAL::ObjectsToDraw.clear();
+		SIMPLEUI_GLOBAL::ToDrawScissor.clear();
+		SIMPLEUI_GLOBAL::UpdateDrawThisFrame = true;
+	}
+
+	SIMPLEUI_GLOBAL::sceneDirty = false;
+
 	BeginDrawing();
-	ClearBackground({ 255,255,255,255 });
+	ClearBackground(SIMPLEUI_GLOBAL::WindowColor);
 	StartInstance->Update(SIMPLEUI_GLOBAL::windowSizeChanged);
+	
+	int curClip = 0;
+
+	for (Object2D* o : SIMPLEUI_GLOBAL::ObjectsToDraw) {
+		if (o != nullptr and o != reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1))) {
+			o->Draw();
+		} else {
+			Clip value = SIMPLEUI_GLOBAL::ToDrawScissor[curClip++];
+
+			if (o == reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1))) {
+				PushClip(value);
+			} else {
+				PopClip();
+			}
+		}
+	}
+
 	FlushRectanglesBatch();
 	EndDrawing();
+
+	SIMPLEUI_GLOBAL::UpdateDrawThisFrame = false;
 }
 
 #ifndef EXCLUDE_SIMPLEUI_EXTENSION
@@ -5275,6 +5312,7 @@ inline namespace debug {
 	}
 
 	inline void toggleFrameTimeGraph() {
+		if (!SIMPLEUI_GLOBAL::ALLOW_DEBUG) return;
 #ifndef EXCLUDE_SIMPLEUI_EXTENSION
 		toggleFPS();
 		if (msGRAPH) {
@@ -6024,7 +6062,6 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
 		SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
 
-		SIMPLEUI_GLOBAL::sceneDirty = false;
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;
 	}
 

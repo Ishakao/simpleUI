@@ -389,10 +389,6 @@ namespace SIMPLEUI_GLOBAL {
 	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
 	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
 
-	inline std::vector<Clip> ToDrawScissor;
-	inline std::vector<Object2D*> ObjectsToDraw; // nullptr next ScrollFrame clip from stack
-	inline bool UpdateDrawThisFrame = true;
-
 	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
 	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
 
@@ -2508,9 +2504,7 @@ public:
 			getRealObject2Dposition();
 		}
 
-		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
-		}
+		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -3004,15 +2998,13 @@ public:
 		updateWhenWillBeVisible = false;
 
 		if (CropDescendants) {
-			if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-				SIMPLEUI_GLOBAL::ToDrawScissor.push_back({(int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y});
-				SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1)));
-			}
+			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
 
 			for (auto& [id, ptr] : toUpdateSectors) {
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 				secUpd(ptr);
 			}
+
 			toUpdateSectors.clear();
 			toUpdateSectorsC.clear();
 
@@ -3029,10 +3021,7 @@ public:
 				s->Update(tempRes);
 			}
 
-			if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-				SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(nullptr);
-				SIMPLEUI_GLOBAL::ToDrawScissor.push_back({});
-			}
+			PopClip();
 		} else {
 			for (Instance* child : Children) {
 				child->Update(tempRes);
@@ -4368,9 +4357,7 @@ public:
 			lastCursorIndex = CursorIndex;
 		}
 
-		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
-		}
+		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -5120,38 +5107,13 @@ inline std::vector<unsigned char> PngBytesToJpgBytes(const std::string& path, in
 }
 
 inline void DrawFrame(Instance* StartInstance) {
-	if (SIMPLEUI_GLOBAL::sceneDirty) {
-		SIMPLEUI_GLOBAL::ObjectsToDraw.clear();
-		SIMPLEUI_GLOBAL::ToDrawScissor.clear();
-		SIMPLEUI_GLOBAL::UpdateDrawThisFrame = true;
-	}
-
 	SIMPLEUI_GLOBAL::sceneDirty = false;
 
 	BeginDrawing();
 	ClearBackground(SIMPLEUI_GLOBAL::WindowColor);
 	StartInstance->Update(SIMPLEUI_GLOBAL::windowSizeChanged);
-	
-	int curClip = 0;
-
-	for (Object2D* o : SIMPLEUI_GLOBAL::ObjectsToDraw) {
-		if (o != nullptr and o != reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1))) {
-			o->Draw();
-		} else {
-			Clip value = SIMPLEUI_GLOBAL::ToDrawScissor[curClip++];
-
-			if (o == reinterpret_cast<Object2D*>(reinterpret_cast<char*>(1))) {
-				PushClip(value);
-			} else {
-				PopClip();
-			}
-		}
-	}
-
 	FlushRectanglesBatch();
 	EndDrawing();
-
-	SIMPLEUI_GLOBAL::UpdateDrawThisFrame = false;
 }
 
 #ifndef EXCLUDE_SIMPLEUI_EXTENSION

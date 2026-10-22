@@ -727,9 +727,7 @@ public:
 
 		checkClick();
 
-		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
-		}
+		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;
@@ -1168,9 +1166,7 @@ public:
 
 		checkClick();
 
-		if (SIMPLEUI_GLOBAL::UpdateDrawThisFrame) {
-			SIMPLEUI_GLOBAL::ObjectsToDraw.push_back(this);
-		}
+		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
 		posOrSizeChangedResult = false;

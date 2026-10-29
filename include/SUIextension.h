@@ -55,14 +55,14 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
 
 			int xof = cachedTexture.position.x;
 			int yof = cachedTexture.position.y;
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
+			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
 			cachedTexture.currentAtlas->blankArea(cachedTexture);
-			RL_FUNCTIONS_PLUS::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
+			SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
 
 			auto norm = [](long double v, long double lo, long double hi) {
 				long double d = hi - lo;
@@ -109,7 +109,7 @@ class GraphBuilder : public Object2D {
 							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(current, gmin, gmax)) + yof
 						};
 
-						RL_FUNCTIONS_PLUS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0);
+						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0);
 					} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 						long double current = seq->sequence[i];
 						float height = GraphRealSize.y * ((current - lmin) / (lmax - lmin)); if (height <= 0) height = 1;
@@ -133,10 +133,10 @@ class GraphBuilder : public Object2D {
 			}
 
 			FlushRectanglesBatch();
-			RL_FUNCTIONS_PLUS::EndScissorMode();
-			RL_FUNCTIONS_PLUS::EndTextureMode();
+			SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -156,16 +156,16 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMin.currentAtlas->renderTexture());
+			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMin.currentAtlas->renderTexture());
 			cachedMin.currentAtlas->blankArea(cachedMin);
 
 			DrawTextEx(getFont(FontFace), strMin.c_str(), { cachedMin.position.x,cachedMin.position.y }, textParamsMin.z, 0, { 255,255,255,255 });
 
-			RL_FUNCTIONS_PLUS::EndTextureMode();
+			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -185,16 +185,16 @@ class GraphBuilder : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
+			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
 			cachedMax.currentAtlas->blankArea(cachedMax);
 
 			DrawTextEx(getFont(FontFace), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
 
-			RL_FUNCTIONS_PLUS::EndTextureMode();
+			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -533,10 +533,10 @@ public:
 				std::floorf(Origin.y * RealSize.y) + OriginOFFSET.y
 			};
 
-			RL_FUNCTIONS_PLUS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, (RoundTextures ? Roundness : 0));
-				RL_FUNCTIONS_PLUS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, (RoundTextures ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, (RoundTextures ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, (RoundTextures ? Roundness : 0));
 			}
 		}
 	}
@@ -811,16 +811,16 @@ class CheckBox : public Object2D {
 			Clip current;
 			if (hadClip) current = clipStack.back();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::EndScissorMode();
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
 
-			RL_FUNCTIONS_PLUS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
+			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
 			but.tex.currentAtlas->blankArea(but.tex);
 
 			DrawTextEx(getFont(but.FontFace), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
 
-			RL_FUNCTIONS_PLUS::EndTextureMode();
+			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
-			if (hadClip) RL_FUNCTIONS_PLUS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
 		}
 	}
 
@@ -1120,7 +1120,7 @@ public:
 
 				DrawRoundRectBatch(rec);
 
-				RL_FUNCTIONS_PLUS::DrawTexturePro(but.tex, RealPos, RealSize,
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(but.tex, RealPos, RealSize,
 					{ 0, 0, but.tex.size.x, but.tex.size.y },
 					{ RealPos.x + (AnchorToLeft ? buttonSize : 0), RealPos.y + rowHeight * i, currentTextureButtonSize.x, currentTextureButtonSize.y },
 					o,

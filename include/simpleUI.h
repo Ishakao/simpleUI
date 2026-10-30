@@ -516,11 +516,11 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 			};
 
 			FT_Library lib_ = nullptr;
-			std::vector<FT_Face> faces_;
-			std::unordered_map<int, Atlas> atlases_;
-			int width_;
-			int maxSide_;
-			int side_;
+			std::vector<FT_Face> faces_{};
+			std::unordered_map<int, Atlas> atlases_{};
+			int width_{};
+			int maxSide_{};
+			int side_{};
 
 			static bool IsZeroWidth(int cp) {
 				return cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0x2060 or cp == 0xFE0E or cp == 0xFE0F;
@@ -1635,8 +1635,8 @@ namespace Animate {
 		Color startValueC{};
 		Color endValueC{};
 		SpecialVector2::num_x startValueNX{};
-		SpecialVector2::num_x startValueNY{};
-		SpecialVector2::num_y endValueNX{};
+		SpecialVector2::num_y startValueNY{};
+		SpecialVector2::num_x endValueNX{};
 		SpecialVector2::num_y endValueNY{};
 		SpecialVector2 startValueV{};
 		SpecialVector2 endValueV{};
@@ -1705,26 +1705,41 @@ namespace Animate {
 	};
 
 	inline void UpdateAnimations(float t) {
+		std::vector<Animation*> doneA;
 		for (auto it = ActiveAnimations.begin(); it != ActiveAnimations.end();) {
 			if (it->second->Update()) {
-				Animation* sas = it->second;
+				doneA.push_back(it->second);
 				it = ActiveAnimations.erase(it);
-				sas->Completed();
-				delete sas;
 			} else {
-				it++;
+				++it;
 			}
 		}
 
+		std::vector<std::pair<void*, SafeAnimation*>> doneS;
 		for (auto it = ActiveSafeAnimations.begin(); it != ActiveSafeAnimations.end();) {
 			if (it->second->Update()) {
-				SafeAnimation* sas = it->second;
+				doneS.emplace_back(it->first, it->second);
 				it = ActiveSafeAnimations.erase(it);
-				sas->Completed();
-				deleteCurrent(it->first);
 			} else {
-				it++;
+				++it;
 			}
+		}
+
+		for (auto& [key, sa] : doneS) {
+			auto link = ActiveSafeAnimationsLinks.find(const_cast<Instance*>(sa->LinkedTo));
+			if (link != ActiveSafeAnimationsLinks.end()) {
+				auto& v = link->second;
+				v.erase(std::remove(v.begin(), v.end(), key), v.end());
+			}
+		}
+
+		for (Animation* a : doneA) {
+			a->Completed();
+			delete a;
+		}
+		for (auto& [key, sa] : doneS) {
+			sa->Completed();
+			delete sa;
 		}
 	}
 

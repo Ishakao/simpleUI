@@ -37,6 +37,13 @@
 int main() {
 	Instance* Root = GetRoot();
 
+    CreateFont("ChinaAndEmoji", // name of new font
+    {
+        "C:/Windows/Fonts/segoeui.ttf", // segoe default font
+        "C:/Windows/Fonts/msyh.ttc",    // china font
+        "C:/Windows/Fonts/seguiemj.ttf" // segoe emoji font
+    });
+
 	loadImage("bg_image", "textures/test.jpg");
 
 	ImageLabel* Background = ImageLabel::New(Root);
@@ -51,8 +58,8 @@ int main() {
 	Hello->Position = { 0.5, 0.5 };
 	Hello->PositionOFFSET = { -200, 0 };
 	Hello->SizeOFFSET = { 340, 80 };
-	Hello->FontFace = "SegoeB";
-	Hello->Text = " Hello ";
+	Hello->FontFace = "ChinaAndEmoji";
+	Hello->Text = " Hello 🔥 ";
 	Hello->Roundness = 0.2;
 	Hello->Active = true;
 	Hello->BorderThickness = 3;
@@ -82,9 +89,9 @@ int main() {
 	World->Position = { 0.5, 0.5 };
 	World->PositionOFFSET = { 200, 0 };
 	World->SizeOFFSET = { 340, 80 };
-	World->FontFace = "SegoeB";
-	World->Text = " World ";
-	World->PlaceholderText = " World ";
+	World->FontFace = "ChinaAndEmoji";
+	World->Text = " World 世界 ";
+	World->PlaceholderText = " World 世界 ";
 	World->maxSymbols = 10;
 	World->CursorColor = { 0, 102, 102, 255 };
 	World->Roundness = 0.2;
@@ -108,7 +115,6 @@ int main() {
 	SIMPLEUI_GLOBAL::ALLOW_FPS = true; // Allows to show FPS label on F1
 	SIMPLEUI_GLOBAL::ALLOW_DEBUG = true; // Allows to show debug menu on F2
 
-	addFontToQueqe("SegoeB", "Fonts/segoeuib.ttf", 60); // Loading custom font
 	SUI_SetMinimalWindowSize(600, 400);
 	start(Root, { 1200, 800, -1 }, "Test program", "textures/test.jpg", FLAG_WINDOW_RESIZABLE);
 }

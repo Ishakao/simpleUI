@@ -23,6 +23,8 @@
     <li>Raylib</li>
     <li>stb_image_write (included header implementation)</li>
     <li>stb_rect_pack (included header implementation)</li>
+    <li>FreeType (included)</li>
+    <li>HarfBuzz (included)</li>
 </ul>
 
 <h2>Quick Start</h2>

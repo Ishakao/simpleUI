@@ -48,6 +48,8 @@
 	#include "ft2build.h"
 	#include FT_FREETYPE_H
 	#define BASIC_FREETYPE_FONT_SIZE 512
+	#include <harfbuzz/hb.h>
+	#include <harfbuzz/hb-ft.h>
 #endif
 
 // use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation
@@ -504,11 +506,17 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 			bool color = false;
 		};
 
+		struct Shaped {
+			int face;
+			FT_UInt gid;
+			float x, y, adv;
+		};
+
 		class FT_Font {
 			struct Atlas {
 				Texture2D tex{};
 				std::vector<unsigned char> pixels;
-				std::unordered_map<int, Glyph> map;
+				std::unordered_map<uint64_t, Glyph> map;
 				float baseline = 0;
 				float lineH = 0;
 				int height = 0;
@@ -516,11 +524,11 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 			};
 
 			FT_Library lib_ = nullptr;
+			std::vector<hb_font_t*> hb_;
 			std::vector<FT_Face> faces_{};
 			std::unordered_map<int, Atlas> atlases_{};
 			int width_{};
 			int maxSide_{};
-			int side_{};
 
 			static bool IsZeroWidth(int cp) {
 				return cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0x2060 or cp == 0xFE0E or cp == 0xFE0F;
@@ -531,12 +539,14 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 					FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
 					return 1.0f;
 				}
+
 				int best = 0;
 				float bestDiff = 1e9f;
 				for (int i = 0; i < face->num_fixed_sizes; i++) {
 					float d = std::fabs(face->available_sizes[i].y_ppem / 64.0f - size);
 					if (d < bestDiff) { bestDiff = d; best = i; }
 				}
+
 				FT_Select_Size(face, best);
 				float ppem = (float)face->size->metrics.y_ppem;
 				return ppem > 0 ? size / ppem : 1.0f;
@@ -551,11 +561,27 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 				}
 			}
 
+			static uint64_t Key(int face, FT_UInt gid) { 
+				return ((uint64_t)face << 32) | gid; 
+			}
+
+			static bool Joins(int cp) {
+				return (cp >= 0x1F3FB and cp <= 0x1F3FF) or cp == 0x200D or cp == 0xFE0F or cp == 0xFE0E or cp == 0x20E3 or (cp >= 0xE0020 and cp <= 0xE007F);
+			}
+
+			static bool IsRI(int cp) { return cp >= 0x1F1E6 and cp <= 0x1F1FF; }
+
+			int PickFace(int cp) {
+				for (size_t i = 0; i < faces_.size(); i++)
+					if (FT_Get_Char_Index(faces_[i], (FT_ULong)cp)) return (int)i;
+				return 0;
+			}
+
 			void Upload(Atlas& a) {
 				Image img = { a.pixels.data(), width_, a.height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
 				Texture2D t = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
 				RAYLIB_FUNCTIONAL::SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-				if (a.tex.id) UnloadTexture(a.tex);
+				if (a.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(a.tex);
 				a.tex = t;
 			}
 
@@ -583,20 +609,16 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 					a.baseline = faces_[0]->size->metrics.ascender / 64.0f * s;
 					a.lineH = faces_[0]->size->metrics.height / 64.0f * s;
 				}
+
 				return a;
 			}
 
-			Glyph Rasterize(Atlas& a, int cp, int size) {
-				if (faces_.empty() or IsZeroWidth(cp)) return {};
-
-				FT_Face face;
-				FT_UInt idx;
-				Pick(cp, face, idx);
+			Glyph Rasterize(Atlas& a, int f, FT_UInt gid, int size) {
+				FT_Face face = faces_[f];
 				float scale = ApplySize(face, size);
-
 				int flags = FT_LOAD_RENDER;
 				if (FT_HAS_COLOR(face)) flags |= FT_LOAD_COLOR;
-				if (FT_Load_Glyph(face, idx, flags)) return {};
+				if (FT_Load_Glyph(face, gid, flags)) return {};
 
 				FT_GlyphSlot slot = face->glyph;
 				FT_Bitmap& bm = slot->bitmap;
@@ -668,9 +690,12 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 			}
 
 			~FT_Font() {
-				for (auto& kv : atlases_) if (kv.second.tex.id) UnloadTexture(kv.second.tex);
+				for (auto& kv : atlases_) if (kv.second.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(kv.second.tex);
 				for (FT_Face f : faces_) FT_Done_Face(f);
 				if (lib_) FT_Done_FreeType(lib_);
+				for (auto f : hb_) {
+					hb_font_destroy(f);
+				}
 			}
 
 			FT_Font(const FT_Font&) = delete;
@@ -680,19 +705,48 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 				FT_Face face;
 				if (FT_New_Face(lib_, path, 0, &face)) return false;
 				faces_.push_back(face);
+				hb_font_t* h = hb_ft_font_create_referenced(face);
+				hb_ft_font_set_load_flags(h, FT_LOAD_DEFAULT | FT_LOAD_COLOR);
+				hb_.push_back(h);
 				return true;
+			}
+
+			void Shape(const int* cps, int count, int size, std::vector<Shaped>& out) {
+				hb_buffer_t* buf = hb_buffer_create();
+				int i = 0;
+				while (i < count) {
+					int face = PickFace(cps[i]);
+					int j = i + 1;
+					while (j < count and (Joins(cps[j]) or cps[j - 1] == 0x200D or (IsRI(cps[i]) and j == i + 1 and IsRI(cps[j])))) j++;
+
+					float scale = ApplySize(faces_[face], size);
+					hb_ft_font_changed(hb_[face]);
+
+					hb_buffer_clear_contents(buf);
+					hb_buffer_add_codepoints(buf, (const uint32_t*)cps, count, i, j - i);
+					hb_buffer_guess_segment_properties(buf);
+					hb_shape(hb_[face], buf, nullptr, 0);
+
+					unsigned n;
+					hb_glyph_info_t* inf = hb_buffer_get_glyph_infos(buf, &n);
+					hb_glyph_position_t* ps = hb_buffer_get_glyph_positions(buf, &n);
+					for (unsigned k = 0; k < n; k++)
+						out.push_back({ face, inf[k].codepoint, ps[k].x_offset / 64.0f * scale, -ps[k].y_offset / 64.0f * scale, ps[k].x_advance / 64.0f * scale });
+					i = j;
+				}
+				hb_buffer_destroy(buf);
 			}
 
 			bool Valid() const { return !faces_.empty(); }
 
-			const Glyph& Get(int cp, int size) {
+			const Glyph& Get(int face, FT_UInt gid, int size) {
 				Atlas& a = At(size);
-				auto it = a.map.find(cp);
+				uint64_t k = Key(face, gid);
+				auto it = a.map.find(k);
 				if (it != a.map.end()) return it->second;
-				return a.map.emplace(cp, Rasterize(a, cp, size)).first->second;
+				return a.map.emplace(k, Rasterize(a, face, gid, size)).first->second;
 			}
 
-			float Advance(int cp, int size) { return Get(cp, size).advance; }
 			Texture2D Texture(int size) { return At(size).tex; }
 			float Baseline(int size) { return At(size).baseline; }
 			float LineHeight(int size) { return At(size).lineH; }
@@ -711,36 +765,40 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		template <class F>
 		inline Vector2 LayoutText(FT_Font& font, const int* cps, int count, int size, float spacing, F&& onGlyph) {
 			float lineH = font.LineHeight(size);
-			float x = 0, y = 0, maxW = 0;
-			int glyphsInLine = 0;
-			int lines = 1;
+			float y = 0, maxW = 0;
+			int lines = 0;
+			std::vector<Shaped> sh;
 
-			for (int i = 0; i < count; i++) {
-				if (cps[i] == '\n') {
-					float w = glyphsInLine ? x - spacing : 0;
-					if (w > maxW) maxW = w;
-					x = 0;
-					y += lineH;
-					glyphsInLine = 0;
-					lines++;
-					continue;
+			int start = 0;
+			while (start <= count) {
+				int end = start;
+				while (end < count and cps[end] != '\n') end++;
+
+				sh.clear();
+				font.Shape(cps + start, end - start, size, sh);
+
+				float x = 0;
+				for (const Shaped& s : sh) {
+					onGlyph(s, x, y);
+					x += s.adv + spacing;
 				}
+				float w = sh.empty() ? 0 : x - spacing;
+				if (w > maxW) maxW = w;
 
-				onGlyph(cps[i], x, y);
-				x += font.Advance(cps[i], size) + spacing;
-				glyphsInLine++;
+				y += lineH;
+				lines++;
+				start = end + 1;
 			}
-
-			float w = glyphsInLine ? x - spacing : 0;
-			if (w > maxW) maxW = w;
 			return { maxW, lines * lineH };
 		}
 
 		inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint) {
 			int count = 0;
 			int* cps = RAYLIB_FUNCTIONAL::LoadCodepoints(text, &count);
-			for (int i = 0; i < count; i++)
-				if (cps[i] != '\n') font.Get(cps[i], fontSize);
+
+			LayoutText(font, cps, count, fontSize, (float)spacing, [&](const Shaped& s, float, float) {
+				font.Get(s.face, s.gid, fontSize);
+			});
 
 			Texture2D tex = font.Texture(fontSize);
 			float base = font.Baseline(fontSize);
@@ -755,12 +813,12 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_ALPHA_PREMULTIPLY);
 
-			LayoutText(font, cps, count, fontSize, (float)spacing, [&](int cp, float x, float y) {
-				const Glyph& g = font.Get(cp, fontSize);
+			LayoutText(font, cps, count, fontSize, (float)spacing, [&](const Shaped& s, float x, float y) {
+				const Glyph& g = font.Get(s.face, s.gid, fontSize);
 				if (g.src.width <= 0) return;
 				Rectangle dst = {
-					std::floor(pos.x + x + g.xoff),
-					std::floor(pos.y + y + base + g.yoff),
+					std::floor(pos.x + x + s.x + g.xoff),
+					std::floor(pos.y + y + base + s.y + g.yoff),
 					g.src.width * g.scale,
 					g.src.height * g.scale
 				};
@@ -774,7 +832,7 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		inline Vector2 MeasureTextEx(FT_Font& font, const char* text, int size, int spacing) {
 			int count = 0;
 			int* cps = RAYLIB_FUNCTIONAL::LoadCodepoints(text, &count);
-			Vector2 s = LayoutText(font, cps, count, size, (float)spacing, [](int, float, float) {});
+			Vector2 s = LayoutText(font, cps, count, size, (float)spacing, [](FT_TextManagement::Shaped, float, float) {});
 			RAYLIB_FUNCTIONAL::UnloadCodepoints(cps);
 			return s;
 		}
@@ -885,7 +943,7 @@ public:
 
 		pleaseGenerateMipmaps = true;
 
-		UnloadTexture(src);
+		RAYLIB_FUNCTIONAL::UnloadTexture(src);
 
 		AtlasTexture att{ SIMPLEUI_GLOBAL::AtlasTextureId++, {(float)x, (float)y} , {(float)img.width, (float)img.height}, this };
 
@@ -1783,7 +1841,7 @@ enum class TextAnchorEnum {
 	CENTER = 8,
 };
 
-inline SpecialVector2 getTextOffset(TextAnchorEnum anchor) {
+inline Vector2 getTextOffset(TextAnchorEnum anchor) {
 	float offsetX{};
 	float offsetY{};
 
@@ -3678,19 +3736,28 @@ inline bool isScrollFrameCropping(Instance* sc) {
 
 class TextLabel : public Object2D {
 	friend inline void start(Instance*, Vector3, const char*, const char*, unsigned int);
-	constexpr static float TextTextureUpdateAspect = 1.1;
+	constexpr static float TextTextureUpdateAspect = 1.1f;
+	constexpr static float MinRasterFont = 8.0f;
+	constexpr static float MaxRasterFont = 128.0f;
+	constexpr static float MeasureRefFont = 32.0f;
 	constexpr static const char* DefaultName = "TextLabel";
 	constexpr static InstanceType DefaultClass = TEXTLABEL;
 
 	std::string visibleText = "";
 	int lastMaxVisible = -1;
-	Vector3 textParams{};
-	SpecialVector2 lastRealSize{};
+	bool lastMaxVisibleRight = false;
+	bool rebuildVisible = true;
+	bool allocFailed = false;
 	AtlasTexture cachedText{};
-	SpecialVector2 newSize{};
-	SpecialVector2 lastNewSize{};
-	Vector3 lastParams = Vector3{};
 	std::vector<int> charOffsets;
+
+	Vector2 textSizeOnTexture{};
+	Vector2 maxTextureSize{};
+	Rectangle whereDrawText{};
+	float rasterFont = 0.0f;
+	float currentScale = 1.0f;
+	Vector2 refSize{};
+	int lastSpacing = 0;
 
 	void updateCharOffsets() {
 		charOffsets.clear();
@@ -3706,10 +3773,10 @@ class TextLabel : public Object2D {
 		charOffsets.push_back(Text.size());
 	}
 
-	void updateTexture() {
+	void rebuildVisibleText() {
 		updateCharOffsets();
 
-		if (MaxVisibleSymbols > 0 and MaxVisibleSymbols < charOffsets.size()) {
+		if (MaxVisibleSymbols > 0 and MaxVisibleSymbols < (int)charOffsets.size()) {
 			if (MaxVisibleRight) {
 				size_t idx = charOffsets[std::max(3, (int)(charOffsets.size() - MaxVisibleSymbols)) - 3];
 				visibleText = "...";
@@ -3723,21 +3790,68 @@ class TextLabel : public Object2D {
 			visibleText = !Text;
 		}
 
-		textParams = getTextCFrame(visibleText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-		lastRealSize = RealSize;
-		lastParams = textParams;
 		lastMaxVisible = MaxVisibleSymbols;
+		lastMaxVisibleRight = MaxVisibleRight;
+		rebuildVisible = false;
+		refSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), MeasureRefFont, Spacing);
+		lastSpacing = Spacing;
+	}
 
-		newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
+	float rasterTarget() const {
+		if (visibleText.empty() or RealSize.x <= 0.0f or RealSize.y <= 0.0f) return 0.0f;
+		if (refSize.x <= 0.0f or refSize.y <= 0.0f) return 0.0f;
+		float fit = MeasureRefFont * std::min(RealSize.x / refSize.x, RealSize.y / refSize.y);
+		if (TextSize > 0) fit = std::min(fit, (float)TextSize);
+		return std::clamp(std::ceil(fit), MinRasterFont, MaxRasterFont);
+	}
 
-		if (cachedText.id == 0 or !cachedText.currentAtlas or lastNewSize.x < newSize.x or lastNewSize.y < newSize.y) {
+	void updateLayout() {
+		if (rasterFont <= 0.0f or textSizeOnTexture.x <= 0.0f or textSizeOnTexture.y <= 0.0f) {
+			whereDrawText = {};
+			currentScale = 1.0f;
+			return;
+		}
+
+		float scale = std::min(RealSize.x / textSizeOnTexture.x, RealSize.y / textSizeOnTexture.y);
+		if (TextSize > 0) scale = std::min(scale, TextSize / rasterFont);
+		currentScale = scale;
+
+		Vector2 f = getTextOffset(TextAnchor);
+		float w = textSizeOnTexture.x * scale;
+		float h = textSizeOnTexture.y * scale;
+		whereDrawText = { (RealSize.x - w) * f.x, (RealSize.y - h) * f.y, w, h };
+	}
+
+	void updateTexture() {
+		if (rebuildVisible) rebuildVisibleText();
+
+		rasterFont = rasterTarget();
+		if (rasterFont <= 0.0f) {
+			textSizeOnTexture = {};
+			return;
+		}
+		textSizeOnTexture = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), rasterFont, Spacing);
+
+		bool noTexture = cachedText.id == 0 or !cachedText.currentAtlas;
+		bool tooSmall = textSizeOnTexture.x > maxTextureSize.x or textSizeOnTexture.y > maxTextureSize.y;
+		bool tooBig = textSizeOnTexture.x * TextTextureUpdateAspect * 2.0f < maxTextureSize.x and textSizeOnTexture.y * TextTextureUpdateAspect * 2.0f < maxTextureSize.y;
+
+		if (noTexture or tooSmall or tooBig) {
 			if (cachedText.id != 0) {
 				UnloadTextureFromAtlas(cachedText);
+				cachedText = {};
 			}
+			maxTextureSize = {};
 
 			if (Text.size()) {
-				cachedText = LoadRenderTextureOnAtlas(newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect);
-				lastNewSize = SpecialVector2{ newSize.x * TextTextureUpdateAspect, newSize.y * TextTextureUpdateAspect };
+				float w = std::ceil(textSizeOnTexture.x * TextTextureUpdateAspect);
+				float h = std::ceil(textSizeOnTexture.y * TextTextureUpdateAspect);
+				cachedText = LoadRenderTextureOnAtlas(w, h);
+				if (cachedText.id == 0 or !cachedText.currentAtlas) {
+					allocFailed = true;
+				} else {
+					maxTextureSize = { w, h };
+				}
 			}
 		}
 
@@ -3750,7 +3864,7 @@ class TextLabel : public Object2D {
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
 			cachedText.currentAtlas->blankArea(cachedText);
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(!FontFace), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(!FontFace), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, rasterFont, Spacing, { 255,255,255,255 });
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
 			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
@@ -3806,27 +3920,34 @@ public:
 				return;
 			}
 
-			bool dirtyCondition = Text.isChanged() or FontFace.isChanged();
+			updateLayout();
+
+			bool dirty = Text.isChanged() or FontFace.isChanged();
 			Text.restate();
 			FontFace.restate();
 
-			if (lastParams.z != textParams.z or ((cachedText.id == 0 or !cachedText.currentAtlas) and Text.size()) or dirtyCondition or lastMaxVisible != MaxVisibleSymbols) {
-				SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
-			} else {
-				if (std::fabsf(lastRealSize.x - RealSize.x) >= TextTextureUpdateAspect or std::fabsf(lastRealSize.y - RealSize.y) >= TextTextureUpdateAspect) {
-					lastRealSize = RealSize;
-					newSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), textParams.z, Spacing);
-					textParams = getTextCFrame(visibleText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-				}
+			if (dirty) {
+				rebuildVisible = true;
+				allocFailed = false;
+			}
+			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight) {
+				if (lastSpacing != Spacing) rebuildVisible = true;
 			}
 
-			if (textParams.z > 1) {
-				if (cachedText.id == 0) {
-					return;
-				}
+			bool needRaster = rebuildVisible;
+			if (!needRaster and !allocFailed and Text.size() and (cachedText.id == 0 or !cachedText.currentAtlas)) {
+				needRaster = true;
+			}
+			if (!needRaster and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f)) {
+				if (rasterTarget() != rasterFont) needRaster = true;
+			}
+			if (needRaster) {
+				SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
+			}
 
-				Rectangle sourceRec = { 0.0f, 0.0f, (float)newSize.x, (float)newSize.y };
-				Rectangle destRec = { std::floorf(RealPos.x + textParams.x), std::floorf(RealPos.y + textParams.y), std::floorf(newSize.x), std::floorf((float)newSize.y) };
+			if (rasterFont > 1 and cachedText.id != 0) {
+				Rectangle sourceRec = { 0.0f, 0.0f, textSizeOnTexture.x, textSizeOnTexture.y };
+				Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
 
 				Vector2 o = {
 					Origin.x * RealSize.x + OriginOFFSET.x,
@@ -3845,8 +3966,10 @@ public:
 
 		i->basicCloneOperation(const_cast<TextLabel*>(this));
 
-		i->cachedText.id = 0;
-		i->cachedText.currentAtlas = nullptr;
+		i->cachedText = {};
+		i->maxTextureSize = {};
+		i->rebuildVisible = true;
+		i->allocFailed = false;
 		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(i);
 
 		return i;
@@ -3929,11 +4052,13 @@ class TextBox : public Object2D {
 	TextBoxType lastType = TextBoxType::TEXTBOX_RESIZING;
 	int lastCursorIndex = -1;
 
+	std::string visibleText = "";
+
 	void updateTextParams() {
 		if (Type != TextBoxType::TEXTBOX_RESIZING) {
 			textParams.y = 0;
 			textParams.x = 0;
-			textParams.z = std::fmin(RealSize.y, ((TextSize > 0) ? TextSize : RealSize.y));
+			textParams.z = getTextCFrame("A", getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
 		} else {
 			if (Text != "") {
 				textParams = getTextCFrame(Text.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
@@ -4030,7 +4155,7 @@ public:
 	Color TextColor = { 0,0,0,255 };
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	int TextSize = -1;
-	int maxSymbols = -1;
+	int MaxSymbols = -1;
 	float TextTransparency = 0;
 	std::string AllowedSymbols = "";
 	std::string DisallowedSymbols = "";
@@ -4221,7 +4346,7 @@ public:
 					text = !Text;
 				}
 
-				updateTextParams();
+				//updateTextParams();
 				std::string textBeforeCursor = "";
 				if (HideText != '\0') {
 					for (int i = 0; i < Text.size(); i++) {
@@ -4302,14 +4427,14 @@ public:
 		}
 
 		if (SIMPLEUI_GLOBAL::FocusedTextBox == this and Visible and CanType) {
-			if (maxSymbols >= charOffsets.size() or maxSymbols < 0) {
-				int symbolsLeft = maxSymbols - static_cast<int>(charOffsets.size());
+			if (MaxSymbols >= charOffsets.size() or MaxSymbols < 0) {
+				int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
 				int addedSymbols = 0;
 				std::string buf;
 
 				int key = GetCharPressed();
 				while (key > 0) {
-					if (symbolsLeft > 0 or maxSymbols < 0) {
+					if (symbolsLeft > 0 or MaxSymbols < 0) {
 						int bytes = 0;
 						const char* utf8 = CodepointToUTF8(key, &bytes);
 						if (utf8 and bytes > 0) {
@@ -4471,9 +4596,9 @@ public:
 
 			if (IsKeyDown(KEY_LEFT_CONTROL) and IsKeyPressed(KEY_V) and ClipboardPasteAllowed) {
 				std::string clipboardText = GetClipboardText();
-				int symbolsLeft = maxSymbols - static_cast<int>(charOffsets.size());
+				int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
 
-				if (symbolsLeft > 0 or maxSymbols < 0) {
+				if (symbolsLeft > 0 or MaxSymbols < 0) {
 					std::string toPaste = clipboardText;
 
 					bool allowed = true;
@@ -4490,7 +4615,7 @@ public:
 				}
 			}
 
-			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (maxSymbols < charOffsets.size() or maxSymbols < 0)) {
+			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (MaxSymbols < charOffsets.size() or MaxSymbols < 0)) {
 				bool enter = IsKeyPressed(KEY_ENTER);
 
 				if (enter) {
@@ -4776,10 +4901,10 @@ public:
 			else i += 1;
 		}
 
-		if (offsets.size() > maxSymbols) {
-			Text = t.substr(0, offsets[maxSymbols]);
+		if (offsets.size() > MaxSymbols) {
+			Text = t.substr(0, offsets[MaxSymbols]);
 			updateCharOffsets();
-			CursorIndex = maxSymbols;
+			CursorIndex = MaxSymbols;
 			return;
 		}
 
@@ -4974,7 +5099,7 @@ class TextureLabel : public Object2D {
 	void SetSize(int w, int h) {
 		if (texture.id == 0 or texture.width != w or texture.height != h or !owner) {
 			owner = true;
-			if (texture.id != 0) UnloadTexture(texture);
+			if (texture.id != 0) RAYLIB_FUNCTIONAL::UnloadTexture(texture);
 
 			Image img = RAYLIB_FUNCTIONAL::GenImageColor(w, h, BLANK);
 			texture = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
@@ -4988,7 +5113,7 @@ protected:
 	TextureLabel() = delete;
 
 	~TextureLabel() override {
-		if (texture.id != 0 and owner) UnloadTexture(texture);
+		if (texture.id != 0 and owner) RAYLIB_FUNCTIONAL::UnloadTexture(texture);
 	}
 public:
 	Color TextureColor = { 255,255,255,255 };
@@ -5002,7 +5127,7 @@ public:
 				imageLoadedWhileNotReady = false;
 
 				if (img.data != nullptr) {
-					if (texture.id != 0 and owner) UnloadTexture(texture);
+					if (texture.id != 0 and owner) RAYLIB_FUNCTIONAL::UnloadTexture(texture);
 
 					owner = true;
 					texture = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
@@ -5037,7 +5162,7 @@ public:
 		img = RAYLIB_FUNCTIONAL::LoadImageFromMemory(type.c_str(), data.data(), data.size());
 
 		if (img.data == nullptr) return;
-		if (texture.id != 0 and owner) UnloadTexture(texture);
+		if (texture.id != 0 and owner) RAYLIB_FUNCTIONAL::UnloadTexture(texture);
 
 		if (IsWindowReady()) {
 			imageLoadedWhileNotReady = false;
@@ -5054,7 +5179,7 @@ public:
 
 	void UpdateData(std::vector<char>& data, int w, int h) {
 		SetSize(w, h);
-		UpdateTexture(texture, data.data());
+		RAYLIB_FUNCTIONAL::UpdateTexture(texture, data.data());
 		owner = true;
 	}
 
@@ -5597,14 +5722,16 @@ inline namespace debug {
 			msGRAPH->setSequenceColor(msSEQ, {190, 190, 190, 255});
 			msGRAPH->minimalValueToTextFunction([](long double value) {
 				char buf[32];
-				std::snprintf(buf, sizeof(buf), "%.2f", value * 1000);
+				std::snprintf(buf, sizeof(buf), "%.2Lf", value * 1000);
 				std::string s = buf;
 				return s + " ms ";
 			});
 			msGRAPH->maximalValueToTextFunction([](long double value) { 
+				std::cout << value << std::endl;
 				char buf[32];
-				std::snprintf(buf, sizeof(buf), "%.2f", value * 1000);
+				std::snprintf(buf, sizeof(buf), "%.2Lf", value * 1000);
 				std::string s = buf;
+				std::cout << s << std::endl;
 				return s + " ms ";
 			});
 			msGRAPH->SizeOfLeftInfo = { 0, 0.3 };
@@ -6330,7 +6457,7 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 
 	SetExitKey(KEY_NULL);
 
-	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "C:/Windows/Fonts/segoeui.ttf", 60); // Basic font 1
+	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "C:/Windows/Fonts/arial.ttf", 60); // Basic font 1
 	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
 

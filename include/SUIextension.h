@@ -189,7 +189,6 @@ class GraphBuilder : public Object2D {
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
 			cachedMax.currentAtlas->blankArea(cachedMax);
-
 			DrawTextEx(getFont(FontFace), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
 
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();

@@ -27,6 +27,7 @@
 // Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
 // Textures draw optimization. Batching for textures and rectangles												//
 // Local Rotation and Origin support																			//
+// Added SafeChangedSignal which works like SafeAnimation (destroys when linked object deletes)														//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -37,14 +38,14 @@
 #include <cstring>
 
 
-#define SIMPLEUI_INCLUDE_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, CheckBox, !ProgressBar, !DropdownBox)
+#define INCLUDE_SIMPLEUI_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, CheckBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
 
-#define SIMPLEUI_INCLUDE_FREETYPE // Flag to use FreeType in text drawing. UTF-8 and emoji support.
+#define INCLUDE_SIMPLEUI_FREETYPE // Flag to use FreeType in text drawing. UTF-8 and emoji support.
 // IF YOU DON'T NEED FREETYPE IN YOUR UI THEN USE "#define EXCLUDE_SIMPLEUI_FREETYPE" BEFORE INCLUDING simpleUI.h
 
-#ifndef SIMPLEUI_EXCLUDE_FREETYPE
+#ifndef EXCLUDE_SIMPLEUI_FREETYPE
 	#include "ft2build.h"
 	#include FT_FREETYPE_H
 	#define BASIC_FREETYPE_FONT_SIZE 512
@@ -336,6 +337,12 @@ struct Clip {
 	int x, y, w, h;
 };
 
+struct IChangedSignal {
+	friend inline void Delete(Instance*);
+	virtual ~IChangedSignal() = default;
+	virtual void Update() = 0;
+};
+
 namespace SIMPLEUI_GLOBAL {
 	inline int winWidth = 0;
 	inline int winHeight = 0;
@@ -380,6 +387,18 @@ namespace SIMPLEUI_GLOBAL {
 	inline size_t AtlasTextureId = 1;
 	inline unsigned int CurrentBatchTexture = 0;
 
+	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
+	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
+
+	inline Color WindowColor = { 255,255,255,255 };
+
+	inline std::unordered_map<std::string, Font> Fonts;
+	inline std::vector<std::tuple<const char*, std::string, int>> queuedFonts;
+	inline std::vector<std::tuple<const char*, std::vector<std::string>, int>> queuedFontsV;
+
+	inline std::vector<IChangedSignal*> ActiveSignals;
+	inline std::unordered_map<Instance*, std::vector<IChangedSignal*>> SafeActiveSignals;
+
 	inline std::vector<Instance*> WillDelete;
 	inline void CollectDeadObjects() {
 		for (int i = 0; i < WillDelete.size(); i++) {
@@ -388,19 +407,6 @@ namespace SIMPLEUI_GLOBAL {
 
 		WillDelete.clear();
 	}
-
-	inline std::vector<std::unordered_map<long, Instance*>> childsAddedInFrame;
-	inline std::vector<std::unordered_map<long, Instance*>> childsRemovedInFrame;
-
-	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
-	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
-
-	inline int benchMode = 0;
-	inline Color WindowColor = { 255,255,255,255 };
-
-	inline std::unordered_map<std::string, Font> Fonts;
-	inline std::vector<std::tuple<const char*, std::string, int>> queuedFonts;
-	inline std::vector<std::tuple<const char*, std::vector<std::string>, int>> queuedFontsV;
 }
 
 inline void ChangeWindowColor(Color c) {
@@ -1405,17 +1411,9 @@ namespace Tasks {
 	}
 }
 
-struct IChangedSignal {
-	virtual ~IChangedSignal() = default;
-	virtual void Update() = 0;
-};
-
-inline std::vector<IChangedSignal*> ActiveSignals;
 template <typename T>
 class ChangedSignal : public IChangedSignal {
 public:
-	std::string SignalClass = "~";
-
 	void Update() {
 		if (*SignalPTR != *LastValue) {
 			Callback();
@@ -1427,29 +1425,81 @@ private:
 	T* SignalPTR = nullptr;
 	T* LastValue;
 	std::function<void(void)> Callback;
-public:
-	void Disconnect() {
-		auto z = find(ActiveSignals.begin(), ActiveSignals.end(), this);
-		if (z != ActiveSignals.end()) ActiveSignals.erase(z);
-		delete this;
-	}
 
 	ChangedSignal() = delete;
-	ChangedSignal(T& p, std::function<void(void)> func) : SignalPTR(&p), Callback(func), SignalClass(typeid(T).name()) {
-		ActiveSignals.push_back(this);
+	ChangedSignal(T& p, std::function<void(void)> func) : SignalPTR(&p), Callback(func) {
+		SIMPLEUI_GLOBAL::ActiveSignals.push_back(this);
 		LastValue = new T(p);
 	}
 	~ChangedSignal() {
 		if (!LastValue) return;
 		delete LastValue;
 	}
+public:
+	void Disconnect() {
+		auto z = find(SIMPLEUI_GLOBAL::ActiveSignals.begin(), SIMPLEUI_GLOBAL::ActiveSignals.end(), this);
+		if (z != SIMPLEUI_GLOBAL::ActiveSignals.end()) SIMPLEUI_GLOBAL::ActiveSignals.erase(z);
+		delete this;
+	}
+
+	static ChangedSignal* New(T& p, std::function<void(void)> func) {
+		return new ChangedSignal(std::forward<T&>(p), func);
+	}
 };
 
 template <typename T>
-class AtomicChangedSignal : IChangedSignal {
+class SafeChangedSignal : public IChangedSignal {
 public:
-	std::string SignalClass = "~";
+	void Update() {
+		if (*SignalPTR != *LastValue) {
+			Callback();
+			delete LastValue;
+			LastValue = new T(*SignalPTR);
+		}
+	}
+private:
+	T* SignalPTR = nullptr;
+	T* LastValue;
+	Instance* LinkedTo = nullptr;
+	std::function<void(void)> Callback;
 
+	SafeChangedSignal() = delete;
+	SafeChangedSignal(Instance* linked, T& p, std::function<void(void)> func) : SignalPTR(&p), Callback(func), LinkedTo(linked) {
+		auto it = SIMPLEUI_GLOBAL::SafeActiveSignals.find(linked);
+		if (it != SIMPLEUI_GLOBAL::SafeActiveSignals.end()) {
+			it->second.push_back(this);
+		} else {
+			SIMPLEUI_GLOBAL::SafeActiveSignals.insert({linked, {this}});
+		}
+
+		LastValue = new T(p);
+	}
+	~SafeChangedSignal() {
+		if (!LastValue) return;
+		delete LastValue;
+	}
+public:
+	void Disconnect() {
+		auto it = SIMPLEUI_GLOBAL::SafeActiveSignals.find(LinkedTo);
+		if (it != SIMPLEUI_GLOBAL::SafeActiveSignals.end()) {
+			auto z = find(it->second.begin(), it->second.end(), this);
+			if (z != it->second.end()) it->second.erase(z);
+
+			if (it->second.empty()) {
+				SIMPLEUI_GLOBAL::SafeActiveSignals.erase(it);
+			}
+		}
+		delete this;
+	}
+
+	static SafeChangedSignal* New(Instance* linked, T& p, std::function<void(void)> func) {
+		return new SafeChangedSignal(linked, std::forward<T&>(p), func);
+	}
+};
+
+template <typename T>
+class AtomicChangedSignal : public IChangedSignal {
+public:
 	void Update() {
 		if (SignalPTR.load() != *LastValue.load()) {
 			Callback();
@@ -1461,21 +1511,25 @@ private:
 	std::atomic<T>& SignalPTR = nullptr;
 	std::atomic<T*> LastValue;
 	std::function<void(void)> Callback;
-public:
-	void Disconnect() {
-		auto z = find(ActiveSignals.begin(), ActiveSignals.end(), this);
-		if (z != ActiveSignals.end()) ActiveSignals.erase(z);
-		delete this;
-	}
 
 	AtomicChangedSignal() = delete;
-	AtomicChangedSignal(std::atomic<T>& p, std::function<void(void)> func) : SignalPTR(p), Callback(func), SignalClass(typeid(T).name()) {
-		ActiveSignals.push_back(this);
+	AtomicChangedSignal(std::atomic<T>& p, std::function<void(void)> func) : SignalPTR(p), Callback(func) {
+		SIMPLEUI_GLOBAL::ActiveSignals.push_back(this);
 		LastValue.store(new T(p.load()));
 	}
 	~AtomicChangedSignal() {
 		if (!LastValue.load()) return;
 		delete LastValue.load();
+	}
+public:
+	void Disconnect() {
+		auto z = find(SIMPLEUI_GLOBAL::ActiveSignals.begin(), SIMPLEUI_GLOBAL::ActiveSignals.end(), this);
+		if (z != SIMPLEUI_GLOBAL::ActiveSignals.end()) SIMPLEUI_GLOBAL::ActiveSignals.erase(z);
+		delete this;
+	}
+
+	static AtomicChangedSignal* New(T& p, std::function<void(void)> func) {
+		return new AtomicChangedSignal(std::forward<T&>(p), func);
 	}
 };
 
@@ -1995,11 +2049,13 @@ public:
 protected:
 	bool updateWhenWillBeVisible = true;
 	bool __ParentObject{};
-private:
-	std::vector<std::pair<EventType, InstanceCallback>> events;
+	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 public:
 	std::string Name = "Instance";
 protected:
+	std::vector<std::pair<long, Instance*>> childsAddedInFrame;
+	std::vector<std::pair<long, Instance*>> childsRemovedInFrame;
+
 	virtual void basicCloneOperation(Instance* copyfrom) {
 		this->Parent = nullptr;
 		this->Children.clear();
@@ -2008,8 +2064,6 @@ protected:
 
 		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
-		SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
 
 		if (!copyfrom) return;
 
@@ -2020,8 +2074,6 @@ protected:
 
 	Instance(bool a) : uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++), __ParentObject(true) {
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-		SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
-		SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
 	}
 
 	Instance(Instance* p);
@@ -2032,7 +2084,7 @@ public:
 	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
 
 	virtual bool hasEvent(EventType t) const {
-		for (auto& [type, _] : events) {
+		for (auto& [type, _, __] : events) {
 			if (type == t) {
 				return true;
 			}
@@ -2138,22 +2190,19 @@ public:
 	virtual void eventHandler() {
 		if (events.empty()) return;
 
-		for (const auto& [type, func] : events) {
+		for (const auto& [type, func, _] : events) {
 			if (type == TICK) {
 				func(this);
 			} else if (type == CHILD_ADDED) {
-				for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
+				for (auto& [id, ptr] : childsAddedInFrame) {
 					func(this, ptr);
 				}
 			} else if (type == CHILD_REMOVED) {
-				for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
+				for (auto& [id, ptr] : childsRemovedInFrame) {
 					func(this, ptr);
 				}
 			}
 		}
-
-		SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
-		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].clear();
 	}
 
 	void SetSizePosUpdateFlag() {
@@ -2642,7 +2691,6 @@ class Object2D : public Instance {
 protected:
 	bool lastVisible = false;
 	bool posOrSizeChangedResult = false;
-	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
 
 	void SameUpdate() {
 		if (Active != lastActive or lastZIndex != ZIndex) {
@@ -2654,8 +2702,8 @@ protected:
 			}
 		}
 
-		SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
-		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].clear();
+		childsAddedInFrame.clear();
+		childsRemovedInFrame.clear();
 	}
 
 	void eventHandler() override;
@@ -3564,11 +3612,11 @@ public:
 			}
 		}
 
-		for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
+		for (auto& [id, ptr] : childsAddedInFrame) {
 			SectorsAddChild(ptr);
 		}
 
-		for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
+		for (auto& [id, ptr] : childsRemovedInFrame) {
 			SectorsRemoveChild(id);
 		}
 
@@ -3787,7 +3835,7 @@ class TextLabel : public Object2D {
 				visibleText += "...";
 			}
 		} else {
-			visibleText = !Text;
+			visibleText = Text;
 		}
 
 		lastMaxVisible = MaxVisibleSymbols;
@@ -3823,8 +3871,6 @@ class TextLabel : public Object2D {
 	}
 
 	void updateTexture() {
-		if (rebuildVisible) rebuildVisibleText();
-
 		rasterFont = rasterTarget();
 		if (rasterFont <= 0.0f) {
 			textSizeOnTexture = {};
@@ -3930,18 +3976,22 @@ public:
 				rebuildVisible = true;
 				allocFailed = false;
 			}
+
 			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight) {
 				if (lastSpacing != Spacing) rebuildVisible = true;
 			}
 
 			bool needRaster = rebuildVisible;
-			if (!needRaster and !allocFailed and Text.size() and (cachedText.id == 0 or !cachedText.currentAtlas)) {
+			if (!needRaster and Text.size() and (cachedText.id == 0 or !cachedText.currentAtlas)) {
 				needRaster = true;
 			}
+
 			if (!needRaster and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f)) {
 				if (rasterTarget() != rasterFont) needRaster = true;
 			}
+
 			if (needRaster) {
+				rebuildVisibleText();
 				SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
 			}
 
@@ -3970,6 +4020,7 @@ public:
 		i->maxTextureSize = {};
 		i->rebuildVisible = true;
 		i->allocFailed = false;
+		i->textSizeOnTexture={0,0};
 		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(i);
 
 		return i;
@@ -4975,6 +5026,7 @@ public:
 	void setImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
 			RAYLIB_FUNCTIONAL::UnloadImage(imageIfMemory);
+			imageIfMemory = Image{};
 			UnloadTextureFromAtlas(tex);
 		}
 
@@ -5191,6 +5243,7 @@ public:
 		i->basicCloneOperation(const_cast<TextureLabel*>(this));
 
 		i->owner = false;
+		i->texture = Texture{};
 
 		return i;
 	}
@@ -5222,7 +5275,7 @@ inline void Object2D::AddEvent(EventType t, InstanceCallback f, MouseButtonType 
 }
 
 inline void Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE) {
-	events.push_back({ t, f });
+	events.push_back({ t, f, m });
 
 	Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
 
@@ -5236,7 +5289,7 @@ inline void Instance::setParent(Instance* ptr) {
 
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
-	if (Parent != nullptr and !DontSeekParent) {
+	if (Parent and !DontSeekParent) {
 		for (int i = 0; i < Parent->Children.size(); i++) {
 			if (Parent->Children[i] == this) {
 				Parent->Children.erase(Parent->Children.begin() + i);
@@ -5244,13 +5297,13 @@ inline void Instance::setParent(Instance* ptr) {
 			}
 		}
 
-		SIMPLEUI_GLOBAL::childsRemovedInFrame[Parent->uniqueID].insert({this->uniqueID, this});
+		Parent->childsRemovedInFrame.push_back({uniqueID, this});
 	}
 
 	Parent = ptr;
 	if (ptr) {
 		ptr->Children.push_back(this);
-		SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->uniqueID].insert({this->uniqueID, this});
+		ptr->childsAddedInFrame.push_back({uniqueID, this});
 		ptr->updateChildrenZIndex = true;
 
 		Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
@@ -5279,21 +5332,23 @@ inline void Delete(Instance* ptr) {
 		Animate::ActiveSafeAnimationsLinks.erase(ptr);
 	}
 
+	auto it2 = SIMPLEUI_GLOBAL::SafeActiveSignals.find(ptr);
+	if (it2 != SIMPLEUI_GLOBAL::SafeActiveSignals.end()) {
+		for (auto sig : it2->second) {
+			delete sig;
+		}
+
+		SIMPLEUI_GLOBAL::SafeActiveSignals.erase(ptr);
+	}
+
 	SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
 
 	if (ptr->Parent and !ptr->DontSeekParent) {
-		SIMPLEUI_GLOBAL::childsRemovedInFrame[ptr->Parent->uniqueID].insert({ptr->uniqueID, ptr});
+		ptr->Parent->childsRemovedInFrame.push_back({ptr->uniqueID, ptr});
 
-		auto& m = SIMPLEUI_GLOBAL::childsAddedInFrame[ptr->Parent->uniqueID];
+		Instance* scrollChild = (ptr->Parent->Class == SCROLLFRAME ? ptr : getAncestorWhichParentIsScrollFrame(ptr));
 
-		auto it = m.find(ptr->uniqueID);
-		if (it != m.end()) {
-			m.erase(it);
-		}
-
-		Instance* scrollChild = getAncestorWhichParentIsScrollFrame(ptr);
-
-		if (scrollChild and scrollChild != ptr) {
+		if (scrollChild) {
 			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
 		}
 
@@ -5315,22 +5370,29 @@ inline void Delete(Instance* ptr) {
 }
 
 inline void Instance::deleteAllChildren() {
+	if (!DontSeekParent and Parent) {
+		Instance* scrollChild = (this->Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
+
+		if (scrollChild) {
+			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+		}
+	}
+
 	for (int i = 0; i < Children.size(); i++) {
 		Children[i]->DontSeekParent = true;
-		SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID].insert({ Children[i]->uniqueID, Children[i] });
+		childsRemovedInFrame.push_back({ Children[i]->uniqueID, Children[i] });
 		Delete(Children[i]);
 	}
 
 	Children.clear();
-	SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID].clear();
-
-	Instance* scrollChild = getAncestorWhichParentIsScrollFrame(this);
-
-	if (scrollChild and scrollChild != this) {
-		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
-	}
 
 	if (Class == SCROLLFRAME) {
+		for (auto& [c1, layer] : static_cast<ScrollFrame*>(this)->Grid) {
+			for (auto& [c2, sec] : layer) {
+				delete sec;
+			}
+		}
+
 		static_cast<ScrollFrame*>(this)->Grid.clear();
 		static_cast<ScrollFrame*>(this)->SectorsOnObject.clear();
 		static_cast<ScrollFrame*>(this)->Tick.clear();
@@ -5344,12 +5406,10 @@ inline void Instance::deleteAllChildren() {
 inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
-	SIMPLEUI_GLOBAL::childsAddedInFrame.push_back({});
-	SIMPLEUI_GLOBAL::childsRemovedInFrame.push_back({});
 
 	if (p) {
 		p->Children.push_back(this);
-		SIMPLEUI_GLOBAL::childsAddedInFrame[p->uniqueID].insert({uniqueID, this});
+		p->childsAddedInFrame.push_back({uniqueID, this});
 		p->updateChildrenZIndex = true;
 
 		ScrollFrame* prob = (p->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(p) : (ScrollFrame*)nullptr);
@@ -5469,12 +5529,13 @@ inline void Object2D::eventHandler() {
 			}
 			break;
 		} case CHILD_ADDED: {
-			for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsAddedInFrame[uniqueID]) {
+			for (auto& [id, ptr] : childsAddedInFrame) {
 				func(this, ptr);
 			}
+			
 			break;
 		} case CHILD_REMOVED: {
-			for (auto& [id, ptr] : SIMPLEUI_GLOBAL::childsRemovedInFrame[uniqueID]) {
+			for (auto& [id, ptr] : childsRemovedInFrame) {
 				func(this, ptr);
 			}
 			break;
@@ -5632,7 +5693,7 @@ inline void DrawFrame(Instance* StartInstance) {
 }
 
 #ifndef EXCLUDE_SIMPLEUI_EXTENSION
-#include "../include/SUIextension.h"
+#include <SUIextension.h>
 #endif
 
 inline namespace debug {
@@ -5699,7 +5760,7 @@ inline namespace debug {
 			labelFPS->Size = { 1, Y };
 			labelFPS->Roundness = 0.3;
 
-			new ChangedSignal(SIMPLEUI_GLOBAL::accurateFPS, [upd]() {
+			ChangedSignal<long>::New(SIMPLEUI_GLOBAL::accurateFPS, [upd]() {
 				static int last = 0;
 				if (last != SIMPLEUI_GLOBAL::accurateFPS or last == 0) {
 					upd();
@@ -5727,11 +5788,9 @@ inline namespace debug {
 				return s + " ms ";
 			});
 			msGRAPH->maximalValueToTextFunction([](long double value) { 
-				std::cout << value << std::endl;
 				char buf[32];
 				std::snprintf(buf, sizeof(buf), "%.2Lf", value * 1000);
 				std::string s = buf;
-				std::cout << s << std::endl;
 				return s + " ms ";
 			});
 			msGRAPH->SizeOfLeftInfo = { 0, 0.3 };
@@ -5860,9 +5919,9 @@ inline namespace debug {
 	inline Object2D* treeFrame = nullptr;
 	inline Instance* currentInstance = nullptr;
 
-	inline void initDebug(Instance* s) {
+	inline void initDebug() {
 		if (debugMenu) return;
-		debugMenu = Object2D::New(s);
+		debugMenu = Object2D::New(GetRoot());
 		debugMenu->Size = SpecialVector2{ 1,1 };
 		debugMenu->BackgroundTransparency = 0.9;
 		debugMenu->BackgroundColor = DefaultDebugColor;
@@ -6170,7 +6229,7 @@ inline namespace debug {
 		*  Events Handler   *
 		********************/
 
-		new ChangedSignal<int>(currentColor, [treeScroll, way, manageMenu, treeName, LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
+		ChangedSignal<int>::New(currentColor, [treeScroll, way, manageMenu, treeName, LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
 			Colorright->TextColor = typeColor[currentColor];
 			ColorBlock->BackgroundColor = typeColor[currentColor];
 			Colorleft->TextColor = typeColor[currentColor];
@@ -6217,11 +6276,11 @@ inline namespace debug {
 			}
 		});
 
-		new ChangedSignal<int>(currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str())); });
-		new ChangedSignal<bool>(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->SetText(Animations ? " On " : " Off ");});
-		new ChangedSignal<bool>(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->SetText(lowGraphicsMode ? " On " : " Off "); });
+		ChangedSignal<int>::New(currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str())); });
+		ChangedSignal<bool>::New(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->SetText(Animations ? " On " : " Off ");});
+		ChangedSignal<bool>::New(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->SetText(lowGraphicsMode ? " On " : " Off "); });
 
-		new ChangedSignal<Instance*>(currentInstance, [way, treeScroll]() {
+		ChangedSignal<Instance*>::New(currentInstance, [way, treeScroll]() {
 			way->deleteAllChildren();
 			treeScroll->deleteAllChildren();
 
@@ -6286,12 +6345,12 @@ inline namespace debug {
 				treeScroll->CanvasPosition.y = 0;
 			}
 		});
-		currentInstance = s;
+		currentInstance = GetRoot();
 	}
 
-	inline void toggleDebug(Instance* s) {
+	inline void toggleDebug() {
 		if (!debugMenu) {
-			initDebug(s);
+			initDebug();
 		}
 
 		debugMenu->Visible = !debugMenu->Visible;
@@ -6299,9 +6358,14 @@ inline namespace debug {
 };
 
 inline void updateSignals() {
-	for (auto obj : ActiveSignals) {
-		if (!obj) continue;
-		obj->Update();
+	for (auto sig : SIMPLEUI_GLOBAL::ActiveSignals) {
+		sig->Update();
+	}
+
+	for (auto& [link, signals] : SIMPLEUI_GLOBAL::SafeActiveSignals) {
+		for (auto sig : signals) {
+			sig->Update();
+		}
 	}
 }
 
@@ -6343,7 +6407,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 					int nextDepth = localDepth;
 					bool isTarget = false;
 
-					if (SIMPLEUI_GLOBAL::childsRemovedInFrame[scroll->uniqueID].contains(id)) continue;
+					if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 
 					if (!Is2DInheritor(child)) {
 						if (getTop(child, nextDepth)) {
@@ -6452,12 +6516,18 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 	int targetFPS = (windowData.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : windowData.z;
 	SetTargetFPS(targetFPS);
 
-	Image ic = RAYLIB_FUNCTIONAL::LoadImage(iconName);
-	if (!std::string(iconName).empty()) RAYLIB_FUNCTIONAL::SetWindowIcon(ic);
+	Image ic{};
+
+	if (!std::string(iconName).empty()) {
+		ic = RAYLIB_FUNCTIONAL::LoadImage(iconName);
+		if (ic.data) {
+			RAYLIB_FUNCTIONAL::SetWindowIcon(ic);
+		}
+	} 
 
 	SetExitKey(KEY_NULL);
 
-	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "C:/Windows/Fonts/arial.ttf", 60); // Basic font 1
+	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
 	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
 
@@ -6478,10 +6548,7 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 
 	SIMPLEUI_GLOBAL::pendingImages.clear();
 
-	debug::print("Hello from Ishakao!");
-
 	while (SIMPLEUI_GLOBAL::programRunning and !WindowShouldClose()) {
-		if (IsWindowFullscreen()) ToggleFullscreen();
 		if (SIMPLEUI_GLOBAL::changeWindowSizeB) {
 			SetWindowSize(SIMPLEUI_GLOBAL::changeWindowSize.x, SIMPLEUI_GLOBAL::changeWindowSize.y);
 			SIMPLEUI_GLOBAL::changeWindowSizeB = false;
@@ -6521,9 +6588,9 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		}
 
 		if (IsKeyPressed(KEY_F1) and SIMPLEUI_GLOBAL::ALLOW_FPS) { debug::toggleFPS(); }
-		if (IsKeyPressed(KEY_F2) and SIMPLEUI_GLOBAL::ALLOW_DEBUG) { debug::toggleDebug(StartInstance); }
-		if (IsKeyPressed(KEY_F3)) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
-		if (IsKeyPressed(RAYLIB_FUNCTIONAL::KEY_F4)) { debug::toggleFrameTimeGraph(); }
+		if (IsKeyPressed(KEY_F2) and SIMPLEUI_GLOBAL::ALLOW_DEBUG) { debug::toggleDebug(); }
+		if (IsKeyPressed(KEY_F3) and SIMPLEUI_GLOBAL::ALLOW_FPS) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
+		if (IsKeyPressed(RAYLIB_FUNCTIONAL::KEY_F4) and SIMPLEUI_GLOBAL::ALLOW_FPS) { debug::toggleFrameTimeGraph(); }
 
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
@@ -6553,7 +6620,9 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		GetRoot()->deleteAllChildren();
 	}
 
-	RAYLIB_FUNCTIONAL::UnloadImage(ic);
+	if (ic.data) {
+		RAYLIB_FUNCTIONAL::UnloadImage(ic);
+	}
 
 	for (auto pair : SIMPLEUI_GLOBAL::loadedImages) {
 		RAYLIB_FUNCTIONAL::UnloadImage(pair.second.first);

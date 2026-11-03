@@ -13,34 +13,6 @@ inline Display* d = XOpenDisplay(nullptr);
 Window root = DefaultRootWindow(d);
 #endif
 
-extern "C" const char* getLayout() {
-#ifdef _WIN32
-	HKL layout = GetKeyboardLayout(0);
-	if (LOWORD(layout) == 0x0409)
-		return "EN";
-	else if (LOWORD(layout) == 0x0419)
-		return "RU";
-	return "IDK";
-#elif defined(__linux__)
-	if (!d) return "EN";
-	XkbStateRec state;
-	XkbGetState(d, XkbUseCoreKbd, &state);
-	return (state.group == 1) ? "RU" : "EN";
-#endif
-}
-
-extern "C" bool capsLock() {
-#ifdef _WIN32
-	return (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
-#elif defined(__linux__)
-	if (!d) return false;
-	unsigned int state = 0;
-	XkbGetIndicatorState(d, XkbUseCoreKbd, &state);
-	return (state & 0x01);
-#endif
-	return false;
-}
-
 extern "C" float GetMouseScreenPositionX() {
 #ifdef _WIN32
 	POINT p;

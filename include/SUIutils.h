@@ -15,8 +15,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-    API const char* getLayout();
-    API bool capsLock();
     API float GetMouseScreenPositionX();
     API float GetMouseScreenPositionY();
     API void SetConsoleUTF8();

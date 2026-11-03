@@ -89,7 +89,7 @@ foreach(n harfbuzz-gpu harfbuzz-raster harfbuzz-vector)
 endforeach()
 
 add_executable(SIMPLEUI_TEST
-    src/test3.cpp
+    src/main.cpp
     include/SUIutils.cpp
 )
 

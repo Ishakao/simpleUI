@@ -34,20 +34,15 @@
 
 ```
 #define EXCLUDE_SIMPLEUI_EXTENSION
+#define EXCLUDE_SIMPLEUI_FREETYPE
 #define SIMPLEUI_IMPLEMENTATION
 #include <simpleUI.h>
 
 int main() {
 	Instance* Root = GetRoot();
 
-    CreateFont("ChinaAndEmoji", // name of new font
-    {
-        "C:/Windows/Fonts/segoeui.ttf", // segoe default font
-        "C:/Windows/Fonts/msyh.ttc",    // china font
-        "C:/Windows/Fonts/seguiemj.ttf" // segoe emoji font
-    });
-
-	loadImage("bg_image", "textures/test.jpg");
+    CreateFont("segoe", "Fonts/segoeui.ttf", 80);
+	loadImage("bg_image", "textures/test.jpg"); // add your image path cuz textures was not in simpleUI src
 
 	ImageLabel* Background = ImageLabel::New(Root);
 	Background->Size = { 1,1 };
@@ -61,8 +56,8 @@ int main() {
 	Hello->Position = { 0.5, 0.5 };
 	Hello->PositionOFFSET = { -200, 0 };
 	Hello->SizeOFFSET = { 340, 80 };
-	Hello->FontFace = "ChinaAndEmoji";
-	Hello->Text = " Hello 🔥 ";
+	Hello->FontFace = "segoe";
+	Hello->Text = " Hello ";
 	Hello->Roundness = 0.2;
 	Hello->Active = true;
 	Hello->BorderThickness = 3;
@@ -92,10 +87,10 @@ int main() {
 	World->Position = { 0.5, 0.5 };
 	World->PositionOFFSET = { 200, 0 };
 	World->SizeOFFSET = { 340, 80 };
-	World->FontFace = "ChinaAndEmoji";
-	World->Text = " World 世界 ";
-	World->PlaceholderText = " World 世界 ";
-	World->maxSymbols = 10;
+	World->FontFace = "segoe";
+	World->Text = " World ";
+	World->PlaceholderText = " World ";
+	World->MaxSymbols = 10;
 	World->CursorColor = { 0, 102, 102, 255 };
 	World->Roundness = 0.2;
 	World->Active = true;
@@ -104,7 +99,7 @@ int main() {
 	World->BackgroundColor = { 0, 102, 204, 255 };
 	World->BorderColor = { 0, 102, 102, 255 };
 	World->AddEvent(MOUSE_ENTER, [World](Instance* th) {
-		// SafeAnimation linked to object World. This animation will be deleted when called World deletes
+		// SafeAnimation linked to object World. This animation will be deleted when World deletes
 		Animate::SafeAnimation::Create(World, &World->SizeOFFSET, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out); 
 	});
 	World->AddEvent(MOUSE_LEAVE, [World](Instance* th) {

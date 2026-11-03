@@ -23,9 +23,10 @@
     <li>Raylib</li>
     <li>stb_image_write (included header implementation)</li>
     <li>stb_rect_pack (included header implementation)</li>
-    <li>FreeType (included)</li>
-    <li>HarfBuzz (included)</li>
+    <li>FreeType</li>
+    <li>HarfBuzz</li>
 </ul>
+<h3>All dependencies will be downloaded and builded in your envieronment (check CMakeLists.txt and cmake/deps/CMakeLists.txt)</h3>
 
 <h2>Quick Start</h2>
 <p><code>simpleUI</code> is very simple to use. Include the "simpleUI.h" header file in your project to start using it.</p>

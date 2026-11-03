@@ -75,7 +75,7 @@ function(sui_find var)
 endfunction()
 
 sui_find(SUI_RAYLIB raylib libraylib)
-sui_find(SUI_GLFW glfw3dll glfw3)
+sui_find(SUI_GLFW glfw3dll glfw3 glfw)
 sui_find(SUI_FREETYPE freetype libfreetype)
 sui_find(SUI_HB harfbuzz)
 sui_find(SUI_HB_SUBSET harfbuzz-subset)
@@ -108,6 +108,23 @@ target_link_libraries(SIMPLEUI_TEST PRIVATE
     ${SUI_FREETYPE}
 )
 
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+    target_include_directories(SIMPLEUI_TEST PRIVATE ${GTK3_INCLUDE_DIRS})
+    target_link_directories(SIMPLEUI_TEST PRIVATE ${GTK3_LIBRARY_DIRS})
+    target_link_libraries(SIMPLEUI_TEST PRIVATE ${GTK3_LIBRARIES})
+    target_compile_options(SIMPLEUI_TEST PRIVATE ${GTK3_CFLAGS_OTHER})
+endif()
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(SIMPLEUI_TEST PRIVATE X11 GL m pthread dl)
+    set_target_properties(SIMPLEUI_TEST PROPERTIES
+        BUILD_RPATH "${LIB_DIR}"
+        INSTALL_RPATH "$ORIGIN"
+    )
+endif()
+
 if(WIN32)
     target_link_libraries(SIMPLEUI_TEST PRIVATE winmm gdi32)
 endif()
@@ -134,8 +151,6 @@ endif()
 add_custom_command(TARGET SIMPLEUI_TEST POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/Fonts $<TARGET_FILE_DIR:SIMPLEUI_TEST>/Fonts
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/textures $<TARGET_FILE_DIR:SIMPLEUI_TEST>/textures
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/simpleUI Shaders"
         "$<TARGET_FILE_DIR:SIMPLEUI_TEST>/simpleUI Shaders"

@@ -46,7 +46,7 @@
 // IF YOU DON'T NEED FREETYPE IN YOUR UI THEN USE "#define EXCLUDE_SIMPLEUI_FREETYPE" BEFORE INCLUDING simpleUI.h
 
 #ifndef EXCLUDE_SIMPLEUI_FREETYPE
-	#include "ft2build.h"
+	#include <freetype2/ft2build.h>
 	#include FT_FREETYPE_H
 	#define BASIC_FREETYPE_FONT_SIZE 512
 	#include <harfbuzz/hb.h>
@@ -393,8 +393,8 @@ namespace SIMPLEUI_GLOBAL {
 	inline Color WindowColor = { 255,255,255,255 };
 
 	inline std::unordered_map<std::string, Font> Fonts;
-	inline std::vector<std::tuple<const char*, std::string, int>> queuedFonts;
-	inline std::vector<std::tuple<const char*, std::vector<std::string>, int>> queuedFontsV;
+	inline std::vector<std::tuple<std::string, std::string, int>> queuedFonts;
+	inline std::vector<std::tuple<std::string, std::vector<std::string>, int>> queuedFontsV;
 
 	inline std::vector<IChangedSignal*> ActiveSignals;
 	inline std::unordered_map<Instance*, std::vector<IChangedSignal*>> SafeActiveSignals;
@@ -501,348 +501,419 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 	}
 }
 
+struct TexturedTextLabelData {
+	Vector2 RealPos{};
+	Vector2 RealSize{};
+	Vector2 Origin{};
+	float Rotation{};
+	float Roundness{};
+};
+
 #ifndef EXCLUDE_SIMPLEUI_FREETYPE
-	namespace FT_TextManagement {
-		struct Glyph {
-			Rectangle src{};
-			float xoff = 0;
-			float yoff = 0;
-			float advance = 0;
-			float scale = 1;
-			bool color = false;
-		};
+    namespace FT_TextManagement {
+        struct Glyph {
+            Rectangle src{};
+            float xoff = 0;
+            float yoff = 0;
+            float advance = 0;
+            float scale = 1;
+            bool color = false;
+        };
 
-		struct Shaped {
-			int face;
-			FT_UInt gid;
-			float x, y, adv;
-		};
+        struct Shaped {
+            int face;
+            FT_UInt gid;
+            float x, y, adv;
+        };
 
-		class FT_Font {
-			struct Atlas {
-				Texture2D tex{};
-				std::vector<unsigned char> pixels;
-				std::unordered_map<uint64_t, Glyph> map;
-				float baseline = 0;
-				float lineH = 0;
-				int height = 0;
-				int x = 0, y = 0, rowH = 0;
-			};
+        struct Quad {
+            Rectangle src;
+            float ox, oy, w, h;
+            int col;
+            bool color;
+        };
 
-			FT_Library lib_ = nullptr;
-			std::vector<hb_font_t*> hb_;
-			std::vector<FT_Face> faces_{};
-			std::unordered_map<int, Atlas> atlases_{};
-			int width_{};
-			int maxSide_{};
+        struct LineSpan {
+            float baseW;
+            int count;
+        };
 
-			static bool IsZeroWidth(int cp) {
-				return cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0x2060 or cp == 0xFE0E or cp == 0xFE0F;
-			}
+        struct Layout {
+            std::string text;
+            std::vector<Quad> quads;
+            std::vector<LineSpan> lines;
+            float baseLineH = 0;
+        };
 
-			float ApplySize(FT_Face face, int size) {
-				if (FT_IS_SCALABLE(face)) {
-					FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
-					return 1.0f;
+        class FT_Font {
+            struct Atlas {
+                Texture2D tex{};
+                std::vector<unsigned char> pixels;
+                std::unordered_map<uint64_t, Glyph> map;
+                float baseline = 0;
+                float lineH = 0;
+                int height = 0;
+                int x = 0, y = 0, rowH = 0;
+            };
+
+            FT_Library lib_ = nullptr;
+            hb_buffer_t* buf_ = nullptr;
+            std::vector<hb_font_t*> hb_;
+            std::vector<FT_Face> faces_{};
+            std::vector<int> activeSizes_{};
+            std::vector<float> activeScales_{};
+            Atlas atlas_{};
+            std::vector<unsigned char> scratchRgba_{};
+            int width_{};
+            int maxSide_{};
+            int baseSize_ = 64;
+
+            float ApplySize(int faceIdx, int size) {
+                if (activeSizes_[faceIdx] == size) {
+                    return activeScales_[faceIdx];
+                }
+
+                FT_Face face = faces_[faceIdx];
+                float scale = 1.0f;
+
+                if (FT_IS_SCALABLE(face)) {
+                    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
+                } else if (face->num_fixed_sizes > 0) {
+                    int best = 0;
+                    float bestDiff = 1e9f;
+                    for (int i = 0; i < face->num_fixed_sizes; i++) {
+                        float d = std::fabs(face->available_sizes[i].y_ppem / 64.0f - size);
+                        if (d < bestDiff) { bestDiff = d; best = i; }
+                    }
+                    FT_Select_Size(face, best);
+                    float ppem = (float)face->size->metrics.y_ppem;
+                    scale = ppem > 0 ? size / ppem : 1.0f;
+                }
+
+                hb_ft_font_changed(hb_[faceIdx]);
+                activeSizes_[faceIdx] = size;
+                activeScales_[faceIdx] = scale;
+                return scale;
+            }
+
+            static uint64_t Key(int face, FT_UInt gid) {
+                return ((uint64_t)face << 32) | gid;
+            }
+
+            static bool Joins(int cp) {
+                return (cp >= 0x1F3FB and cp <= 0x1F3FF) or cp == 0x200D or cp == 0xFE0F or cp == 0xFE0E or cp == 0x20E3 or (cp >= 0xE0020 and cp <= 0xE007F);
+            }
+
+            static bool IsRI(int cp) { return cp >= 0x1F1E6 and cp <= 0x1F1FF; }
+
+            int PickFace(int cp) {
+                for (size_t i = 0; i < faces_.size(); i++)
+                    if (FT_Get_Char_Index(faces_[i], (FT_ULong)cp)) return (int)i;
+                return 0;
+            }
+
+            int NextCluster(const int* cps, int count, int i, int& faceOut) {
+                faceOut = PickFace(cps[i]);
+                int j = i + 1;
+                while (j < count and (Joins(cps[j]) or cps[j - 1] == 0x200D or (IsRI(cps[i]) and j == i + 1 and IsRI(cps[j])))) j++;
+                return j;
+            }
+
+            void Upload(Atlas& a) {
+                Image img = { a.pixels.data(), width_, a.height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
+                Texture2D t = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
+                RAYLIB_FUNCTIONAL::SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+                if (a.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(a.tex);
+                a.tex = t;
+            }
+
+            bool Grow(Atlas& a) {
+                if (a.height >= maxSide_) return false;
+                int nh = std::min(a.height * 2, maxSide_);
+                FlushRectanglesBatch();
+                a.pixels.resize((size_t)width_ * nh * 4, 0);
+                a.height = nh;
+                Upload(a);
+                return true;
+            }
+
+            void InitAtlas() {
+                if (atlas_.tex.id != 0 or faces_.empty()) return;
+                atlas_.height = width_;
+                atlas_.pixels.assign((size_t)width_ * atlas_.height * 4, 0);
+                Upload(atlas_);
+                float s = ApplySize(0, baseSize_);
+                atlas_.baseline = (faces_[0]->size->metrics.ascender / 64.0f) * s;
+                atlas_.lineH = (faces_[0]->size->metrics.height / 64.0f) * s;
+            }
+
+            Glyph Rasterize(Atlas& a, int f, FT_UInt gid) {
+                FT_Face face = faces_[f];
+                float scale = ApplySize(f, baseSize_);
+                int flags = FT_LOAD_RENDER;
+                if (FT_HAS_COLOR(face)) flags |= FT_LOAD_COLOR;
+                if (FT_Load_Glyph(face, gid, flags)) return {};
+
+                FT_GlyphSlot slot = face->glyph;
+                FT_Bitmap& bm = slot->bitmap;
+
+                Glyph g;
+                g.scale = scale;
+                g.advance = (slot->advance.x / 64.0f) * scale;
+                g.xoff = slot->bitmap_left * scale;
+                g.yoff = -slot->bitmap_top * scale;
+
+                int w = (int)bm.width;
+                int h = (int)bm.rows;
+                if (w == 0 or h == 0) return g;
+
+                bool bgra = bm.pixel_mode == FT_PIXEL_MODE_BGRA;
+                if (!bgra and bm.pixel_mode != FT_PIXEL_MODE_GRAY) return g;
+                g.color = bgra;
+
+                if (w + 2 > width_) return g;
+
+                if (a.x + w + 2 > width_) { a.x = 0; a.y += a.rowH + 2; a.rowH = 0; }
+                while (a.y + h + 2 > a.height) {
+                    if (!Grow(a)) return g;
+                }
+
+                size_t needed = (size_t)w * h * 4;
+                if (scratchRgba_.size() < needed) scratchRgba_.resize(needed);
+
+                int pitch = std::abs(bm.pitch);
+                for (int y = 0; y < h; y++) {
+                    const unsigned char* row = bm.buffer + (size_t)y * pitch;
+                    unsigned char* out = scratchRgba_.data() + (size_t)y * w * 4;
+                    for (int x = 0; x < w; x++) {
+                        if (bgra) {
+                            unsigned char alpha = row[x * 4 + 3];
+                            out[x * 4 + 0] = alpha ? (unsigned char)std::min(255, row[x * 4 + 2] * 255 / alpha) : 0;
+                            out[x * 4 + 1] = alpha ? (unsigned char)std::min(255, row[x * 4 + 1] * 255 / alpha) : 0;
+                            out[x * 4 + 2] = alpha ? (unsigned char)std::min(255, row[x * 4 + 0] * 255 / alpha) : 0;
+                            out[x * 4 + 3] = alpha;
+                        } else {
+                            out[x * 4 + 0] = 255;
+                            out[x * 4 + 1] = 255;
+                            out[x * 4 + 2] = 255;
+                            out[x * 4 + 3] = row[x];
+                        }
+                    }
+                    std::memcpy(&a.pixels[((size_t)(a.y + y) * width_ + a.x) * 4], out, (size_t)w * 4);
+                }
+
+                UpdateTextureRec(a.tex, { (float)a.x, (float)a.y, (float)w, (float)h }, scratchRgba_.data());
+                g.src = { (float)a.x, (float)a.y, (float)w, (float)h };
+                a.x += w + 2;
+                if (h > a.rowH) a.rowH = h;
+                return g;
+            }
+
+        public:
+            std::unordered_map<uint64_t, Layout> layouts;
+            std::vector<Shaped> shScratch;
+
+            FT_Font(const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) : baseSize_(size), width_(startSide < 512 ? 512 : startSide), maxSide_(maxSide) {
+                FT_Init_FreeType(&lib_);
+                buf_ = hb_buffer_create();
+                layouts.reserve(4096);
+                for (const std::string& p : paths) AddFace(p.c_str());
+                InitAtlas();
+            }
+
+            FT_Font(FT_Font&& o) noexcept : lib_(o.lib_), buf_(o.buf_), hb_(std::move(o.hb_)), faces_(std::move(o.faces_)),
+                  activeSizes_(std::move(o.activeSizes_)), activeScales_(std::move(o.activeScales_)),
+                  atlas_(std::move(o.atlas_)), scratchRgba_(std::move(o.scratchRgba_)),
+                  width_(o.width_), maxSide_(o.maxSide_), baseSize_(o.baseSize_),
+                  layouts(std::move(o.layouts)), shScratch(std::move(o.shScratch)) {
+                o.lib_ = nullptr;
+                o.buf_ = nullptr;
+                o.atlas_.tex.id = 0;
+                o.faces_.clear();
+                o.hb_.clear();
+            }
+
+            ~FT_Font() {
+                if (atlas_.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(atlas_.tex);
+                for (auto f : hb_) hb_font_destroy(f);
+                if (buf_) hb_buffer_destroy(buf_);
+                for (FT_Face f : faces_) FT_Done_Face(f);
+                if (lib_) FT_Done_FreeType(lib_);
+            }
+
+            FT_Font(const FT_Font&) = delete;
+            FT_Font& operator=(const FT_Font&) = delete;
+
+            bool AddFace(const char* path) {
+                FT_Face face;
+                if (FT_New_Face(lib_, path, 0, &face)) return false;
+                faces_.push_back(face);
+                activeSizes_.push_back(-1);
+                activeScales_.push_back(1.0f);
+                hb_font_t* h = hb_ft_font_create_referenced(face);
+                hb_ft_font_set_load_flags(h, FT_LOAD_DEFAULT | FT_LOAD_COLOR);
+                hb_.push_back(h);
+                return true;
+            }
+
+            void ShapeBase(const int* cps, int count, std::vector<Shaped>& out) {
+                if (count <= 0) return;
+                int i = 0;
+                while (i < count) {
+                    int face = 0;
+                    int j = NextCluster(cps, count, i, face);
+                    while (j < count) {
+                        int nextFace = 0;
+                        int nextJ = NextCluster(cps, count, j, nextFace);
+                        if (nextFace != face) break;
+                        j = nextJ;
+                    }
+
+                    float scale = ApplySize(face, baseSize_);
+
+                    hb_buffer_clear_contents(buf_);
+                    hb_buffer_add_codepoints(buf_, (const uint32_t*)cps, count, i, j - i);
+                    hb_buffer_guess_segment_properties(buf_);
+                    hb_shape(hb_[face], buf_, nullptr, 0);
+
+                    unsigned n;
+                    hb_glyph_info_t* inf = hb_buffer_get_glyph_infos(buf_, &n);
+                    hb_glyph_position_t* ps = hb_buffer_get_glyph_positions(buf_, &n);
+                    for (unsigned k = 0; k < n; k++) {
+                        out.push_back({
+                            face,
+                            inf[k].codepoint,
+                            (ps[k].x_offset / 64.0f) * scale,
+                            -(ps[k].y_offset / 64.0f) * scale,
+                            (ps[k].x_advance / 64.0f) * scale
+                        });
+                    }
+                    i = j;
+                }
+            }
+
+            bool Valid() const { return !faces_.empty(); }
+
+            const Glyph& GetBase(int face, FT_UInt gid) {
+                InitAtlas();
+                uint64_t k = Key(face, gid);
+                auto it = atlas_.map.find(k);
+                if (it != atlas_.map.end()) return it->second;
+                return atlas_.map.emplace(k, Rasterize(atlas_, face, gid)).first->second;
+            }
+
+            Texture2D BaseTexture() { InitAtlas(); return atlas_.tex; }
+            float BaseBaseline() { InitAtlas(); return atlas_.baseline; }
+            float BaseLineHeight() { InitAtlas(); return atlas_.lineH; }
+            int BaseSize() const { return baseSize_; }
+        };
+
+        std::unordered_map<std::string, FT_Font> Fonts;
+
+        bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
+            auto [it, ok] = Fonts.try_emplace(name, paths, size, startSide, maxSide);
+            if (!it->second.Valid()) { Fonts.erase(it); return false; }
+            return ok;
+        }
+
+        void UnloadFonts() { Fonts.clear(); }
+
+        inline const Layout& GetLayout(FT_Font& font, const char* text) {
+            std::string_view sv(text ? text : "");
+            uint64_t h = std::hash<std::string_view>{}(sv);
+
+            auto& m = font.layouts;
+            auto it = m.find(h);
+            if (it != m.end() and it->second.text == sv)
+                return it->second;
+
+            if (m.size() > 32768) m.clear();
+
+            Layout& L = m[h];
+            L.text.assign(sv.data(), sv.size());
+            L.quads.clear();
+            L.lines.clear();
+            L.baseLineH = font.BaseLineHeight();
+
+            int count = 0;
+            int* cps = RAYLIB_FUNCTIONAL::LoadCodepoints(text ? text : "", &count);
+            float base = font.BaseBaseline();
+            std::vector<Shaped>& sh = font.shScratch;
+
+            L.quads.reserve(count);
+
+            float y = 0;
+            int start = 0;
+            while (start <= count) {
+                int end = start;
+                while (end < count and cps[end] != '\n') end++;
+
+                sh.clear();
+                if (end > start) {
+                    font.ShapeBase(cps + start, end - start, sh);
+                }
+
+                float x = 0;
+                int col = 0;
+                for (const Shaped& s : sh) {
+                    const Glyph& g = font.GetBase(s.face, s.gid);
+                    if (g.src.width > 0) {
+                        L.quads.push_back({
+                            g.src,
+                            x + s.x + g.xoff,
+                            y + base + s.y + g.yoff,
+                            g.src.width * g.scale,
+                            g.src.height * g.scale,
+                            col,
+                            g.color
+                        });
+                    }
+                    x += s.adv;
+                    col++;
+                }
+
+                L.lines.push_back({ x, (int)sh.size() });
+                y += L.baseLineH;
+                start = end + 1;
+            }
+
+            RAYLIB_FUNCTIONAL::UnloadCodepoints(cps);
+            return L;
+        }
+
+        inline Vector2 MeasureTextEx(FT_Font& font, const char* text, int size, int spacing) {
+            const Layout& L = GetLayout(font, text);
+            float s = (float)size / (float)font.BaseSize();
+            float maxW = 0.0f;
+            for (const LineSpan& line : L.lines) {
+                float w = line.count > 0 ? (line.baseW * s + (float)(line.count - 1) * spacing) : 0.0f;
+                if (w > maxW) maxW = w;
+            }
+            return { maxW, (float)L.lines.size() * L.baseLineH * s };
+        }
+
+        inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, TexturedTextLabelData* textlabeldata=nullptr) {
+            const Layout& L = GetLayout(font, text);
+            Texture2D tex = font.BaseTexture();
+            Color colorTint = { 255, 255, 255, tint.a };
+            float s = (float)fontSize / (float)font.BaseSize();
+
+            for (const Quad& q : L.quads) {
+                Rectangle dst = {
+                    pos.x + q.ox * s + (float)q.col * spacing,
+                    pos.y + q.oy * s,
+                    q.w * s,
+                    q.h * s
+                };
+
+				if (textlabeldata) {
+                	SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, q.color ? colorTint : tint, textlabeldata->Roundness);
+				} else {
+					RAYLIB_FUNCTIONAL::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, q.color ? colorTint : tint);
 				}
-
-				int best = 0;
-				float bestDiff = 1e9f;
-				for (int i = 0; i < face->num_fixed_sizes; i++) {
-					float d = std::fabs(face->available_sizes[i].y_ppem / 64.0f - size);
-					if (d < bestDiff) { bestDiff = d; best = i; }
-				}
-
-				FT_Select_Size(face, best);
-				float ppem = (float)face->size->metrics.y_ppem;
-				return ppem > 0 ? size / ppem : 1.0f;
-			}
-
-			void Pick(int cp, FT_Face& face, FT_UInt& idx) {
-				face = faces_[0];
-				idx = 0;
-				for (FT_Face f : faces_) {
-					FT_UInt i = FT_Get_Char_Index(f, (FT_ULong)cp);
-					if (i) { face = f; idx = i; return; }
-				}
-			}
-
-			static uint64_t Key(int face, FT_UInt gid) { 
-				return ((uint64_t)face << 32) | gid; 
-			}
-
-			static bool Joins(int cp) {
-				return (cp >= 0x1F3FB and cp <= 0x1F3FF) or cp == 0x200D or cp == 0xFE0F or cp == 0xFE0E or cp == 0x20E3 or (cp >= 0xE0020 and cp <= 0xE007F);
-			}
-
-			static bool IsRI(int cp) { return cp >= 0x1F1E6 and cp <= 0x1F1FF; }
-
-			int PickFace(int cp) {
-				for (size_t i = 0; i < faces_.size(); i++)
-					if (FT_Get_Char_Index(faces_[i], (FT_ULong)cp)) return (int)i;
-				return 0;
-			}
-
-			void Upload(Atlas& a) {
-				Image img = { a.pixels.data(), width_, a.height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
-				Texture2D t = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
-				RAYLIB_FUNCTIONAL::SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-				if (a.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(a.tex);
-				a.tex = t;
-			}
-
-			bool Grow(Atlas& a) {
-				if (a.height >= maxSide_) return false;
-				int nh = std::min(a.height * 2, maxSide_);
-				FlushRectanglesBatch();
-				a.pixels.resize((size_t)width_ * nh * 4, 0);
-				a.height = nh;
-				Upload(a);
-				return true;
-			}
-
-			Atlas& At(int size) {
-				auto it = atlases_.find(size);
-				if (it != atlases_.end()) return it->second;
-
-				Atlas& a = atlases_[size];
-				a.height = width_;
-				a.pixels.assign((size_t)width_ * a.height * 4, 0);
-				Upload(a);
-
-				if (!faces_.empty()) {
-					float s = ApplySize(faces_[0], size);
-					a.baseline = faces_[0]->size->metrics.ascender / 64.0f * s;
-					a.lineH = faces_[0]->size->metrics.height / 64.0f * s;
-				}
-
-				return a;
-			}
-
-			Glyph Rasterize(Atlas& a, int f, FT_UInt gid, int size) {
-				FT_Face face = faces_[f];
-				float scale = ApplySize(face, size);
-				int flags = FT_LOAD_RENDER;
-				if (FT_HAS_COLOR(face)) flags |= FT_LOAD_COLOR;
-				if (FT_Load_Glyph(face, gid, flags)) return {};
-
-				FT_GlyphSlot slot = face->glyph;
-				FT_Bitmap& bm = slot->bitmap;
-
-				Glyph g;
-				g.scale = scale;
-				g.advance = (slot->advance.x / 64.0f) * scale;
-				g.xoff = slot->bitmap_left * scale;
-				g.yoff = -slot->bitmap_top * scale;
-
-				int w = (int)bm.width;
-				int h = (int)bm.rows;
-				if (w == 0 or h == 0) return g;
-
-				bool bgra = bm.pixel_mode == FT_PIXEL_MODE_BGRA;
-				if (!bgra and bm.pixel_mode != FT_PIXEL_MODE_GRAY) return g;
-				g.color = bgra;
-
-				if (w + 1 > width_) {
-					return g;
-				}
-
-				if (a.x + w + 1 > width_) { a.x = 0; a.y += a.rowH + 1; a.rowH = 0; }
-				while (a.y + h + 1 > a.height) {
-					if (!Grow(a)) {
-						return g;
-					}
-				}
-
-				std::vector<unsigned char> rgba((size_t)w * h * 4);
-				int pitch = std::abs(bm.pitch);
-				for (int y = 0; y < h; y++) {
-					const unsigned char* row = bm.buffer + (size_t)y * pitch;
-					unsigned char* out = rgba.data() + (size_t)y * w * 4;
-					for (int x = 0; x < w; x++) {
-						if (bgra) {
-							out[x * 4 + 0] = row[x * 4 + 2];
-							out[x * 4 + 1] = row[x * 4 + 1];
-							out[x * 4 + 2] = row[x * 4 + 0];
-							out[x * 4 + 3] = row[x * 4 + 3];
-						} else {
-							unsigned char v = row[x];
-							out[x * 4 + 0] = v;
-							out[x * 4 + 1] = v;
-							out[x * 4 + 2] = v;
-							out[x * 4 + 3] = v;
-						}
-					}
-					std::memcpy(&a.pixels[((size_t)(a.y + y) * width_ + a.x) * 4], out, (size_t)w * 4);
-				}
-
-				UpdateTextureRec(a.tex, { (float)a.x, (float)a.y, (float)w, (float)h }, rgba.data());
-				g.src = { (float)a.x, (float)a.y, (float)w, (float)h };
-				a.x += w + 1;
-				if (h > a.rowH) a.rowH = h;
-				return g;
-			}
-
-		public:
-			FT_Font(const std::vector<std::string>& paths, int startSide = 512, int maxSide = 16384) : width_(startSide < 256 ? 256 : startSide), maxSide_(maxSide) {
-				FT_Init_FreeType(&lib_);
-				for (const std::string& p : paths) AddFace(p.c_str());
-			}
-
-			FT_Font(FT_Font&& o) noexcept : lib_(o.lib_), faces_(std::move(o.faces_)), atlases_(std::move(o.atlases_)), width_(o.width_), maxSide_(o.maxSide_) {
-				o.lib_ = nullptr;
-				o.faces_.clear();
-				o.atlases_.clear();
-			}
-
-			~FT_Font() {
-				for (auto& kv : atlases_) if (kv.second.tex.id) RAYLIB_FUNCTIONAL::UnloadTexture(kv.second.tex);
-				for (FT_Face f : faces_) FT_Done_Face(f);
-				if (lib_) FT_Done_FreeType(lib_);
-				for (auto f : hb_) {
-					hb_font_destroy(f);
-				}
-			}
-
-			FT_Font(const FT_Font&) = delete;
-			FT_Font& operator=(const FT_Font&) = delete;
-
-			bool AddFace(const char* path) {
-				FT_Face face;
-				if (FT_New_Face(lib_, path, 0, &face)) return false;
-				faces_.push_back(face);
-				hb_font_t* h = hb_ft_font_create_referenced(face);
-				hb_ft_font_set_load_flags(h, FT_LOAD_DEFAULT | FT_LOAD_COLOR);
-				hb_.push_back(h);
-				return true;
-			}
-
-			void Shape(const int* cps, int count, int size, std::vector<Shaped>& out) {
-				hb_buffer_t* buf = hb_buffer_create();
-				int i = 0;
-				while (i < count) {
-					int face = PickFace(cps[i]);
-					int j = i + 1;
-					while (j < count and (Joins(cps[j]) or cps[j - 1] == 0x200D or (IsRI(cps[i]) and j == i + 1 and IsRI(cps[j])))) j++;
-
-					float scale = ApplySize(faces_[face], size);
-					hb_ft_font_changed(hb_[face]);
-
-					hb_buffer_clear_contents(buf);
-					hb_buffer_add_codepoints(buf, (const uint32_t*)cps, count, i, j - i);
-					hb_buffer_guess_segment_properties(buf);
-					hb_shape(hb_[face], buf, nullptr, 0);
-
-					unsigned n;
-					hb_glyph_info_t* inf = hb_buffer_get_glyph_infos(buf, &n);
-					hb_glyph_position_t* ps = hb_buffer_get_glyph_positions(buf, &n);
-					for (unsigned k = 0; k < n; k++)
-						out.push_back({ face, inf[k].codepoint, ps[k].x_offset / 64.0f * scale, -ps[k].y_offset / 64.0f * scale, ps[k].x_advance / 64.0f * scale });
-					i = j;
-				}
-				hb_buffer_destroy(buf);
-			}
-
-			bool Valid() const { return !faces_.empty(); }
-
-			const Glyph& Get(int face, FT_UInt gid, int size) {
-				Atlas& a = At(size);
-				uint64_t k = Key(face, gid);
-				auto it = a.map.find(k);
-				if (it != a.map.end()) return it->second;
-				return a.map.emplace(k, Rasterize(a, face, gid, size)).first->second;
-			}
-
-			Texture2D Texture(int size) { return At(size).tex; }
-			float Baseline(int size) { return At(size).baseline; }
-			float LineHeight(int size) { return At(size).lineH; }
-		};
-
-		inline std::unordered_map<std::string, FT_Font> Fonts;
-
-		inline bool CreateFont(const char* name, const std::vector<std::string>& paths, int startSide = 512, int maxSide = 16384) {
-			auto [it, ok] = Fonts.try_emplace(name, paths, startSide, maxSide);
-			if (!it->second.Valid()) { Fonts.erase(it); return false; }
-			return ok;
-		}
-
-		inline void UnloadFonts() { Fonts.clear(); }
-
-		template <class F>
-		inline Vector2 LayoutText(FT_Font& font, const int* cps, int count, int size, float spacing, F&& onGlyph) {
-			float lineH = font.LineHeight(size);
-			float y = 0, maxW = 0;
-			int lines = 0;
-			std::vector<Shaped> sh;
-
-			int start = 0;
-			while (start <= count) {
-				int end = start;
-				while (end < count and cps[end] != '\n') end++;
-
-				sh.clear();
-				font.Shape(cps + start, end - start, size, sh);
-
-				float x = 0;
-				for (const Shaped& s : sh) {
-					onGlyph(s, x, y);
-					x += s.adv + spacing;
-				}
-				float w = sh.empty() ? 0 : x - spacing;
-				if (w > maxW) maxW = w;
-
-				y += lineH;
-				lines++;
-				start = end + 1;
-			}
-			return { maxW, lines * lineH };
-		}
-
-		inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint) {
-			int count = 0;
-			int* cps = RAYLIB_FUNCTIONAL::LoadCodepoints(text, &count);
-
-			LayoutText(font, cps, count, fontSize, (float)spacing, [&](const Shaped& s, float, float) {
-				font.Get(s.face, s.gid, fontSize);
-			});
-
-			Texture2D tex = font.Texture(fontSize);
-			float base = font.Baseline(fontSize);
-
-			Color pm = {
-				(unsigned char)(tint.r * tint.a / 255),
-				(unsigned char)(tint.g * tint.a / 255),
-				(unsigned char)(tint.b * tint.a / 255),
-				tint.a
-			};
-			Color pmWhite = { tint.a, tint.a, tint.a, tint.a };
-
-			SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_ALPHA_PREMULTIPLY);
-
-			LayoutText(font, cps, count, fontSize, (float)spacing, [&](const Shaped& s, float x, float y) {
-				const Glyph& g = font.Get(s.face, s.gid, fontSize);
-				if (g.src.width <= 0) return;
-				Rectangle dst = {
-					std::floor(pos.x + x + s.x + g.xoff),
-					std::floor(pos.y + y + base + s.y + g.yoff),
-					g.src.width * g.scale,
-					g.src.height * g.scale
-				};
-				RAYLIB_FUNCTIONAL::DrawTexturePro(tex, g.src, dst, { 0, 0 }, 0, g.color ? pmWhite : pm);
-			});
-
-			SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
-			RAYLIB_FUNCTIONAL::UnloadCodepoints(cps);
-		}
-
-		inline Vector2 MeasureTextEx(FT_Font& font, const char* text, int size, int spacing) {
-			int count = 0;
-			int* cps = RAYLIB_FUNCTIONAL::LoadCodepoints(text, &count);
-			Vector2 s = LayoutText(font, cps, count, size, (float)spacing, [](FT_TextManagement::Shaped, float, float) {});
-			RAYLIB_FUNCTIONAL::UnloadCodepoints(cps);
-			return s;
-		}
-	}
+            }
+        }
+    }
 #endif
 
 namespace SIMPLEUI_GRAPHICS_WRAPS {
@@ -852,12 +923,12 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		#else
 			FT_TextManagement::FT_Font&
 		#endif
-		font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint) {
+		font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, TexturedTextLabelData* data=nullptr) {
 
 		#ifdef EXCLUDE_SIMPLEUI_FREETYPE
 			RAYLIB_FUNCTIONAL::DrawTextEx(font, text, pos, fontSize, spacing, tint);
 		#else
-			FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint);
+			FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint, data);
 		#endif
 	}
 }
@@ -996,7 +1067,7 @@ public:
 		if (tex.id) {
 			loaded = true;
 			nodes.resize(size);
-			RAYLIB_FUNCTIONAL::SetTextureFilter(tex.texture, TEXTURE_FILTER_TRILINEAR);
+			RAYLIB_FUNCTIONAL::SetTextureFilter(tex.texture, TEXTURE_FILTER_BILINEAR);
 			RAYLIB_FUNCTIONAL::SetTextureWrap(tex.texture, TEXTURE_WRAP_CLAMP);
 			std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
 			stbrp_init_target(&ctx, size, size, nodes.data(), (int)nodes.size());
@@ -1190,44 +1261,44 @@ inline void addFontToQueqe(const char* name, std::string path, int size) {
 	SIMPLEUI_GLOBAL::queuedFonts.emplace_back(name, path, size);
 }
 
-inline void CreateFont(const char* name, const std::string& path, int size=0) {
+inline void CreateFont(const std::string& name, const std::string& path, int size=64) {
 	if (IsWindowReady()) {
 		#ifdef EXCLUDE_SIMPLEUI_FREETYPE
 			static int codepointsCount = 0;
 			static int* codepoints = RAYLIB_FUNCTIONAL::LoadCodepoints(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ЁАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯёабвгдежзийклмнопрстуфхцчшщъыьэюя", &codepointsCount);
-			Font ft = RAYLIB_FUNCTIONAL::LoadFontEx(path.c_str(), size, codepoints, codepointsCount);
+			Font ft = RAYLIB_FUNCTIONAL::LoadFontEx(path.c_str(), (size > 0 ? size : 64), codepoints, codepointsCount);
 			if (ft.texture.id) {
 				RAYLIB_FUNCTIONAL::GenTextureMipmaps(&ft.texture);
-				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_TRILINEAR);
+				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_BILINEAR);
 				SIMPLEUI_GLOBAL::Fonts.emplace(name, ft);
 			} else {
 				UnloadFont(ft);
 			}
 		#else
-			FT_TextManagement::CreateFont(name, {path});
+			FT_TextManagement::CreateFont(name, {path}, size);
 		#endif
 	} else {
 		SIMPLEUI_GLOBAL::queuedFonts.emplace_back(name, path, size);
 	}
 }
 
-inline void CreateFont(const char* name, const std::vector<std::string>& paths, int size=0) {
+inline void CreateFont(const std::string& name, const std::vector<std::string>& paths, int size=64) {
 	if (paths.empty()) return;
 
 	if (IsWindowReady()) {
 		#ifdef EXCLUDE_SIMPLEUI_FREETYPE
 			static int codepointsCount = 0;
 			static int* codepoints = RAYLIB_FUNCTIONAL::LoadCodepoints(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ЁАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯёабвгдежзийклмнопрстуфхцчшщъыьэюя", &codepointsCount);
-			Font ft = RAYLIB_FUNCTIONAL::LoadFontEx(paths[0].c_str(), size, codepoints, codepointsCount);
+			Font ft = RAYLIB_FUNCTIONAL::LoadFontEx(paths[0].c_str(), (size > 0 ? size : 64), codepoints, codepointsCount);
 			if (ft.texture.id) {
 				RAYLIB_FUNCTIONAL::GenTextureMipmaps(&ft.texture);
-				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_TRILINEAR);
+				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_BILINEAR);
 				SIMPLEUI_GLOBAL::Fonts.emplace(name, ft);
 			} else {
 				UnloadFont(ft);
 			}
 		#else
-			FT_TextManagement::CreateFont(name, paths);
+			FT_TextManagement::CreateFont(name, paths, size);
 		#endif
 	} else {
 		SIMPLEUI_GLOBAL::queuedFontsV.emplace_back(name, paths, size);
@@ -1823,7 +1894,7 @@ namespace Animate {
 				doneA.push_back(it->second);
 				it = ActiveAnimations.erase(it);
 			} else {
-				++it;
+				it++;
 			}
 		}
 
@@ -1833,7 +1904,7 @@ namespace Animate {
 				doneS.emplace_back(it->first, it->second);
 				it = ActiveSafeAnimations.erase(it);
 			} else {
-				++it;
+				it++;
 			}
 		}
 
@@ -3796,6 +3867,7 @@ class TextLabel : public Object2D {
 	bool lastMaxVisibleRight = false;
 	bool rebuildVisible = true;
 	bool allocFailed = false;
+	bool queued = false;
 	AtlasTexture cachedText{};
 	std::vector<int> charOffsets;
 
@@ -3806,6 +3878,10 @@ class TextLabel : public Object2D {
 	float currentScale = 1.0f;
 	Vector2 refSize{};
 	int lastSpacing = 0;
+	int lastTextured = false;
+	bool initiated = false;
+
+	TexturedTextLabelData data{};
 
 	void updateCharOffsets() {
 		charOffsets.clear();
@@ -3850,7 +3926,7 @@ class TextLabel : public Object2D {
 		if (refSize.x <= 0.0f or refSize.y <= 0.0f) return 0.0f;
 		float fit = MeasureRefFont * std::min(RealSize.x / refSize.x, RealSize.y / refSize.y);
 		if (TextSize > 0) fit = std::min(fit, (float)TextSize);
-		return std::clamp(std::ceil(fit), MinRasterFont, MaxRasterFont);
+		return std::clamp(std::floor(fit), (Textured ? MinRasterFont : 1), (Textured ? MaxRasterFont : 1024));
 	}
 
 	void updateLayout() {
@@ -3871,6 +3947,7 @@ class TextLabel : public Object2D {
 	}
 
 	void updateTexture() {
+		queued = false;
 		rasterFont = rasterTarget();
 		if (rasterFont <= 0.0f) {
 			textSizeOnTexture = {};
@@ -3936,7 +4013,8 @@ public:
 	int Spacing = SIMPLEUI_GLOBAL::defaultSpacing;
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
-	bool RoundText = true;
+	bool RoundText = true; // Cropping text which pixels placed out of rounded border
+	bool Textured = false; // Text will bake into texture and texture will be drawn on FB. Textured better in static scenes (uses more VRAM)
 
 	const SUI_Text& GetText() const { // Deprecated functional. Now you can use ***->Text;
 		return Text;
@@ -3966,46 +4044,68 @@ public:
 				return;
 			}
 
-			updateLayout();
+			if (!Textured) {
+				textSizeOnTexture = refSize;
+			}
+
+			Vector2 o = {
+				Origin.x * RealSize.x + OriginOFFSET.x,
+				Origin.y * RealSize.y + OriginOFFSET.y
+			};
 
 			bool dirty = Text.isChanged() or FontFace.isChanged();
 			Text.restate();
 			FontFace.restate();
+
+			updateLayout();
 
 			if (dirty) {
 				rebuildVisible = true;
 				allocFailed = false;
 			}
 
-			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight) {
-				if (lastSpacing != Spacing) rebuildVisible = true;
+			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight or lastSpacing != Spacing or (Textured and lastTextured != Textured)) {
+				rebuildVisible = true;
 			}
 
-			bool needRaster = rebuildVisible;
-			if (!needRaster and Text.size() and (cachedText.id == 0 or !cachedText.currentAtlas)) {
-				needRaster = true;
-			}
+			float rasteredV = rasterTarget();
 
-			if (!needRaster and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f)) {
-				if (rasterTarget() != rasterFont) needRaster = true;
-			}
+			if (Textured) {
+				if (allocFailed and rasteredV != rasterFont) allocFailed = false;
 
-			if (needRaster) {
-				rebuildVisibleText();
-				SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
-			}
+				bool hasTexture = cachedText.id != 0 and cachedText.currentAtlas;
+				bool needRaster = rebuildVisible;
+				if (!needRaster and !hasTexture and !allocFailed and Text.size() and rasteredV > 0.0f) needRaster = true;
+				if (!needRaster and hasTexture and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f) and rasteredV != rasterFont) needRaster = true;
 
-			if (rasterFont > 1 and cachedText.id != 0) {
-				Rectangle sourceRec = { 0.0f, 0.0f, textSizeOnTexture.x, textSizeOnTexture.y };
+				if (needRaster and !queued) {
+					if (rebuildVisible) rebuildVisibleText();
+					queued = true;
+					SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(this);
+				}
+
+				if (rasterFont > 1 and cachedText.id != 0) {
+					Rectangle sourceRec = { 0.0f, 0.0f, textSizeOnTexture.x, textSizeOnTexture.y };
+					Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
+
+					SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
+				}
+			} else {
+				if (rebuildVisible or rasterFont < 1) rebuildVisibleText();
+				rasterFont = rasteredV;
+				data.Origin = o;
+				data.Rotation = Rotation;
+				data.RealPos = RealPos;
+				data.RealSize = RealSize;
+				data.Roundness = Roundness;
+
 				Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
-
-				Vector2 o = {
-					Origin.x * RealSize.x + OriginOFFSET.x,
-					Origin.y * RealSize.y + OriginOFFSET.y
-				};
-
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
+				if (rasterFont > 1) {
+					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(!FontFace), visibleText.c_str(), { destRec.x, destRec.y }, rasterFont, Spacing, TextColor, &data);
+				}
 			}
+
+			lastTextured = Textured;
 		}
 	}
 
@@ -4022,6 +4122,7 @@ public:
 		i->allocFailed = false;
 		i->textSizeOnTexture={0,0};
 		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.push_back(i);
+		i->queued = true;
 
 		return i;
 	}
@@ -5183,7 +5284,7 @@ public:
 
 					owner = true;
 					texture = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
-					RAYLIB_FUNCTIONAL::SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
+					RAYLIB_FUNCTIONAL::SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
 					RAYLIB_FUNCTIONAL::UnloadImage(img);
 				}
 			}
@@ -5222,7 +5323,7 @@ public:
 			owner = true;
 			texture = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
 			RAYLIB_FUNCTIONAL::GenTextureMipmaps(&texture);
-			RAYLIB_FUNCTIONAL::SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
+			RAYLIB_FUNCTIONAL::SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
 			RAYLIB_FUNCTIONAL::UnloadImage(img);
 		} else {
 			imageLoadedWhileNotReady = true;
@@ -6559,7 +6660,7 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		SIMPLEUI_GLOBAL::mouseScreenPosition = GetMouseScreenPosition();
 		SIMPLEUI_GLOBAL::windowPosition = GetWindowPosition();
 
-		static Vector2 previousWinSize = { -10, -10 };
+		static Vector2 previousWinSize = { -1, -1 };
 		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
 
 		if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
@@ -6605,12 +6706,11 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		for (TextLabel* t : SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture) {
 			t->updateTexture();
 		}
+		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
 
 		for (TextBox* t : SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture) {
 			t->updateTexture();
 		}
-
-		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
 		SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
 
 		SIMPLEUI_GLOBAL::windowSizeChanged = false;

@@ -3879,7 +3879,6 @@ class TextLabel : public Object2D {
 	Vector2 refSize{};
 	int lastSpacing = 0;
 	int lastTextured = false;
-	bool initiated = false;
 
 	TexturedTextLabelData data{};
 
@@ -4014,7 +4013,7 @@ public:
 	int MaxVisibleSymbols = -1;
 	bool MaxVisibleRight = false;
 	bool RoundText = true; // Cropping text which pixels placed out of rounded border
-	bool Textured = false; // Text will bake into texture and texture will be drawn on FB. Textured better in static scenes (uses more VRAM)
+	bool Textured = false; // Text will bake into texture and texture will be drawn on FB. Textured better in static scenes (uses more VRAM). Always true if EXCLUDE_SIMPLEUI_FREETYPE defined
 
 	const SUI_Text& GetText() const { // Deprecated functional. Now you can use ***->Text;
 		return Text;
@@ -4044,6 +4043,10 @@ public:
 				return;
 			}
 
+			#ifdef EXCLUDE_SIMPLEUI_FREETYPE
+				Textured = true;
+			#endif
+
 			if (!Textured) {
 				textSizeOnTexture = refSize;
 			}
@@ -4068,15 +4071,13 @@ public:
 				rebuildVisible = true;
 			}
 
-			float rasteredV = rasterTarget();
-
 			if (Textured) {
-				if (allocFailed and rasteredV != rasterFont) allocFailed = false;
+				if (allocFailed and rasterTarget() != rasterFont) allocFailed = false;
 
 				bool hasTexture = cachedText.id != 0 and cachedText.currentAtlas;
 				bool needRaster = rebuildVisible;
-				if (!needRaster and !hasTexture and !allocFailed and Text.size() and rasteredV > 0.0f) needRaster = true;
-				if (!needRaster and hasTexture and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f) and rasteredV != rasterFont) needRaster = true;
+				if (!needRaster and !hasTexture and !allocFailed and Text.size() and rasterTarget() > 0.0f) needRaster = true;
+				if (!needRaster and hasTexture and rasterFont > 0.0f and (currentScale > TextTextureUpdateAspect or currentScale < 0.5f) and rasterTarget() != rasterFont) needRaster = true;
 
 				if (needRaster and !queued) {
 					if (rebuildVisible) rebuildVisibleText();
@@ -4092,7 +4093,7 @@ public:
 				}
 			} else {
 				if (rebuildVisible or rasterFont < 1) rebuildVisibleText();
-				rasterFont = rasteredV;
+				rasterFont = rasterTarget();
 				data.Origin = o;
 				data.Rotation = Rotation;
 				data.RealPos = RealPos;

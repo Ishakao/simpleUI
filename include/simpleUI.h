@@ -4,7 +4,7 @@
 // Current Version 1.0.1																						//
 //																												//
 // Description:																									//
-// simpleUI is a library for simple creating a beautiful and fast user interfaces.								//
+// simpleUI is a library for simple creating a beautiful and fast retained user interfaces.						//
 // Based on raylib v5.5 by raysan5 (www.raylib.com | https://github.com/raysan5)								//
 // simpleUI interfaces are based on a hierarchical structure of objects for convinient objects management		//	
 //																												//
@@ -349,12 +349,12 @@ namespace SIMPLEUI_GLOBAL {
 	inline int winHeight = 0;
 	inline int defaultSpacing = 0;
 	inline float dt = 0;
-	inline SpecialVector2 changeWindowSize = { 0,0 };
+	inline Vector2 changeWindowSize = { 0,0 };
 	inline bool changeWindowSizeB = false;
 	inline bool windowSizeChanged = false;
 	inline long accurateFPS = 0;
 	inline bool programRunning = true;
-	inline SpecialVector2 mousePosition;
+	inline Vector2 mousePosition;
 	inline bool mouseOnWindow;
 	inline constexpr const char* BASIC_FONT_NAME = "Arial";
 	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
@@ -362,7 +362,7 @@ namespace SIMPLEUI_GLOBAL {
 	inline long currentUniqueObjectID = 0;
 	inline bool sceneDirty = false; // true in frame where any object hierarchy, size or position changed
 
-	inline SpecialVector2 windowMinimalSize = { 0,0 };
+	inline Vector2 windowMinimalSize = { 0,0 };
 	inline bool ALLOW_DEBUG = false;
 	inline bool ALLOW_FPS = false;
 
@@ -392,7 +392,8 @@ namespace SIMPLEUI_GLOBAL {
 
 	inline Color WindowColor = { 255,255,255,255 };
 
-	inline std::unordered_map<std::string, Font> Fonts;
+	inline std::vector<Font> Fonts;
+	inline std::unordered_map<std::string, int> FontsIndexes;
 	inline std::vector<std::tuple<std::string, std::string, int>> queuedFonts;
 	inline std::vector<std::tuple<std::string, std::vector<std::string>, int>> queuedFontsV;
 
@@ -868,10 +869,10 @@ struct TexturedTextLabelData {
             int BaseSize() const { return baseSize_; }
         };
 
-        std::vector<FT_Font> Fonts;
-        std::unordered_map<std::string, int> FontsIndexes;
+        inline std::vector<FT_Font> Fonts;
+        inline std::unordered_map<std::string, int> FontsIndexes;
 
-        bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
+        inline bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
             auto it = FontsIndexes.find(name);
 			if (it == FontsIndexes.end()) {
             	Fonts.emplace_back(paths, size, startSide, maxSide);
@@ -882,7 +883,7 @@ struct TexturedTextLabelData {
 			return false;
         }
 
-        void UnloadFonts() { Fonts.clear(); }
+        inline void UnloadFonts() { Fonts.clear(); }
 
         inline const Layout& GetLayout(FT_Font& font, const char* text) {
             std::string_view sv(text ? text : "");
@@ -1240,27 +1241,34 @@ inline void UnloadTextureFromAtlas(AtlasTexture& t) {
 	}
 }
 
-inline void loadImage(const std::string& name, const std::string& path) {
+inline void LoadImage(const std::string& name, const std::string& path) {
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
 
-	if (SIMPLEUI_GLOBAL::pendingImages.find(name) != SIMPLEUI_GLOBAL::pendingImages.end()) {
-		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
-		std::cout << YELLOW_ANSI << "Image: " << name << " already exists" << DEFAULT_ANSI << std::endl;
-		return;
+	if (IsWindowReady()) {
+		Image img = RAYLIB_FUNCTIONAL::LoadImage(path.c_str());
+		AtlasTexture tex = LoadTextureOnAtlas(img);
+		SIMPLEUI_GLOBAL::loadedImages.insert({ name, {img, tex} });
+	} else {
+		if (SIMPLEUI_GLOBAL::pendingImages.find(name) != SIMPLEUI_GLOBAL::pendingImages.end()) {
+			SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
+			std::cout << YELLOW_ANSI << "Image: " << name << " already exists" << DEFAULT_ANSI << std::endl;
+			return;
+		}
+
+		Image img = RAYLIB_FUNCTIONAL::LoadImage(path.c_str());
+		if (!img.data) {
+			SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
+			std::cout << YELLOW_ANSI << "Image: " << name << " error while loading" << DEFAULT_ANSI << std::endl;
+			return;
+		}
+
+		SIMPLEUI_GLOBAL::pendingImages.insert({ name, img });
 	}
 
-	Image img = RAYLIB_FUNCTIONAL::LoadImage(path.c_str());
-	if (!img.data) {
-		SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
-		std::cout << YELLOW_ANSI << "Image: " << name << " error while loading" << DEFAULT_ANSI << std::endl;
-		return;
-	}
-
-	SIMPLEUI_GLOBAL::pendingImages.insert({ name, img });
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.unlock();
 }
 
-inline void unloadImage(const std::string& name) {
+inline void UnloadImage(const std::string& name) {
 	SIMPLEUI_GLOBAL::ImagesLoadingMtx.lock();
 
 	auto it = SIMPLEUI_GLOBAL::loadedImages.find(name);
@@ -1317,6 +1325,10 @@ inline Shader getShader(int id) {
 	return it->second;
 }
 
+inline void unloadShader(int id) {
+	RAYLIB_FUNCTIONAL::UnloadShader(getShader(id));
+}
+
 inline Color mulColor(Color other, float t) {
 	return Color{
 		(unsigned char)(other.r * t),
@@ -1343,7 +1355,8 @@ inline void CreateFont(const std::string& name, const std::string& path, int siz
 			if (ft.texture.id) {
 				RAYLIB_FUNCTIONAL::GenTextureMipmaps(&ft.texture);
 				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_BILINEAR);
-				SIMPLEUI_GLOBAL::Fonts.emplace(name, ft);
+				SIMPLEUI_GLOBAL::Fonts.push_back(ft);
+				SIMPLEUI_GLOBAL::FontsIndexes.emplace(name, SIMPLEUI_GLOBAL::Fonts.size() - 1);
 			} else {
 				UnloadFont(ft);
 			}
@@ -1366,7 +1379,8 @@ inline void CreateFont(const std::string& name, const std::vector<std::string>& 
 			if (ft.texture.id) {
 				RAYLIB_FUNCTIONAL::GenTextureMipmaps(&ft.texture);
 				RAYLIB_FUNCTIONAL::SetTextureFilter(ft.texture, TEXTURE_FILTER_BILINEAR);
-				SIMPLEUI_GLOBAL::Fonts.emplace(name, ft);
+				SIMPLEUI_GLOBAL::Fonts.push_back(ft);
+				SIMPLEUI_GLOBAL::FontsIndexes.emplace(name, SIMPLEUI_GLOBAL::Fonts.size() - 1);
 			} else {
 				UnloadFont(ft);
 			}
@@ -1432,7 +1446,7 @@ public:
 		}
 
 		text = st;
-		return other;
+		return *this;
 	}
 
 	const SUI_Text& operator=(const SUI_Text& other) {
@@ -2087,12 +2101,12 @@ inline Vector3 getTextCFrame(const char* text,
 	}
 
 	if (endSize > maxTextSize) endSize = maxTextSize;
-	SpecialVector2 ofst = getTextOffset(anchor);
+	Vector2 ofst = getTextOffset(anchor);
 	float offsetX = ofst.x;
 	float offsetY = ofst.y;
 
 	endX = offsetX * (rec.width - textSize.x); if (endX < 0) endX = 0;
-	endY = offsetY * (rec.height - textSize.y);  if (endX < 0) endX = 0;
+	endY = offsetY * (rec.height - textSize.y);  if (endY < 0) endY = 0;
 
 	return { (float)endX, (float)endY, (float)endSize };
 }
@@ -2591,7 +2605,7 @@ protected:
 	Vector2Value() = delete;
 	~Vector2Value() override = default;
 public:
-	SpecialVector2 Value = { 0,0 };
+	Vector2 Value = { 0,0 };
 
 	Vector2Value* Clone() const {
 		Vector2Value* i = new Vector2Value(*this);
@@ -2654,9 +2668,9 @@ public:
 	}
 };
 
-inline SpecialVector2 getCanvasRealPos(Object2D*);
-inline SpecialVector2 getObject2DRS(Instance*);
-inline SpecialVector2 getObject2DRP(Instance*);
+inline Vector2 getCanvasRealPos(Object2D*);
+inline Vector2 getObject2DRS(Instance*);
+inline Vector2 getObject2DRP(Instance*);
 
 inline void FlushRectanglesBatch();
 
@@ -2732,7 +2746,7 @@ namespace RectGPU {
 	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t, float clip, float shape=0) {
 		float z = floorf(thickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 		float dw = t.use > 0.5f ? t.dest.width : 0.0f;
-		insts.push_back({
+		insts.emplace_back(
 			pos.x, pos.y, size.x, size.y,
 			origin.x, origin.y, rotation * DEG2RAD, z,
 			t.dest.x, t.dest.y, dw, t.dest.height,
@@ -2742,7 +2756,7 @@ namespace RectGPU {
 			inset,
 			clip,
 			shape
-		});
+		);
 	}
 }
 
@@ -2911,8 +2925,8 @@ public:
 		return false;
 	}
 
-	SpecialVector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
-	SpecialVector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
+	Vector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
+	Vector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
 	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
 
 	SpecialVector2 PositionOFFSET{ 0, 0, this };
@@ -2924,8 +2938,8 @@ public:
 	SpecialVector2 SizeOFFSET{ 0, 0, this };
 
 	float Rotation = 0; // Local object rotation
-	SpecialVector2 Origin = { 0.5,0.5 }; // Local object origin
-	SpecialVector2 OriginOFFSET = { 0, 0 }; // Local object origin in pixels
+	Vector2 Origin = { 0.5,0.5 }; // Local object origin
+	Vector2 OriginOFFSET = { 0, 0 }; // Local object origin in pixels
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
@@ -2947,7 +2961,7 @@ public:
 	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe shape in rectangle_roundness.frag)
 
 	void getRealObject2Dsize() {
-		SpecialVector2 sizePx = {};
+		Vector2 sizePx = {};
 		Object2D* self = this;
 		Instance* current = Parent;
 		Object2D* parent2D = nullptr;
@@ -2967,7 +2981,7 @@ public:
 			break;
 		}
 
-		SpecialVector2 parentSizePx = parent2D ? parent2D->RealSize : SpecialVector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
+		Vector2 parentSizePx = parent2D ? parent2D->RealSize : Vector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 
 		sizePx.x = std::roundf(parentSizePx.x * self->Size.x + self->SizeOFFSET.x);
 		sizePx.y = std::roundf(parentSizePx.y * self->Size.y + self->SizeOFFSET.y);
@@ -2976,10 +2990,10 @@ public:
 	}
 
 	void getRealObject2Dposition() {
-		SpecialVector2 posPx = { 0.0f, 0.0f };
-		SpecialVector2 sizePx = RealSize;
+		Vector2 posPx = { 0.0f, 0.0f };
+		Vector2 sizePx = RealSize;
 
-		SpecialVector2 anchorPx = {
+		Vector2 anchorPx = {
 			std::roundf(sizePx.x * AnchorPosition.x + AnchorPositionOFFSET.x),
 			std::roundf(sizePx.y * AnchorPosition.y + AnchorPositionOFFSET.y)
 		};
@@ -2990,16 +3004,16 @@ public:
 
 			Object2D* obj = static_cast<Object2D*>(current);
 
-			SpecialVector2 parentSizePx = obj->RealSize;
-			SpecialVector2 parentPosPx = obj->RealPos;
+			Vector2 parentSizePx = obj->RealSize;
+			Vector2 parentPosPx = obj->RealPos;
 
-			SpecialVector2 myLocalPx = {
+			Vector2 myLocalPx = {
 				std::roundf(parentSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
 				std::roundf(parentSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
 			};
 
 			if (obj->Class == SCROLLFRAME) {
-				SpecialVector2 canvasPx = getCanvasRealPos(obj);
+				Vector2 canvasPx = getCanvasRealPos(obj);
 				posPx.x = std::roundf(parentPosPx.x + myLocalPx.x - canvasPx.x);
 				posPx.y = std::roundf(parentPosPx.y + myLocalPx.y - canvasPx.y);
 			} else {
@@ -3011,8 +3025,8 @@ public:
 			return;
 		}
 
-		SpecialVector2 rootSizePx = { static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
-		SpecialVector2 rootLocalPx = {
+		Vector2 rootSizePx = { static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
+		Vector2 rootLocalPx = {
 			std::roundf(rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
 			std::roundf(rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
 		};
@@ -3020,8 +3034,8 @@ public:
 		RealPos = rootLocalPx;
 	}
 
-	SpecialVector2 getMousePosition() {
-		SpecialVector2 mousePos = SIMPLEUI_GLOBAL::mousePosition;
+	Vector2 getMousePosition() {
+		Vector2 mousePos = SIMPLEUI_GLOBAL::mousePosition;
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
 	}
 
@@ -3082,12 +3096,12 @@ public:
 		DrawRoundRectBatch(rec);
 	}
 
-	bool pointInObject(SpecialVector2 pos) {
+	bool pointInObject(Vector2 pos) {
 		if (!SIMPLEUI_GLOBAL::mouseOnWindow) return false;
 
 		if (Parent and Is2DInheritor(Parent) and static_cast<Object2D*>(Parent)->ClipDescendants) {
-			SpecialVector2 scrRS = getObject2DRS(Parent);
-			SpecialVector2 scrRP = getObject2DRP(Parent);
+			Vector2 scrRS = getObject2DRS(Parent);
+			Vector2 scrRP = getObject2DRP(Parent);
 			if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
 				scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
 				return false;
@@ -3112,9 +3126,7 @@ public:
 			py >= RealPos.y and py <= RealPos.y + RealSize.y;
 	}
 
-	bool MouseEntered = false; // works with MOUSE_ENTER MOUSE_LEAVE events
-
-	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE);
+	bool MouseEntered = false; // works with MOUSE_ENTER MOUSE_LEAVE events only
 
 	void Update(bool posOrSizeChanged) override {
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
@@ -3194,9 +3206,9 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 	constexpr static const char* DefaultName = "LineEx";
 	constexpr static InstanceType DefaultClass = LINEEX;
 
-	std::pair<SpecialVector2, SpecialVector2> getRealObject2Dposition() {
-		SpecialVector2 pos1 = { Position1.x, Position1.y };
-		SpecialVector2 pos2 = { Position2.x, Position2.y };
+	std::pair<Vector2, Vector2> getRealObject2Dposition() {
+		Vector2 pos1 = { Position1.x, Position1.y };
+		Vector2 pos2 = { Position2.x, Position2.y };
 		Instance* current = Parent;
 
 		while (current) {
@@ -3209,13 +3221,13 @@ class LineEx : public Instance { // it cannot contain Object2D inheritors inside
 				break;
 			}
 
-			SpecialVector2 parentPos = {
+			Vector2 parentPos = {
 				obj->Position.x - obj->AnchorPosition.x * obj->Size.x,
 				obj->Position.y - obj->AnchorPosition.y * obj->Size.y
 			};
 
 			if (obj->Class == SCROLLFRAME) {
-				SpecialVector2 CanvasPosition = getCanvasRealPos(obj);
+				Vector2 CanvasPosition = getCanvasRealPos(obj);
 
 				pos1.x = parentPos.x + (pos1.x - CanvasPosition.x);
 				pos1.y = parentPos.y + (pos1.y - CanvasPosition.y);
@@ -3249,8 +3261,8 @@ protected:
 	LineEx() = delete;
 	~LineEx() override = default;
 public:
-	SpecialVector2 Position1{};
-	SpecialVector2 Position2{};
+	Vector2 Position1{};
+	Vector2 Position2{};
 	Color LineColor{};
 	int Thickness = 5;
 	int ZIndex = 0;
@@ -3307,11 +3319,8 @@ inline void updateChildren(Instance* parent) {
 
 #ifdef EXCLUDE_SIMPLEUI_FREETYPE
 	inline Font getFont(int index) {
-		auto it = SIMPLEUI_GLOBAL::Fonts.find(name);
-		if (it != SIMPLEUI_GLOBAL::Fonts.end())
-			return it->second;
-
-		return SIMPLEUI_GLOBAL::Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
+		if (index < 0 or index >= SIMPLEUI_GLOBAL::Fonts.size()) index = 0;
+		return SIMPLEUI_GLOBAL::Fonts[index];
 	}
 #else
 	inline FT_TextManagement::FT_Font& getFont(int index) {
@@ -3322,11 +3331,11 @@ inline void updateChildren(Instance* parent) {
 
 #ifdef EXCLUDE_SIMPLEUI_FREETYPE
 	inline int getFontIndex(const std::string& name) {
-		auto it = SIMPLEUI_GLOBAL::Fonts.find(name);
-		if (it != SIMPLEUI_GLOBAL::Fonts.end())
+		auto it = SIMPLEUI_GLOBAL::FontsIndexes.find(name);
+		if (it != SIMPLEUI_GLOBAL::FontsIndexes.end())
 			return it->second;
 
-		return SIMPLEUI_GLOBAL::Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
+		return SIMPLEUI_GLOBAL::FontsIndexes.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
 	}
 #else
 	inline int getFontIndex(const std::string& name) {
@@ -3352,6 +3361,7 @@ class ScrollFrame : public Object2D {
 
 	std::unordered_map<int, std::unordered_map<int, ScrollSector*>> Grid;
 	std::unordered_map<long, std::vector<ScrollSector*>> SectorsOnObject;
+	std::unordered_map<long, std::array<int, 4>> SectorRectOnObject;
 
 	std::vector<Instance*> Tick;
 	std::unordered_map<long, Instance*> isTick;
@@ -3394,6 +3404,7 @@ private:
 				}
 			}
 			SectorsOnObject.erase(it);
+			SectorRectOnObject.erase(childID);
 		}
 
 		auto it2 = isTick.find(childID);
@@ -3443,9 +3454,7 @@ private:
 		}
 	}
 
-	std::vector<std::pair<int, int>> getSectors(Instance* generalObj) const {
-		std::vector<std::pair<int, int>> sectors;
-
+	bool getSectorRect(Instance* generalObj, std::array<int, 4>& out) const {
 		float minX = FLT_MAX;
 		float minY = FLT_MAX;
 		float maxX = -FLT_MAX;
@@ -3453,20 +3462,13 @@ private:
 
 		accumulateBounds(generalObj, 0, 0, RealSize.x, RealSize.y, minX, minY, maxX, maxY);
 
-		if (minX > maxX or minY > maxY) return sectors;
+		if (minX > maxX or minY > maxY) return false;
 
-		int x0 = (int)std::floor(minX / GridSectorSize);
-		int x1 = (int)std::floor(maxX / GridSectorSize);
-		int y0 = (int)std::floor(minY / GridSectorSize);
-		int y1 = (int)std::floor(maxY / GridSectorSize);
-
-		for (int i = x0; i <= x1; i++) {
-			for (int j = y0; j <= y1; j++) {
-				sectors.push_back({ i, j });
-			}
-		}
-
-		return sectors;
+		out[0] = (int)std::floor(minX / GridSectorSize);
+		out[1] = (int)std::floor(maxX / GridSectorSize);
+		out[2] = (int)std::floor(minY / GridSectorSize);
+		out[3] = (int)std::floor(maxY / GridSectorSize);
+		return true;
 	}
 
 	void addObjToSector(Instance* obj, int x, int y) {
@@ -3504,15 +3506,15 @@ private:
 		}
 	}
 private:
-	SpecialVector2 lastFullSize{};
-	SpecialVector2 lastCanvasFullPosition{};
-	SpecialVector2 lastCanvasPos{};
+	Vector2 lastFullSize{};
+	Vector2 lastCanvasFullPosition{};
+	Vector2 lastCanvasPos{};
 	bool lastVisible = false;
 	bool sectorsDirty = false;
 
 	void checkAndUpdateCurrentSectors(bool force = false) {
-		SpecialVector2 fullSize = RealSize;
-		SpecialVector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
+		Vector2 fullSize = RealSize;
+		Vector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
 
 		if (force or lastVisible != Visible or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
 			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y or sectorsDirty) {
@@ -3521,8 +3523,8 @@ private:
 			lastVisible = Visible;
 			sectorsDirty = false;
 			sectorsOnView.clear();
-			SpecialVector2 pos = fullPos;
-			SpecialVector2 lastpos = { fullPos.x + fullSize.x, fullPos.y + fullSize.y };
+			Vector2 pos = fullPos;
+			Vector2 lastpos = { fullPos.x + fullSize.x, fullPos.y + fullSize.y };
 
 			Vector2 start = {
 				std::floor(pos.x / GridSectorSize),
@@ -3562,15 +3564,16 @@ private:
 	void secUpd(Instance* child) {
 		if (!child) return;
 
-		auto checkIt = SectorsOnObject.find(child->uniqueID);
-		if (checkIt == SectorsOnObject.end()) { // new object in Scroll
-			SectorsOnObject.insert({ child->uniqueID, {} });
+		std::array<int, 4> rect;
+		bool hasRect = getSectorRect(child, rect);
 
-			std::vector<std::pair<int, int>> sectors = getSectors(child);
-			for (auto& [x, y] : sectors) {
-				addObjToSector(child, x, y);
-			}
-		} else { // updating current sector
+		auto checkIt = SectorsOnObject.find(child->uniqueID);
+		if (checkIt == SectorsOnObject.end()) {
+			checkIt = SectorsOnObject.insert({ child->uniqueID, {} }).first;
+		} else {
+			auto rc = SectorRectOnObject.find(child->uniqueID);
+			if (hasRect and rc != SectorRectOnObject.end() and rc->second == rect) return;
+
 			for (ScrollSector* sector : checkIt->second) {
 				for (int i = 0; i < sector->Objects.size(); i++) {
 					if (sector->Objects[i].first == child->uniqueID) {
@@ -3581,10 +3584,18 @@ private:
 			}
 
 			checkIt->second.clear();
+		}
 
-			std::vector<std::pair<int, int>> sectors = getSectors(child);
-			for (auto& [x, y] : sectors) {
-				addObjToSector(child, x, y);
+		if (!hasRect) {
+			SectorRectOnObject.erase(child->uniqueID);
+			return;
+		}
+
+		SectorRectOnObject[child->uniqueID] = rect;
+
+		for (int i = rect[0]; i <= rect[1]; i++) {
+			for (int j = rect[2]; j <= rect[3]; j++) {
+				addObjToSector(child, i, j);
 			}
 		}
 	}
@@ -3627,10 +3638,10 @@ public:
 		}
 	}
 
-	SpecialVector2 CanvasSize = { 0,0 };
-	SpecialVector2 CanvasPosition = { 0,0 };
-	SpecialVector2 CanvasSizeOFFSET = { 0,0 };
-	SpecialVector2 CanvasPositionOFFSET = { 0,0 };
+	Vector2 CanvasSize = { 0,0 };
+	Vector2 CanvasPosition = { 0,0 };
+	Vector2 CanvasSizeOFFSET = { 0,0 };
+	Vector2 CanvasPositionOFFSET = { 0,0 };
 	float ScrollSpeed = 0.25;
 	float ScrollSpeedOFFSET = 0;
 	Color SliderColor = { 15,15,15,255 };
@@ -3702,8 +3713,8 @@ public:
 						sliderY += (RealSize.y - sliderHeight) * (currentScrollY / maxScrollY);
 					}
 
-					SpecialVector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
-					SpecialVector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
+					Vector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
+					Vector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
 					Vector2 o = {
 						Origin.x * RealSize.x + OriginOFFSET.x,
 						Origin.y * RealSize.y + OriginOFFSET.y
@@ -3733,8 +3744,8 @@ public:
 						  Origin.y * RealSize.y + OriginOFFSET.y
 					};
 
-					SpecialVector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
-					SpecialVector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
+					Vector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
+					Vector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
 					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation, SliderRoundness);
 				}
 			}
@@ -3885,6 +3896,7 @@ public:
 		i->sectorsOnView.clear();
 		i->toUpdateSectors.clear();
 		i->toUpdateSectorsC.clear();
+		i->SectorRectOnObject.clear();
 		i->lastFullSize.x = -123123;
 
 		i->basicCloneOperation(const_cast<ScrollFrame*>(this));
@@ -3906,7 +3918,7 @@ inline void Object2D::updateAncestorWhichParentIsScroll() {
 	}
 }
 
-inline SpecialVector2 getCanvasRealPos(Object2D* obj) {
+inline Vector2 getCanvasRealPos(Object2D* obj) {
 	if (obj->Class == SCROLLFRAME) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(obj);
 		return
@@ -3918,7 +3930,7 @@ inline SpecialVector2 getCanvasRealPos(Object2D* obj) {
 	return { 0,0 };
 }
 
-inline SpecialVector2 getObject2DRS(Instance* sc) {
+inline Vector2 getObject2DRS(Instance* sc) {
 	if (Is2DInheritor(sc)) {
 		Object2D* obj = static_cast<ScrollFrame*>(sc);
 		return obj->RealSize;
@@ -3926,7 +3938,7 @@ inline SpecialVector2 getObject2DRS(Instance* sc) {
 
 	return { 0,0 };
 }
-inline SpecialVector2 getObject2DRP(Instance* sc) {
+inline Vector2 getObject2DRP(Instance* sc) {
 	if (Is2DInheritor(sc)) {
 		Object2D* obj = static_cast<ScrollFrame*>(sc);
 		return obj->RealPos;
@@ -3944,7 +3956,7 @@ inline bool isScrollFrameClips(Instance* sc) {
 }
 
 class TextLabel : public Object2D {
-	friend inline void start(Instance*, Vector3, const char*, const char*, unsigned int);
+	friend inline void SUI_RenderFrame(Instance*);
 	constexpr static float TextTextureUpdateAspect = 1.1f;
 	constexpr static float MinRasterFont = 8.0f;
 	constexpr static float MaxRasterFont = 128.0f;
@@ -4187,6 +4199,8 @@ public:
 					Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
 
 					SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
+				} else {
+					rebuildVisible = true;
 				}
 			} else {
 				if (rebuildVisible or rasterFont < 1) rebuildVisibleText();
@@ -4246,7 +4260,7 @@ enum TextBoxNextLine {
 };
 
 class TextBox : public Object2D {
-	friend inline void start(Instance*, Vector3, const char*, const char*, unsigned int);
+	friend inline void SUI_RenderFrame(Instance*);
 	constexpr static float TextTextureUpdateAspect = 1.3;
 	constexpr static const char* DefaultName = "TextBox";
 	constexpr static InstanceType DefaultClass = TEXTBOX;
@@ -4294,11 +4308,11 @@ class TextBox : public Object2D {
 	Vector3 textParams{};
 	AtlasTexture cachedText;
 	TextBox* lastFocused = nullptr;
-	SpecialVector2 newSize{};
-	SpecialVector2 lastRealSize{};
+	Vector2 newSize{};
+	Vector2 lastRealSize{};
 	Vector3 lastParams = Vector3{};
 	char lastHideText = '\0';
-	SpecialVector2 lastNewSize{};
+	Vector2 lastNewSize{};
 	TextBoxType lastType = TextBoxType::TEXTBOX_RESIZING;
 	int lastCursorIndex = -1;
 	int FontFaceIndex = 0;
@@ -4349,7 +4363,7 @@ class TextBox : public Object2D {
 				UnloadTextureFromAtlas(cachedText);
 			}
 			cachedText = LoadRenderTextureOnAtlas(reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect);
-			lastNewSize = SpecialVector2{ reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect };
+			lastNewSize = Vector2{ reqX * TextTextureUpdateAspect, reqY * TextTextureUpdateAspect };
 		}
 
 		if (!cachedText.currentAtlas) {
@@ -4378,11 +4392,11 @@ class TextBox : public Object2D {
 				if (c == '\n') lines++;
 			}
 
-			DrawTextEx(getFont(FontFaceIndex), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 		} else {
 			lines = 0;
 			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
-				DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 			}
 		}
 
@@ -4415,13 +4429,13 @@ public:
 	std::string DisallowedSymbols = "";
 	int Spacing = SIMPLEUI_GLOBAL::defaultSpacing;
 	char HideText = '\0';
-	bool ClearOnClick = true;
+	bool ClearOnClick = false;
 	TextBoxNextLine EnterInputCondition = TextBoxNextLine::TEXTBOX_NEXTLINE_ENTER;
 	bool ClipboardPasteAllowed = true;
 	bool ClipboardCopyAllowed = true;
 	std::function<bool(const std::string&)> ClipboardPasteCondition;
 	bool TextHighlightAllowed = true;
-	SpecialVector2 viewportPosition{};
+	Vector2 viewportPosition{};
 	bool CanType = true;
 	bool CanClick = true;
 	bool UsePerSymbolColor = false;
@@ -4481,7 +4495,7 @@ public:
 
 		if (textParams.z > 1) {
 			if (cachedText.id != 0) {
-				SpecialVector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
+				Vector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
 
 				Rectangle sourceRec = {
 					std::floorf(viewX),
@@ -4551,7 +4565,7 @@ public:
 				if (Text[charOffsets[i]] == '\n') currentLine++;
 			}
 
-			SpecialVector2 size = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
+			Vector2 size = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
 
 			if (size.x == 0 or size.y == 0) {
 				size.y = MeasureTextEx(getFont(FontFaceIndex), "A", textParams.z, Spacing).y;
@@ -5065,7 +5079,7 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		if (!(SIMPLEUI_GLOBAL::FocusedTextBox == this)) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
+		if (SIMPLEUI_GLOBAL::FocusedTextBox != this) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
 
 		eventHandler();
 		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
@@ -5075,7 +5089,7 @@ public:
 			lastVisible = Visible;
 		}
 
-		if (!Visible) { CursorIndex = -1; CursorVisible = false; Text = ""; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
+		if (!Visible) { CursorIndex = -1; CursorVisible = false; deleteText = true; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
 
 		inputHandler();
 
@@ -5109,10 +5123,10 @@ public:
 				if (!charOffsets.empty()) {
 					std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex] - s);
 					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-					SpecialVector2 textSizeY = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursor.c_str(), textParams.z, Spacing);
-					SpecialVector2 textSizeX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
+					Vector2 textSizeY = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursor.c_str(), textParams.z, Spacing);
+					Vector2 textSizeX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
 
-					SpecialVector2 textSize = { textSizeX.x, textSizeY.y };
+					Vector2 textSize = { textSizeX.x, textSizeY.y };
 
 					if (calcX) {
 						float currentX = textSize.x;
@@ -5466,16 +5480,6 @@ inline void Object2D::PosOrSizeChanged() {
 
 	if (scrollChild) {
 		static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
-	}
-}
-
-inline void Object2D::AddEvent(EventType t, InstanceCallback f, MouseButtonType m) {
-	events.push_back({ t, f, m });
-
-	Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
-
-	if (asc) {
-		static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
 	}
 }
 
@@ -5901,7 +5905,7 @@ inline void DrawFrame(Instance* StartInstance) {
 #include <SUIextension.h>
 #endif
 
-inline namespace debug {
+inline namespace SIMPLEUI_DEBUG {
 	inline bool fpsVisible = false;
 	inline TextLabel* labelFPS = nullptr;
 	inline Object2D* background = nullptr;
@@ -6106,8 +6110,8 @@ inline namespace debug {
 		int n = console->Children.size();
 		sas->Name = std::to_string(n);
 		sas->Text = text;
-		sas->Size = SpecialVector2{ 1, 0.05 };
-		sas->Position = SpecialVector2{ 0, 0.05f * (n - 1) };
+		sas->Size = Vector2{ 1, 0.05 };
+		sas->Position = Vector2{ 0, 0.05f * (n - 1) };
 		console->CanvasSize.y += 0.05 - (n > 20 ? 0 : 0.05);
 		console->CanvasPosition.y = console->CanvasSize.y - 1;
 	}
@@ -6127,7 +6131,7 @@ inline namespace debug {
 	inline void initDebug() {
 		if (debugMenu) return;
 		debugMenu = Object2D::New(GetRoot());
-		debugMenu->Size = SpecialVector2{ 1,1 };
+		debugMenu->Size = Vector2{ 1,1 };
 		debugMenu->BackgroundTransparency = 0.9;
 		debugMenu->BackgroundColor = DefaultDebugColor;
 		debugMenu->Visible = false;
@@ -6140,8 +6144,8 @@ inline namespace debug {
 		lowerName->BackgroundColor = { 0,0,0,255 };
 		lowerName->TextSize = -1;
 		lowerName->TextColor = DefaultDebugColor;
-		lowerName->Position = SpecialVector2{ 0.03f, 0.9f };
-		lowerName->Size = SpecialVector2{ 0.24, 0.1 };
+		lowerName->Position = Vector2{ 0.03f, 0.9f };
+		lowerName->Size = Vector2{ 0.24, 0.1 };
 		lowerName->TextAnchor = TextAnchorEnum::SE;
 		lowerName->BackgroundTransparency = 1;
 		lowerName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
@@ -6151,8 +6155,8 @@ inline namespace debug {
 		************************/
 
 		Object2D* SettingsFrame = Object2D::New(debugMenu);
-		SettingsFrame->Size = SpecialVector2{ 0.4, 0.25 };
-		SettingsFrame->Position = SpecialVector2{ 0.04, 0.03 };
+		SettingsFrame->Size = Vector2{ 0.4, 0.25 };
+		SettingsFrame->Position = Vector2{ 0.04, 0.03 };
 		SettingsFrame->BackgroundTransparency = 0.2;
 		SettingsFrame->BorderColor = DefaultDebugColor;
 		SettingsFrame->BackgroundColor = { 0,0,0,255 };
@@ -6164,19 +6168,19 @@ inline namespace debug {
 		SettingsName->Text = "Settings";
 		SettingsName->TextSize = -1;
 		SettingsName->TextColor = DefaultDebugColor;
-		SettingsName->Position = SpecialVector2{ 0.5, 0 };
-		SettingsName->AnchorPosition = SpecialVector2{ 0.5, 0 };
-		SettingsName->Size = SpecialVector2{ 0.8, 0.1 };
+		SettingsName->Position = Vector2{ 0.5, 0 };
+		SettingsName->AnchorPosition = Vector2{ 0.5, 0 };
+		SettingsName->Size = Vector2{ 0.8, 0.1 };
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
 		SettingsName->BackgroundColor = { 0,0,0,255 };
 		SettingsName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		TextLabel* AnimLabel = TextLabel::New(SettingsFrame);
-		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
+		AnimLabel->Size = Vector2{ 0.7, 0.2 };
 		AnimLabel->BackgroundTransparency = 1;
 		AnimLabel->BackgroundColor = { 0,0,0,255 };
-		AnimLabel->Position = SpecialVector2{ 0, 0.1 };
+		AnimLabel->Position = Vector2{ 0, 0.1 };
 		AnimLabel->Text = " Animations";
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
 		AnimLabel->TextSize = -1;
@@ -6185,9 +6189,9 @@ inline namespace debug {
 		AnimLabel->Name = "animLabel";
 
 		TextLabel* AnimButton = TextLabel::New(SettingsFrame);
-		AnimButton->Size = SpecialVector2{ 0.19, 0.15 };
+		AnimButton->Size = Vector2{ 0.19, 0.15 };
 		AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
-		AnimButton->Position = SpecialVector2{ 0.8, 0.125 };
+		AnimButton->Position = Vector2{ 0.8, 0.125 };
 		AnimButton->Text = Animations ? " On " : " Off ";
 		AnimButton->TextAnchor = TextAnchorEnum::W;
 		AnimButton->TextSize = -1;
@@ -6199,10 +6203,10 @@ inline namespace debug {
 		AnimButton->Roundness = 0.3;
 
 		TextLabel* LGMlabel = TextLabel::New(SettingsFrame);
-		LGMlabel->Size = SpecialVector2{ 0.7, 0.2 };
+		LGMlabel->Size = Vector2{ 0.7, 0.2 };
 		LGMlabel->BackgroundTransparency = 1;
 		LGMlabel->BackgroundColor = { 0,0,0,255 };
-		LGMlabel->Position = SpecialVector2{ 0, 0.3 };
+		LGMlabel->Position = Vector2{ 0, 0.3 };
 		LGMlabel->Text = " Low Graphics Mode";
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
 		LGMlabel->TextSize = -1;
@@ -6211,9 +6215,9 @@ inline namespace debug {
 		LGMlabel->Name = "LGMlabel";
 
 		TextLabel* LGMbutton = TextLabel::New(SettingsFrame);
-		LGMbutton->Size = SpecialVector2{ 0.19, 0.15 };
+		LGMbutton->Size = Vector2{ 0.19, 0.15 };
 		LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
-		LGMbutton->Position = SpecialVector2{ 0.8, 0.325 };
+		LGMbutton->Position = Vector2{ 0.8, 0.325 };
 		LGMbutton->Text = lowGraphicsMode ? " On " : " Off ";
 		LGMbutton->TextAnchor = TextAnchorEnum::W;
 		LGMbutton->TextSize = -1;
@@ -6225,10 +6229,10 @@ inline namespace debug {
 		LGMbutton->Roundness = 0.3;
 
 		TextLabel* FPSlabel = TextLabel::New(SettingsFrame);
-		FPSlabel->Size = SpecialVector2{ 0.65, 0.2 };
+		FPSlabel->Size = Vector2{ 0.65, 0.2 };
 		FPSlabel->BackgroundTransparency = 1;
 		FPSlabel->BackgroundColor = { 0,0,0,255 };
-		FPSlabel->Position = SpecialVector2{ 0, 0.5 };
+		FPSlabel->Position = Vector2{ 0, 0.5 };
 		FPSlabel->Text = " FPS mode";
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
 		FPSlabel->TextSize = -1;
@@ -6237,18 +6241,18 @@ inline namespace debug {
 		FPSlabel->Name = "FPSlabel";
 
 		Object2D* FPSframe = TextLabel::New(SettingsFrame);
-		FPSframe->Size = SpecialVector2{ 0.3, 0.2 };
+		FPSframe->Size = Vector2{ 0.3, 0.2 };
 		FPSframe->BackgroundTransparency = 1;
 		FPSframe->BackgroundColor = { 0,0,0,255 };
 		FPSframe->Roundness = 0.3;
-		FPSframe->Position = SpecialVector2{ 0.7, 0.5 };
+		FPSframe->Position = Vector2{ 0.7, 0.5 };
 		FPSframe->Name = "FPSlabel";
 
 		TextLabel* FPSleft = TextLabel::New(FPSframe);
-		FPSleft->Size = SpecialVector2{ 0.25, 0.6 };
+		FPSleft->Size = Vector2{ 0.25, 0.6 };
 		FPSleft->BackgroundTransparency = 1;
 		FPSleft->BackgroundColor = { 0,0,0,255 };
-		FPSleft->Position = SpecialVector2{ 0.0, 0.2 };
+		FPSleft->Position = Vector2{ 0.0, 0.2 };
 		FPSleft->Text = "<";
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
 		FPSleft->TextSize = -1;
@@ -6259,10 +6263,10 @@ inline namespace debug {
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
 
 		TextLabel* FPSquantity = TextLabel::New(FPSframe);
-		FPSquantity->Size = SpecialVector2{ 0.5, 1 };
+		FPSquantity->Size = Vector2{ 0.5, 1 };
 		FPSquantity->BackgroundTransparency = 1;
 		FPSquantity->BackgroundColor = { 0,0,0,255 };
-		FPSquantity->Position = SpecialVector2{ 0.25, 0 };
+		FPSquantity->Position = Vector2{ 0.25, 0 };
 		std::ostringstream st; st << " " << typeFPS[currentFPSindex] << " ";
 		FPSquantity->Text = currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str());
 		FPSquantity->TextSize = -1;
@@ -6271,10 +6275,10 @@ inline namespace debug {
 		FPSquantity->Name = "FPSquantity";
 
 		TextLabel* FPSright = TextLabel::New(FPSframe);
-		FPSright->Size = SpecialVector2{ 0.25, 0.6 };
+		FPSright->Size = Vector2{ 0.25, 0.6 };
 		FPSright->BackgroundTransparency = 1;
 		FPSright->BackgroundColor = { 0,0,0,255 };
-		FPSright->Position = SpecialVector2{ 0.75, 0.2 };
+		FPSright->Position = Vector2{ 0.75, 0.2 };
 		FPSright->Text = ">";
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
 		FPSright->TextSize = -1;
@@ -6285,10 +6289,10 @@ inline namespace debug {
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
 
 		TextLabel* Colorlabel = TextLabel::New(SettingsFrame);
-		Colorlabel->Size = SpecialVector2{ 0.65, 0.2 };
+		Colorlabel->Size = Vector2{ 0.65, 0.2 };
 		Colorlabel->BackgroundTransparency = 1;
 		Colorlabel->BackgroundColor = { 0,0,0,255 };
-		Colorlabel->Position = SpecialVector2{ 0, 0.7 };
+		Colorlabel->Position = Vector2{ 0, 0.7 };
 		Colorlabel->Text = " Menu color";
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
 		Colorlabel->TextSize = -1;
@@ -6297,18 +6301,18 @@ inline namespace debug {
 		Colorlabel->Name = "Colorlabel";
 
 		Object2D* Colorframe = TextLabel::New(SettingsFrame);
-		Colorframe->Size = SpecialVector2{ 0.3, 0.2 };
+		Colorframe->Size = Vector2{ 0.3, 0.2 };
 		Colorframe->BackgroundTransparency = 1;
 		Colorframe->BackgroundColor = { 0,0,0,255 };
 		Colorframe->Roundness = 0.3;
-		Colorframe->Position = SpecialVector2{ 0.7, 0.7 };
+		Colorframe->Position = Vector2{ 0.7, 0.7 };
 		Colorframe->Name = "Colorframe";
 
 		TextLabel* Colorleft = TextLabel::New(Colorframe);
-		Colorleft->Size = SpecialVector2{ 0.25, 0.6 };
+		Colorleft->Size = Vector2{ 0.25, 0.6 };
 		Colorleft->BackgroundTransparency = 1;
 		Colorleft->BackgroundColor = { 0,0,0,255 };
-		Colorleft->Position = SpecialVector2{ 0.0, 0.2 };
+		Colorleft->Position = Vector2{ 0.0, 0.2 };
 		Colorleft->Text = "<";
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
 		Colorleft->TextSize = -1;
@@ -6319,17 +6323,17 @@ inline namespace debug {
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
 
 		Object2D* ColorBlock = TextLabel::New(Colorframe);
-		ColorBlock->Size = SpecialVector2{ 0.5, 0.8 };
+		ColorBlock->Size = Vector2{ 0.5, 0.8 };
 		ColorBlock->BackgroundColor = DefaultDebugColor;
-		ColorBlock->Position = SpecialVector2{ 0.25, 0.1 };
+		ColorBlock->Position = Vector2{ 0.25, 0.1 };
 		ColorBlock->Roundness = 0.3;
 		ColorBlock->Name = "ColorBlock";
 
 		TextLabel* Colorright = TextLabel::New(Colorframe);
-		Colorright->Size = SpecialVector2{ 0.25, 0.6 };
+		Colorright->Size = Vector2{ 0.25, 0.6 };
 		Colorright->BackgroundTransparency = 1;
 		Colorright->BackgroundColor = { 0,0,0,255 };
-		Colorright->Position = SpecialVector2{ 0.75, 0.2 };
+		Colorright->Position = Vector2{ 0.75, 0.2 };
 		Colorright->Text = ">";
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
 		Colorright->TextSize = -1;
@@ -6344,8 +6348,8 @@ inline namespace debug {
 		******************/
 
 		Object2D* LogsFrame = Object2D::New(debugMenu);
-		LogsFrame->Size = SpecialVector2{ 0.4, 0.6 };
-		LogsFrame->Position = SpecialVector2{ 0.04, 0.3 };
+		LogsFrame->Size = Vector2{ 0.4, 0.6 };
+		LogsFrame->Position = Vector2{ 0.04, 0.3 };
 		LogsFrame->BackgroundTransparency = 0.2;
 		LogsFrame->BackgroundColor = { 0,0,0,255 };
 		LogsFrame->BorderColor = DefaultDebugColor;
@@ -6357,9 +6361,9 @@ inline namespace debug {
 		LogsName->Text = "Logs";
 		LogsName->TextSize = -1;
 		LogsName->TextColor = DefaultDebugColor;
-		LogsName->Position = SpecialVector2{ 0.5, 0 };
-		LogsName->AnchorPosition = SpecialVector2{ 0.5, 0 };
-		LogsName->Size = SpecialVector2{ 0.8, 0.055 };
+		LogsName->Position = Vector2{ 0.5, 0 };
+		LogsName->AnchorPosition = Vector2{ 0.5, 0 };
+		LogsName->Size = Vector2{ 0.8, 0.055 };
 		LogsName->TextAnchor = TextAnchorEnum::CENTER;
 		LogsName->BackgroundTransparency = 1;
 		LogsName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
@@ -6369,8 +6373,8 @@ inline namespace debug {
 		console->BackgroundTransparency = 0.1;
 		console->BorderThickness = 3;
 		console->BorderColor = DefaultDebugColor;
-		console->Size = SpecialVector2{ 1, 0.93 };
-		console->Position = SpecialVector2{ 0, 0.07 };
+		console->Size = Vector2{ 1, 0.93 };
+		console->Position = Vector2{ 0, 0.07 };
 		console->SliderColor = { 255,255,255,255 };
 		console->Name = "consoleLogs";
 		console->Active = true;
@@ -6385,8 +6389,8 @@ inline namespace debug {
 		********************/
 
 		treeFrame = Object2D::New(debugMenu);
-		treeFrame->Size = SpecialVector2{ 0.49, 0.87 };
-		treeFrame->Position = SpecialVector2{ 0.47, 0.03 };
+		treeFrame->Size = Vector2{ 0.49, 0.87 };
+		treeFrame->Position = Vector2{ 0.47, 0.03 };
 		treeFrame->BackgroundTransparency = 0.2;
 		treeFrame->BackgroundColor = { 0,0,0,255 };
 		treeFrame->BorderColor = DefaultDebugColor;
@@ -6399,17 +6403,17 @@ inline namespace debug {
 		treeName->Text = "Objects hierarchy";
 		treeName->TextSize = -1;
 		treeName->TextColor = DefaultDebugColor;
-		treeName->Position = SpecialVector2{ 0.5, 0 };
-		treeName->AnchorPosition = SpecialVector2{ 0.5, 0 };
-		treeName->Size = SpecialVector2{ 0.8, 0.055 };
+		treeName->Position = Vector2{ 0.5, 0 };
+		treeName->AnchorPosition = Vector2{ 0.5, 0 };
+		treeName->Size = Vector2{ 0.8, 0.055 };
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
 		treeName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		Object2D* manageMenu = Object2D::New(treeFrame);
 		manageMenu->Name = "manageMenu";
-		manageMenu->Position = SpecialVector2{ 0, 0.06 };
-		manageMenu->Size = SpecialVector2{ 1, 0.05 };
+		manageMenu->Position = Vector2{ 0, 0.06 };
+		manageMenu->Size = Vector2{ 1, 0.05 };
 		manageMenu->BorderThickness = 3;
 		manageMenu->BackgroundTransparency = 1;
 		manageMenu->BorderColor = DefaultDebugColor;
@@ -6417,15 +6421,15 @@ inline namespace debug {
 		ScrollFrame* way = ScrollFrame::New(manageMenu);
 		way->Name = "directory";
 		way->BackgroundTransparency = 1;
-		way->Position = SpecialVector2{ 0, 0 };
-		way->Size = SpecialVector2{ 1, 1 };
+		way->Position = Vector2{ 0, 0 };
+		way->Size = Vector2{ 1, 1 };
 		way->Direction = 'X';
 		way->SliderColor = { 255,255,255,255 };
 
 		ScrollFrame* treeScroll = ScrollFrame::New(treeFrame);
 		treeScroll->Name = "treeScroll";
-		treeScroll->Position = SpecialVector2{ 0, 0.12 };
-		treeScroll->Size = SpecialVector2{ 0.5, 0.88 };
+		treeScroll->Position = Vector2{ 0, 0.12 };
+		treeScroll->Size = Vector2{ 0.5, 0.88 };
 		treeScroll->BackgroundTransparency = 1;
 		treeScroll->SliderColor = { 255,255,255,255 };
 		treeScroll->ScrollSpeed = 0.2;
@@ -6504,8 +6508,8 @@ inline namespace debug {
 					element->Name = objects[i]->Name;
 					element->BackgroundTransparency = 1;
 					element->TextColor = typeColor[currentColor];
-					element->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f, 0 };
-					element->Size = SpecialVector2{ 0.2, 0.9 };
+					element->Position = Vector2{ (objects.size() - i - 1) * 0.25f, 0 };
+					element->Size = Vector2{ 0.2, 0.9 };
 					element->Text = objects[i]->Name;
 					element->Active = true;
 
@@ -6514,8 +6518,8 @@ inline namespace debug {
 						element2->Name = ">";
 						element2->BackgroundTransparency = 1;
 						element2->TextColor = typeColor[currentColor];
-						element2->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
-						element2->Size = SpecialVector2{ 0.05, 0.9 };
+						element2->Position = Vector2{ (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
+						element2->Size = Vector2{ 0.05, 0.9 };
 						element2->Text = ">";
 					}
 
@@ -6575,7 +6579,7 @@ inline void updateSignals() {
 }
 
 inline void SUI_SetWindowSize(int newW, int newH) {
-	SIMPLEUI_GLOBAL::changeWindowSize = SpecialVector2{ (float)newW, (float)newH };
+	SIMPLEUI_GLOBAL::changeWindowSize = Vector2{ (float)newW, (float)newH };
 	SIMPLEUI_GLOBAL::changeWindowSizeB = true;
 }
 
@@ -6584,7 +6588,7 @@ inline void SUI_SetWindowPosition(int newX, int newY) {
 }
 
 inline void SUI_SetMinimalWindowSize(int newX, int newY) {
-	SIMPLEUI_GLOBAL::windowMinimalSize = SpecialVector2{ (float)newX, (float)newY };
+	SIMPLEUI_GLOBAL::windowMinimalSize = Vector2{ (float)newX, (float)newY };
 }
 
 inline void UpdateHigher(Instance* StartInstance) {
@@ -6700,38 +6704,60 @@ inline void UpdateHigher(Instance* StartInstance) {
 	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
-inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280, 720, 0 }, const char* name = "simpleUI", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {
+struct WindowData {
+	int width = 1280;
+	int height = 720;
+	int FramerateCap = 0; // 0 - VSYNCED to current monitor
+};
+
+inline void SetWindowIcon(const std::string& name) {
+	if (IsWindowReady()) {
+		auto it1 = SIMPLEUI_GLOBAL::loadedImages.find(name);
+		if (it1 != SIMPLEUI_GLOBAL::loadedImages.end()) {
+			RAYLIB_FUNCTIONAL::SetWindowIcon(it1->second.first);
+		}
+	}
+}
+
+inline bool SUI_InitNewWindow(Instance* StartInstance = nullptr, WindowData windowData = {1280, 720, 0}, const char* name = "simpleUI window", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {
 	if (!StartInstance and !GetRoot()) {
 		std::cout << RED_ANSI << "start() requires root object and creating scene from root (use GetRoot())" << DEFAULT_ANSI << std::endl;
-		return;
+		return false;
 	}
 
-	SetConsoleUTF8();
 	SetConfigFlags(flags);
 
-	SIMPLEUI_GLOBAL::winWidth = windowData.x;
-	SIMPLEUI_GLOBAL::winHeight = windowData.y;
+	SIMPLEUI_GLOBAL::winWidth = windowData.width;
+	SIMPLEUI_GLOBAL::winHeight = windowData.height;
 
-	InitWindow(windowData.x, windowData.y, name);
+	InitWindow(windowData.width, windowData.height, name);
+
+	if (!IsWindowReady()) {
+		std::cout << RED_ANSI << "InitWindow failed" << DEFAULT_ANSI << std::endl;
+		return false;
+	}
 
 	if (SIMPLEUI_GLOBAL::windowMinimalSize.x != 0 and SIMPLEUI_GLOBAL::windowMinimalSize.y != 0) {
 		SetWindowMinSize(SIMPLEUI_GLOBAL::windowMinimalSize.x, SIMPLEUI_GLOBAL::windowMinimalSize.y);
 	}
 
-	int targetFPS = (windowData.z <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : windowData.z;
+	int targetFPS = (windowData.FramerateCap <= 0) ? GetMonitorRefreshRate(GetCurrentMonitor()) : windowData.FramerateCap;
 	SetTargetFPS(targetFPS);
 
-	Image ic{};
-
-	if (!std::string(iconName).empty()) {
-		ic = RAYLIB_FUNCTIONAL::LoadImage(iconName);
-		if (ic.data) {
-			RAYLIB_FUNCTIONAL::SetWindowIcon(ic);
+	if (iconName and *iconName) {
+		Image z = RAYLIB_FUNCTIONAL::LoadImage(iconName);
+		if (z.data) {
+			RAYLIB_FUNCTIONAL::SetWindowIcon(z);
+			RAYLIB_FUNCTIONAL::UnloadImage(z);
 		}
 	} 
 
 	SetExitKey(KEY_NULL);
 
+	return true;
+}
+
+inline void SUI_LoadPendings() {
 	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
 	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
@@ -6739,118 +6765,154 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 	for (auto& tup : SIMPLEUI_GLOBAL::queuedFonts) {
 		CreateFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));
 	}
+	SIMPLEUI_GLOBAL::queuedFonts.clear();
 	
 	for (auto& tup : SIMPLEUI_GLOBAL::queuedFontsV) {
 		CreateFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));
 	}
-
-	SIMPLEUI_GLOBAL::queuedFonts.clear();
+	SIMPLEUI_GLOBAL::queuedFontsV.clear();
 
 	for (auto& pair : SIMPLEUI_GLOBAL::pendingImages) {
 		AtlasTexture tex = LoadTextureOnAtlas(pair.second);
 		SIMPLEUI_GLOBAL::loadedImages.insert({ pair.first, {pair.second, tex} });
 	}
-
 	SIMPLEUI_GLOBAL::pendingImages.clear();
+}
 
-	while (SIMPLEUI_GLOBAL::programRunning and !WindowShouldClose()) {
-		if (SIMPLEUI_GLOBAL::changeWindowSizeB) {
-			SetWindowSize(SIMPLEUI_GLOBAL::changeWindowSize.x, SIMPLEUI_GLOBAL::changeWindowSize.y);
-			SIMPLEUI_GLOBAL::changeWindowSizeB = false;
-		}
-
-		static Vector2 previousMousePosition = {};
-		SIMPLEUI_GLOBAL::mousePosition = GetMousePosition();
-		SIMPLEUI_GLOBAL::mouseOnWindow = IsCursorOnScreen();
-
-		static Vector2 previousWinSize = { -1, -1 };
-		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
-
-		if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
-			SIMPLEUI_GLOBAL::windowSizeChanged = true;
-			previousWinSize = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
-		}
-
-		static double acc = 0;
-		static int frames = 0;
-		acc += SIMPLEUI_GLOBAL::dt;
-		frames++;
-		if (acc >= 0.1) {
-			SIMPLEUI_GLOBAL::accurateFPS = (long)(frames / acc + 0.5);
-			acc = 0;
-			frames = 0;
-		}
-
-		updateSignals();
-		SIMPLEUI_GLOBAL::dt = GetFrameTime();
-		Animate::UpdateAnimations(SIMPLEUI_GLOBAL::dt);
-		Tasks::UpdateTasks(SIMPLEUI_GLOBAL::dt);
-
-		if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty)) {
-			previousMousePosition = SIMPLEUI_GLOBAL::mousePosition;
-			UpdateHigher(StartInstance);
-		}
-
-		if (IsKeyPressed(KEY_F1) and SIMPLEUI_GLOBAL::ALLOW_FPS) { debug::toggleFPS(); }
-		if (IsKeyPressed(KEY_F2) and SIMPLEUI_GLOBAL::ALLOW_DEBUG) { debug::toggleDebug(); }
-		if (IsKeyPressed(KEY_F3) and SIMPLEUI_GLOBAL::ALLOW_FPS) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
-		if (IsKeyPressed(RAYLIB_FUNCTIONAL::KEY_F4) and SIMPLEUI_GLOBAL::ALLOW_FPS) { debug::toggleFrameTimeGraph(); }
-
-		SIMPLEUI_GLOBAL::framesSinceStart += 1;
-
-		DrawFrame(StartInstance);
-
-		SIMPLEUI_GLOBAL::clips.clear();
-
-		SIMPLEUI_GLOBAL::CollectDeadObjects();
-
-		if (debug::fpsVisible) {
-			debug::updateGraph();
-		}
-
-		for (TextLabel* t : SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture) {
-			t->updateTexture();
-		}
-		SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
-
-		for (TextBox* t : SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture) {
-			t->updateTexture();
-		}
-		SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
-
-		SIMPLEUI_GLOBAL::windowSizeChanged = false;
+inline void SUI_RenderFrame(Instance* StartInstance) {
+	if (SIMPLEUI_GLOBAL::changeWindowSizeB) {
+		SetWindowSize(SIMPLEUI_GLOBAL::changeWindowSize.x, SIMPLEUI_GLOBAL::changeWindowSize.y);
+		SIMPLEUI_GLOBAL::changeWindowSizeB = false;
 	}
 
+	static Vector2 previousMousePosition = {};
+	SIMPLEUI_GLOBAL::mousePosition = GetMousePosition();
+	SIMPLEUI_GLOBAL::mouseOnWindow = IsCursorOnScreen();
+
+	static Vector2 previousWinSize = { -1, -1 };
+	SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
+
+	if (previousWinSize.x != SIMPLEUI_GLOBAL::winWidth or previousWinSize.y != SIMPLEUI_GLOBAL::winHeight) {
+		SIMPLEUI_GLOBAL::windowSizeChanged = true;
+		previousWinSize = { (float)SIMPLEUI_GLOBAL::winWidth, (float)SIMPLEUI_GLOBAL::winHeight };
+	}
+
+	updateSignals();
+	SIMPLEUI_GLOBAL::dt = GetFrameTime();
+	Animate::UpdateAnimations(SIMPLEUI_GLOBAL::dt);
+	Tasks::UpdateTasks(SIMPLEUI_GLOBAL::dt);
+
+	static double acc = 0;
+	static int frames = 0;
+	acc += SIMPLEUI_GLOBAL::dt;
+	frames++;
+	if (acc >= 0.1) {
+		SIMPLEUI_GLOBAL::accurateFPS = (long)(frames / acc + 0.5);
+		acc = 0;
+		frames = 0;
+	}
+
+	if ((previousMousePosition.x != SIMPLEUI_GLOBAL::mousePosition.x or previousMousePosition.y != SIMPLEUI_GLOBAL::mousePosition.y or SIMPLEUI_GLOBAL::sceneDirty)) {
+		previousMousePosition = SIMPLEUI_GLOBAL::mousePosition;
+		UpdateHigher(StartInstance);
+	}
+
+	if (IsKeyPressed(KEY_F1) and SIMPLEUI_GLOBAL::ALLOW_FPS) { SIMPLEUI_DEBUG::toggleFPS(); }
+	if (IsKeyPressed(KEY_F2) and SIMPLEUI_GLOBAL::ALLOW_DEBUG) { SIMPLEUI_DEBUG::toggleDebug(); }
+	if (IsKeyPressed(KEY_F3) and SIMPLEUI_GLOBAL::ALLOW_FPS) { std::cout << BLUE_ANSI << SIMPLEUI_GLOBAL::accurateFPS << DEFAULT_ANSI << std::endl; }
+	if (IsKeyPressed(RAYLIB_FUNCTIONAL::KEY_F4) and SIMPLEUI_GLOBAL::ALLOW_FPS) { SIMPLEUI_DEBUG::toggleFrameTimeGraph(); }
+
+	SIMPLEUI_GLOBAL::framesSinceStart += 1;
+
+	DrawFrame(StartInstance);
+
+	SIMPLEUI_GLOBAL::clips.clear();
+
+	if (SIMPLEUI_DEBUG::fpsVisible) {
+		SIMPLEUI_DEBUG::updateGraph();
+	}
+
+	for (TextLabel* t : SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture) {
+		t->updateTexture();
+	}
+	SIMPLEUI_GLOBAL::TextLabelsToUpdateTexture.clear();
+
+	for (TextBox* t : SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture) {
+		t->updateTexture();
+	}
+	SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
+
+	SIMPLEUI_GLOBAL::CollectDeadObjects();
+
+	SIMPLEUI_GLOBAL::windowSizeChanged = false;
+}
+
+inline void SUI_CleanUp() {
 	if (GetRoot()) {
 		GetRoot()->deleteAllChildren();
 	}
 
-	if (ic.data) {
-		RAYLIB_FUNCTIONAL::UnloadImage(ic);
-	}
-
-	for (auto pair : SIMPLEUI_GLOBAL::loadedImages) {
+	for (auto& pair : SIMPLEUI_GLOBAL::loadedImages) {
 		RAYLIB_FUNCTIONAL::UnloadImage(pair.second.first);
 		UnloadTextureFromAtlas(pair.second.second);
 	}
-
-	for (auto it : SIMPLEUI_GLOBAL::Fonts) {
-		RAYLIB_FUNCTIONAL::UnloadFont(it.second);
-	}
+	SIMPLEUI_GLOBAL::loadedImages.clear();
 
 	for (auto atlas : SIMPLEUI_GLOBAL::AtlasArray) {
 		delete atlas;
 	}
+	SIMPLEUI_GLOBAL::AtlasArray.clear();
 
+	for (auto it : SIMPLEUI_GLOBAL::Fonts) {
+		RAYLIB_FUNCTIONAL::UnloadFont(it);
+	}
 	SIMPLEUI_GLOBAL::Fonts.clear();
+
 	#ifndef EXCLUDE_SIMPLEUI_FREETYPE
 		FT_TextManagement::Fonts.clear();
 	#endif
+
+	unloadShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 
 	SIMPLEUI_GLOBAL::deletedObjectsByID.clear();
 	SIMPLEUI_GLOBAL::AtlasTextureId = 1;
 	SIMPLEUI_GLOBAL::currentUniqueObjectID = 1;
 	SIMPLEUI_GLOBAL::framesSinceStart = 0;
+}
+
+inline void StartNewWindow(Instance* StartInstance = nullptr, WindowData windowData = {1280, 720, 0}, const char* name = "simpleUI window", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {
+	SetConsoleUTF8();
+
+	bool inited = SUI_InitNewWindow(StartInstance, windowData, name, iconName, flags);
+
+	if (!inited) {
+		return;
+	}
+
+	SUI_LoadPendings();
+
+	while (SIMPLEUI_GLOBAL::programRunning and !WindowShouldClose()) {
+		SUI_RenderFrame(StartInstance);
+	}
+
+	SUI_CleanUp();
 
 	CloseWindow();
+}
+
+inline void StartInCurrentWindow(Instance* StartInstance = nullptr) {
+	SetConsoleUTF8();
+
+	if (!IsWindowReady()) {
+		std::cout << RED_ANSI << "Window not inited. Start declined" << DEFAULT_ANSI << std::endl;
+		return;
+	}
+
+	SUI_LoadPendings();
+
+	while (SIMPLEUI_GLOBAL::programRunning and !WindowShouldClose()) {
+		SUI_RenderFrame(StartInstance);
+	}
+
+	SUI_CleanUp();
 }

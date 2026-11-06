@@ -24,6 +24,14 @@ class GraphBuilder : public Object2D {
 
 		GraphSequence() = delete;
 		GraphSequence(size_t id, const std::string& name) : id(id), name(name.empty() ? "Sequence " + std::to_string(id) : name) {}
+		GraphSequence(const GraphSequence& other) : id(other.id) {
+			name = other.name;
+			sequence = other.sequence;
+			smallest = other.smallest;
+			biggest = other.biggest;
+			color = other.color;
+			thickness = other.thickness;
+		}
 	};
 
 	size_t seqID = 0;
@@ -49,7 +57,6 @@ class GraphBuilder : public Object2D {
 	bool GraphDirty = false;
 
 	void updateTexture() {
-		int quantity = sequences.size();
 		Vector2 GraphRealPos = { 0,0 };
 		Vector2 GraphRealSize = cachedTexture.size;
 		if (cachedTexture.id) {
@@ -237,6 +244,10 @@ protected:
 
 		if (cachedMax.id != 0) {
 			UnloadTextureFromAtlas(cachedMax);
+		}
+
+		for (auto& [_, seq] : sequences) {
+			delete seq;
 		}
 	}
 	GraphBuilder() = delete;
@@ -542,6 +553,12 @@ public:
 		i->cachedTexture.currentAtlas = nullptr;
 		i->cachedMin.currentAtlas = nullptr;
 		i->cachedMax.currentAtlas = nullptr;
+
+		i->sequences.clear();
+
+		for (auto& [_, seq] : sequences) {
+			i->sequences.insert({_, new GraphSequence(*seq)});
+		}
 
 		i->basicCloneOperation(const_cast<GraphBuilder*>(this));
 
@@ -858,7 +875,7 @@ class CheckBox : public Object2D {
 			float halfSize = side / 2.0f;
 			float r = (MultiChoice ? MultiChoiceRoundness : 1) * halfSize;
 
-			SpecialVector2 pivot = {
+			Vector2 pivot = {
 				RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x,
 				RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y
 			};
@@ -1028,7 +1045,7 @@ public:
 		for (int i = 0; i < buttons.size(); i++) {
 			button& but = buttons[i];
 			if (but.id == id) {
-				but.Value = !but.Value;
+				but.Value = value;
 
 				if (but.Value and !MultiChoice) {
 					for (button& b : buttons) {
@@ -1065,7 +1082,7 @@ public:
 				float rowHeight = RealSize.y / buttons.size();
 				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
 
-				SpecialVector2 currentTextureButtonSize = {
+				Vector2 currentTextureButtonSize = {
 					RealSize.x - buttonSize,
 					buttonSize
 				};
@@ -1083,26 +1100,26 @@ public:
 				}
 			}
 
-			SpecialVector2 o = {
+			Vector2 o = {
 				Origin.x * RealSize.x + OriginOFFSET.x,
 				Origin.y * RealSize.y + OriginOFFSET.y
 			};
 
-			SpecialVector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
+			Vector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
 
 			int i = 0;
 			for (button& but : buttons) {
 				float rowHeight = RealSize.y / buttons.size();
 				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
 
-				SpecialVector2 currentTextureButtonSize = {
+				Vector2 currentTextureButtonSize = {
 					RealSize.x - buttonSize,
 					buttonSize
 				};
 
 				float buttonSizeOffset = (buttonSize - buttonSize * ButtonSizeScale) / 2;
 
-				SpecialVector2 rectPos = {
+				Vector2 rectPos = {
 					RealPos.x + (AnchorToLeft ? 0 : currentTextureButtonSize.x) + buttonSizeOffset,
 					RealPos.y + rowHeight * i + buttonSizeOffset
 				};

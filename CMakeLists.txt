@@ -148,6 +148,12 @@ if(RUNTIME_DLLS)
     )
 endif()
 
+if(UNIX AND NOT APPLE)
+    add_custom_command(TARGET SIMPLEUI_TEST POST_BUILD
+        COMMAND sh -c "cp -a '${LIB_DIR}'/*.so* '$<TARGET_FILE_DIR:SIMPLEUI_TEST>/'"
+    )
+endif()
+
 add_custom_command(TARGET SIMPLEUI_TEST POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/Fonts $<TARGET_FILE_DIR:SIMPLEUI_TEST>/Fonts

@@ -120,7 +120,7 @@ endif()
 if(UNIX AND NOT APPLE)
     target_link_libraries(SIMPLEUI_TEST PRIVATE X11 GL m pthread dl)
     set_target_properties(SIMPLEUI_TEST PROPERTIES
-        BUILD_RPATH "${LIB_DIR}"
+        BUILD_WITH_INSTALL_RPATH ON
         INSTALL_RPATH "$ORIGIN"
     )
 endif()

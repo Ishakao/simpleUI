@@ -22,16 +22,20 @@ set(COMMON_ARGS
 
 set(GLFW_EXTRA_ARGS "")
 
-if(DEPS_COMPILER_ID STREQUAL "MSVC")
-    list(APPEND COMMON_ARGS -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
-    set(ZLIB_LIB_NAME zlibstatic.lib)
-    set(PNG_LIB_NAME libpng16_static.lib)
+if(DEPS_MSVC_LIKE)
+    list(APPEND COMMON_ARGS -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL)
+    set(ZLIB_CANON zlibstatic.lib)
+    set(ZLIB_CANDIDATES "zlibstatic.lib|zs.lib|zlib.lib")
+    set(PNG_CANON libpng16_static.lib)
+    set(PNG_CANDIDATES "libpng16_static.lib|png16_static.lib|libpng16.lib|png16.lib")
 else()
     if(DEPS_COMPILER_ID STREQUAL "GNU")
         list(APPEND COMMON_ARGS -DCMAKE_SHARED_LINKER_FLAGS=-static-libgcc)
     endif()
-    set(ZLIB_LIB_NAME libz.a)
-    set(PNG_LIB_NAME libpng16.a)
+    set(ZLIB_CANON libz.a)
+    set(ZLIB_CANDIDATES "libz.a|libzlibstatic.a|libzs.a")
+    set(PNG_CANON libpng16.a)
+    set(PNG_CANDIDATES "libpng16.a|libpng.a|libpng16_static.a")
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -67,13 +71,13 @@ if(UNIX AND NOT APPLE)
 endif()
 
 set(ZLIB_ARGS
-    -DZLIB_LIBRARY=${DEPS_PREFIX}/lib/${ZLIB_LIB_NAME}
+    -DZLIB_LIBRARY=${DEPS_PREFIX}/lib/${ZLIB_CANON}
     -DZLIB_INCLUDE_DIR=${DEPS_PREFIX}/include
     -DZLIB_USE_STATIC_LIBS=ON
 )
 
 set(PNG_ARGS
-    -DPNG_LIBRARY=${DEPS_PREFIX}/lib/${PNG_LIB_NAME}
+    -DPNG_LIBRARY=${DEPS_PREFIX}/lib/${PNG_CANON}
     -DPNG_PNG_INCLUDE_DIR=${DEPS_PREFIX}/include
 )
 
@@ -111,6 +115,15 @@ ExternalProject_Add(zlib
         -DZLIB_BUILD_EXAMPLES=OFF
 )
 
+ExternalProject_Add_Step(zlib normalize
+    DEPENDEES install
+    COMMAND ${CMAKE_COMMAND}
+        -DLIBDIR=${DEPS_PREFIX}/lib
+        -DCANON=${ZLIB_CANON}
+        "-DCANDIDATES=${ZLIB_CANDIDATES}"
+        -P ${CMAKE_CURRENT_LIST_DIR}/normalize_lib.cmake
+)
+
 ExternalProject_Add(libpng
     GIT_REPOSITORY https://github.com/pnggroup/libpng.git
     GIT_TAG ${PNG_TAG}
@@ -123,6 +136,15 @@ ExternalProject_Add(libpng
         -DPNG_TESTS=OFF
         -DPNG_TOOLS=OFF
         -DPNG_FRAMEWORK=OFF
+)
+
+ExternalProject_Add_Step(libpng normalize
+    DEPENDEES install
+    COMMAND ${CMAKE_COMMAND}
+        -DLIBDIR=${DEPS_PREFIX}/lib
+        -DCANON=${PNG_CANON}
+        "-DCANDIDATES=${PNG_CANDIDATES}"
+        -P ${CMAKE_CURRENT_LIST_DIR}/normalize_lib.cmake
 )
 
 ExternalProject_Add(freetype

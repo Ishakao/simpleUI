@@ -17,12 +17,20 @@ endif()
 set(HB_TAG "11.2.1" CACHE STRING "")
 set(RAYLIB_TAG "5.5" CACHE STRING "")
 set(GLFW_TAG "3.4" CACHE STRING "")
+set(ZLIB_TAG "v1.3.1" CACHE STRING "")
+set(PNG_TAG "v1.6.43" CACHE STRING "")
 set(FT_TAG "VER-2-13-3" CACHE STRING "")
 
 set(TOOLCHAIN "${CMAKE_CXX_COMPILER_ID}")
 set(LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${TOOLCHAIN}")
 set(BIN_DIR "${CMAKE_SOURCE_DIR}/bin/${TOOLCHAIN}")
 set(STAGE_DIR "${CMAKE_BINARY_DIR}/deps_stage")
+
+if(MSVC)
+    set(SUI_MSVC_LIKE 1)
+else()
+    set(SUI_MSVC_LIKE 0)
+endif()
 
 if(NOT EXISTS "${LIB_DIR}/.deps_ok")
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/deps_build" "${STAGE_DIR}")
@@ -40,6 +48,9 @@ if(NOT EXISTS "${LIB_DIR}/.deps_ok")
             -DGLFW_TAG=${GLFW_TAG}
             -DFT_TAG=${FT_TAG}
             -DHB_TAG=${HB_TAG}
+            -DDEPS_MSVC_LIKE=${SUI_MSVC_LIKE}
+            -DZLIB_TAG=${ZLIB_TAG}
+            -DPNG_TAG=${PNG_TAG}
         RESULT_VARIABLE DEPS_RES
     )
     if(NOT DEPS_RES EQUAL 0)

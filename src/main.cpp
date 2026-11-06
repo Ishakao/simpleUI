@@ -1,5 +1,3 @@
-//#define EXCLUDE_SIMPLEUI_EXTENSION
-//#define EXCLUDE_SIMPLEUI_FREETYPE
 #define SIMPLEUI_IMPLEMENTATION
 #include <simpleUI.h>
 
@@ -7,7 +5,7 @@ int main() {
 	Instance* Root = GetRoot();
 
     CreateFont("segoe", "Fonts/segoeui.ttf", 64);
-	loadImage("bg_image", "textures/test.jpg"); // add your image path cuz textures was not in simpleUI repo
+	LoadImage("bg_image", "textures/test.jpg"); // add your image path cuz textures was not in simpleUI repo
 
 	ImageLabel* Background = ImageLabel::New(Root);
 	Background->Size = { 1,1 };
@@ -66,7 +64,7 @@ int main() {
 	World->PositionOFFSET = { 200, 0 };
 	World->SizeOFFSET = { 340, 80 };
 	World->FontFace = "segoe";
-	World->Text = " World ";
+	World->Text = "";
 	World->PlaceholderText = " World ";
 	World->MaxSymbols = 10;
 	World->CursorColor = { 0, 102, 102, 255 };
@@ -94,5 +92,5 @@ int main() {
 	SIMPLEUI_GLOBAL::ALLOW_DEBUG = true; // Allows to show debug menu on F2
 
 	SUI_SetMinimalWindowSize(600, 400);
-	start(Root, { 1200, 800, -1 }, "Test program", "textures/test.jpg", FLAG_WINDOW_RESIZABLE);
+	StartNewWindow(Root, { 1200, 800, -1 }, "Test program", "textures/test.jpg", FLAG_WINDOW_RESIZABLE);
 }

@@ -207,7 +207,7 @@ void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	} else {
 		std::cerr << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	}
-	throw;
+	abort();
 }
 
 #define SIMPLEUI_THROW(x) SIMPLEUI_THROW_WITH_INFO(x, __LINE__, __FILE__);
@@ -775,7 +775,10 @@ struct TexturedTextLabelData {
             std::vector<Shaped> shScratch;
 
             FT_Font(const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) : baseSize_(size), width_(startSide < 512 ? 512 : startSide), maxSide_(maxSide) {
-                FT_Init_FreeType(&lib_);
+                FT_Error ft_err = FT_Init_FreeType(&lib_);
+
+				if (ft_err != FT_Err_Ok) throw std::runtime_error("Failed to initialize FreeType");
+
                 buf_ = hb_buffer_create();
                 layouts.reserve(4096);
                 for (const std::string& p : paths) AddFace(p.c_str());
@@ -1457,7 +1460,7 @@ public:
 		}
 
 		text = !other;
-		return other;
+		return *this;
 	}
 
 	void operator+=(const std::string& other) {
@@ -1610,9 +1613,10 @@ class SafeChangedSignal : public IChangedSignal {
 public:
 	void Update() {
 		if (*SignalPTR != *LastValue) {
-			Callback();
 			delete LastValue;
 			LastValue = new T(*SignalPTR);
+			
+			Callback();
 		}
 	}
 private:
@@ -6720,7 +6724,7 @@ inline void SetWindowIcon(const std::string& name) {
 }
 
 inline bool SUI_InitNewWindow(Instance* StartInstance = nullptr, WindowData windowData = {1280, 720, 0}, const char* name = "simpleUI window", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {
-	if (!StartInstance and !GetRoot()) {
+	if (!StartInstance) {
 		std::cout << RED_ANSI << "start() requires root object and creating scene from root (use GetRoot())" << DEFAULT_ANSI << std::endl;
 		return false;
 	}

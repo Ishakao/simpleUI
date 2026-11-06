@@ -15,8 +15,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-    API float GetMouseScreenPositionX();
-    API float GetMouseScreenPositionY();
     API void SetConsoleUTF8();
 #ifdef _WIN32
     API const wchar_t* GetFile();

@@ -43,6 +43,8 @@ class GraphBuilder : public Object2D {
 
 	int ScaleSizeOfY = 4;
 
+	int FontFaceIndex = 0;
+
 	std::unordered_map<size_t, GraphSequence*> sequences;
 	bool GraphDirty = false;
 
@@ -51,18 +53,14 @@ class GraphBuilder : public Object2D {
 		Vector2 GraphRealPos = { 0,0 };
 		Vector2 GraphRealSize = cachedTexture.size;
 		if (cachedTexture.id) {
-			bool hadClip = !clipStack.empty();
-			Clip current;
-			if (hadClip) current = clipStack.back();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 			int xof = cachedTexture.position.x;
 			int yof = cachedTexture.position.y;
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
 			cachedTexture.currentAtlas->blankArea(cachedTexture);
-			SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
+			RAYLIB_FUNCTIONAL::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
 
 			auto norm = [](long double v, long double lo, long double hi) {
 				long double d = hi - lo;
@@ -109,7 +107,7 @@ class GraphBuilder : public Object2D {
 							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(current, gmin, gmax)) + yof
 						};
 
-						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0);
+						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0, 0);
 					} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 						long double current = seq->sequence[i];
 						float height = GraphRealSize.y * ((current - lmin) / (lmax - lmin)); if (height <= 0) height = 1;
@@ -133,17 +131,16 @@ class GraphBuilder : public Object2D {
 			}
 
 			FlushRectanglesBatch();
-			SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			RAYLIB_FUNCTIONAL::EndScissorMode();
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
 	}
 
 	void updateMinTexture(bool load = false) {
 		Vector2 leftSize = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / ScaleSizeOfY };
 		strMin = textFilterMin(minimalGraphValue);
-		textParamsMin = getTextCFrame(strMin.c_str(), getFont(FontFace), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
+		textParamsMin = getTextCFrame(strMin.c_str(), getFont(FontFaceIndex), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
 		textureSizeMin = { leftSize.x - textParamsMin.x, leftSize.y - textParamsMin.y };
 
 		if (load) {
@@ -152,27 +149,22 @@ class GraphBuilder : public Object2D {
 		}
 
 		if (cachedMin.id) {
-			bool hadClip = !clipStack.empty();
-			Clip current;
-			if (hadClip) current = clipStack.back();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMin.currentAtlas->renderTexture());
 			cachedMin.currentAtlas->blankArea(cachedMin);
 
-			DrawTextEx(getFont(FontFace), strMin.c_str(), { cachedMin.position.x,cachedMin.position.y }, textParamsMin.z, 0, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFaceIndex), strMin.c_str(), { cachedMin.position.x,cachedMin.position.y }, textParamsMin.z, 0, { 255,255,255,255 });
 
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
 	}
 
 	void updateMaxTexture(bool load = false) {
 		Vector2 leftSize = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / ScaleSizeOfY };
 		strMax = textFilterMax(maximalGraphValue);
-		textParamsMax = getTextCFrame(strMax.c_str(), getFont(FontFace), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
+		textParamsMax = getTextCFrame(strMax.c_str(), getFont(FontFaceIndex), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
 		textureSizeMax = { leftSize.x - textParamsMax.x, leftSize.y - textParamsMax.y };
 
 		if (load) {
@@ -181,19 +173,14 @@ class GraphBuilder : public Object2D {
 		}
 
 		if (cachedMax.id) {
-			bool hadClip = !clipStack.empty();
-			Clip current;
-			if (hadClip) current = clipStack.back();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
 			cachedMax.currentAtlas->blankArea(cachedMax);
-			DrawTextEx(getFont(FontFace), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFaceIndex), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
 
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
 	}
 
@@ -489,6 +476,10 @@ public:
 				}
 			}
 
+			if (FontFace.isChanged()) {
+				FontFaceIndex = getFontIndex(FontFace);
+			}
+
 			FontFace.restate();
 			GraphDirty = false;
 			lastLeft = SizeOfLeftInfo;
@@ -732,10 +723,23 @@ public:
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
+		bool c = ClipDescendants;
+		if (c) {
+			SIMPLEUI_GLOBAL::ClipData clip = {
+				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
+				Roundness, Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
+			
+			SIMPLEUI_GLOBAL::PushClip(clip);
+		}
+
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
 			child->Update(tempRes);
 		}
+
+		if (c) SIMPLEUI_GLOBAL::PopClip();
 	}
 
 	ToggleSwitcher* Clone() const override {
@@ -804,22 +808,17 @@ class CheckBox : public Object2D {
 
 	void RedrawText(button& but) {
 		if (but.tex.id) {
-			Vector3 textParams = getTextCFrame(but.Text.c_str(), getFont(but.FontFace), { 0,0, but.tex.size.x, but.tex.size.y }, TextAnchorEnum::E, -1, 0);
+			Vector3 textParams = getTextCFrame(but.Text.c_str(), getFont(getFontIndex(but.FontFace)), { 0,0, but.tex.size.x, but.tex.size.y }, TextAnchorEnum::E, -1, 0);
 
-			bool hadClip = !clipStack.empty();
-			Clip current;
-			if (hadClip) current = clipStack.back();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
 			but.tex.currentAtlas->blankArea(but.tex);
 
-			DrawTextEx(getFont(but.FontFace), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
+			DrawTextEx(getFont(getFontIndex(but.FontFace)), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
 
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
 	}
 
@@ -1171,10 +1170,23 @@ public:
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
+		bool c = ClipDescendants;
+		if (c) {
+			SIMPLEUI_GLOBAL::ClipData clip = {
+				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
+				Roundness, Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
+			
+			SIMPLEUI_GLOBAL::PushClip(clip);
+		}
+
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
 			child->Update(tempRes);
 		}
+
+		if (c) SIMPLEUI_GLOBAL::PopClip();
 	}
 
 	CheckBox* Clone() const override {

@@ -13,36 +13,6 @@ inline Display* d = XOpenDisplay(nullptr);
 Window root = DefaultRootWindow(d);
 #endif
 
-extern "C" float GetMouseScreenPositionX() {
-#ifdef _WIN32
-	POINT p;
-	GetCursorPos(&p);
-	return static_cast<float>(p.x);
-#elif defined(__linux__)
-	int root_x, root_y;
-	int win_x, win_y;
-	unsigned int mask;
-	Window child, root_return;
-	XQueryPointer(d, root, &root_return, &child, &root_x, &root_y, &win_x, &win_y, &mask);
-	return (float)root_x;
-#endif
-}
-
-extern "C" float GetMouseScreenPositionY() {
-#ifdef _WIN32
-	POINT p;
-	GetCursorPos(&p);
-	return static_cast<float>(p.y);
-#elif defined(__linux__)
-	int root_x, root_y;
-	int win_x, win_y;
-	unsigned int mask;
-	Window child, root_return;
-	XQueryPointer(d, root, &root_return, &child, &root_x, &root_y, &win_x, &win_y, &mask);
-	return (float)root_y;
-#endif
-}
-
 extern "C" void SetConsoleUTF8() {
 #ifdef _WIN32
 	SetConsoleOutputCP(CP_UTF8);

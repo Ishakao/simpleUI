@@ -7,6 +7,8 @@ layout(location = 9) in vec4 iUV;
 layout(location = 10) in vec4 iColor;
 layout(location = 11) in vec4 iBorderColor;
 layout(location = 12) in float iInset;
+layout(location = 13) in float iClip;
+layout(location = 14) in float iShape;
 
 uniform mat4 mvp;
 
@@ -19,6 +21,9 @@ flat out vec2 fragSDBounds;
 flat out float fragRadius;
 flat out float fragBorderThickness;
 flat out float fragInset;
+out vec2 fragWorld;
+flat out float fragClip;
+flat out float fragShape;
 
 void main() {
 	vec2 halfSize = iPosSize.zw * 0.5;
@@ -48,6 +53,9 @@ void main() {
 	fragColor = iColor;
 	fragBorderColor = iBorderColor;
 	fragInset = iInset;
+	fragWorld = p;
+	fragClip = iClip;
+	fragShape = iShape;
 
 	gl_Position = mvp * vec4(p, 0.0, 1.0);
 }

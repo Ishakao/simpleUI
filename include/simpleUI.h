@@ -27,7 +27,10 @@
 // Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
 // Textures draw optimization. Batching for textures and rectangles												//
 // Local Rotation and Origin support																			//
-// Added SafeChangedSignal which works like SafeAnimation (destroys when linked object deletes)														//
+// Added SafeChangedSignal which works like SafeAnimation (destroys when linked object deletes)					//
+// Added roundness clipping and ClipDescendants for every 2D object												//
+// Added user-made shapes for 2D objects background																//
+// Per-Symbol coloring (UsePerSymbolColor, SetPerSymbolColor, ClearPerSymbolColor) for TextLabel and TextBox	//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -108,6 +111,7 @@ using RAYLIB_FUNCTIONAL::IsMouseButtonReleased;
 using RAYLIB_FUNCTIONAL::IsWindowMaximized;
 using RAYLIB_FUNCTIONAL::IsWindowReady;
 using RAYLIB_FUNCTIONAL::IsWindowFullscreen;
+using RAYLIB_FUNCTIONAL::IsCursorOnScreen;
 using RAYLIB_FUNCTIONAL::WindowShouldClose;
 using RAYLIB_FUNCTIONAL::ToggleFullscreen;
 using RAYLIB_FUNCTIONAL::MaximizeWindow;
@@ -249,6 +253,7 @@ struct RoundRectData {
 	// Texture color = Color
 
 	BorderPlacement borderType;
+	int BackgroundShape{};
 };
 
 inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, float r, Color c) {
@@ -333,10 +338,6 @@ struct SpecialVector2 {
 
 struct AtlasTexture;
 
-struct Clip {
-	int x, y, w, h;
-};
-
 struct IChangedSignal {
 	friend inline void Delete(Instance*);
 	virtual ~IChangedSignal() = default;
@@ -354,8 +355,7 @@ namespace SIMPLEUI_GLOBAL {
 	inline long accurateFPS = 0;
 	inline bool programRunning = true;
 	inline SpecialVector2 mousePosition;
-	inline SpecialVector2 mouseScreenPosition;
-	inline SpecialVector2 windowPosition;
+	inline bool mouseOnWindow;
 	inline constexpr const char* BASIC_FONT_NAME = "Arial";
 	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
 	inline std::unordered_map<int, Shader> Shaders;
@@ -407,6 +407,50 @@ namespace SIMPLEUI_GLOBAL {
 
 		WillDelete.clear();
 	}
+
+	struct ClipData {
+		float x, y, w, h;
+		float roundness, rotation;
+		Vector2 origin;
+	};
+
+	struct ClipDesc {
+		float cx, cy, hw, hh;
+		float cosA, sinA, radius, parent;
+	};
+
+	inline constexpr int MAX_CLIP_STACK_SIZE = 128; // DEFAULT MAXIMUM OF CLIPS - 128. IF YOU NEED MORE THAN SET BIGGER VALUE HERE AND IN rectangle_roundness.frag (uniform vec4 clips[256]) SIZE OF ARRAY MUST BE x2 FROM MAX_CLIP_STACK_SIZE
+	inline bool clipping = true;
+	inline std::vector<int> clipStack;
+	inline std::vector<ClipDesc> clips;
+
+	inline void PushClip(const ClipData& c) {
+		if (clips.size() >= MAX_CLIP_STACK_SIZE) {
+			clipStack.push_back(clipStack.empty() ? -1 : clipStack.back());
+			return;
+		}
+
+		float a = c.rotation * DEG2RAD;
+		float ca = cosf(a), sa = sinf(a);
+
+		float lx = c.w * 0.5f - c.origin.x;
+		float ly = c.h * 0.5f - c.origin.y;
+
+		ClipDesc d;
+		d.cx = c.x + c.origin.x + lx * ca - ly * sa;
+		d.cy = c.y + c.origin.y + lx * sa + ly * ca;
+		d.hw = c.w * 0.5f;
+		d.hh = c.h * 0.5f;
+		d.cosA = ca;
+		d.sinA = sa;
+		d.radius = c.roundness * std::min(c.w, c.h) * 0.5f;
+		d.parent = clipStack.empty() ? -1.0f : (float)clipStack.back();
+
+		clips.push_back(d);
+		clipStack.push_back((int)clips.size() - 1);
+	}
+
+	inline void PopClip() { clipStack.pop_back(); }
 }
 
 inline void ChangeWindowColor(Color c) {
@@ -448,29 +492,45 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		RAYLIB_FUNCTIONAL::EndBlendMode();
 	}
 
-	inline void BeginScissorMode(int x, int y, int width, int height) {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::BeginScissorMode(x, y, width, height);
+	inline void StopClipping() {
+		SIMPLEUI_GLOBAL::clipping = false;
 	}
 
-	inline void EndScissorMode() {
-		FlushRectanglesBatch();
-		RAYLIB_FUNCTIONAL::EndScissorMode();
+	inline void ResumeClipping() {
+		SIMPLEUI_GLOBAL::clipping = true;
 	}
 
-	inline void DrawLineEx(Vector2 s, Vector2 e, float t, Color c, Vector2 Pos, Vector2 Origin, float Rotation) {
-		FlushRectanglesBatch();
+	inline void DrawLineEx(Vector2 s, Vector2 e, float t, Color c, Vector2 Pos, Vector2 Origin, float Rotation, float Roundness) {
 		float rad = Rotation * DEG2RAD;
 		float cs = cosf(rad);
 		float sn = sinf(rad);
 		float ox = Pos.x + Origin.x;
 		float oy = Pos.y + Origin.y;
+
 		auto rot = [&](Vector2 p) {
 			float dx = p.x - ox;
 			float dy = p.y - oy;
 			return Vector2{ ox + dx * cs - dy * sn, oy + dx * sn + dy * cs };
 		};
-		RAYLIB_FUNCTIONAL::DrawLineEx(rot(s), rot(e), t, c);
+
+		Vector2 a = rot(s);
+		Vector2 b = rot(e);
+
+		float dx = b.x - a.x;
+		float dy = b.y - a.y;
+		float len = sqrtf(dx * dx + dy * dy);
+		if (len <= 0.0f or t <= 0.0f or !c.a) return;
+
+		RoundRectData rec = {
+			{ a.x, a.y - t * 0.5f }, { len, t },
+			c, c,
+			0.0f, Roundness, 0.0f,
+			0,
+			atan2f(dy, dx) * RAD2DEG,
+			{ 0.0f, t * 0.5f }
+		};
+
+		DrawRoundRectBatch(rec);
 	}
 
 	inline void DrawTexturePro(Texture2D texture, Vector2 position, Vector2 size, Rectangle source, Rectangle destination, Vector2 origin, float rotation, Color color, float roundness) {
@@ -808,12 +868,18 @@ struct TexturedTextLabelData {
             int BaseSize() const { return baseSize_; }
         };
 
-        std::unordered_map<std::string, FT_Font> Fonts;
+        std::vector<FT_Font> Fonts;
+        std::unordered_map<std::string, int> FontsIndexes;
 
         bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
-            auto [it, ok] = Fonts.try_emplace(name, paths, size, startSide, maxSide);
-            if (!it->second.Valid()) { Fonts.erase(it); return false; }
-            return ok;
+            auto it = FontsIndexes.find(name);
+			if (it == FontsIndexes.end()) {
+            	Fonts.emplace_back(paths, size, startSide, maxSide);
+				FontsIndexes.insert({name, Fonts.size()-1});
+				return true;
+			}
+
+			return false;
         }
 
         void UnloadFonts() { Fonts.clear(); }
@@ -892,11 +958,13 @@ struct TexturedTextLabelData {
             return { maxW, (float)L.lines.size() * L.baseLineH * s };
         }
 
-        inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, TexturedTextLabelData* textlabeldata=nullptr) {
+        inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* textlabeldata=nullptr) {
             const Layout& L = GetLayout(font, text);
             Texture2D tex = font.BaseTexture();
             Color colorTint = { 255, 255, 255, tint.a };
             float s = (float)fontSize / (float)font.BaseSize();
+
+			int i = 0;
 
             for (const Quad& q : L.quads) {
                 Rectangle dst = {
@@ -906,10 +974,19 @@ struct TexturedTextLabelData {
                     q.h * s
                 };
 
+				Color symbolColor = tint;
+
+				if (c) {
+					if (i < c->size()) {
+						symbolColor = (*c)[i];
+						i++;
+					} else if (q.color) symbolColor = colorTint;
+				} else if (q.color) symbolColor = colorTint;
+
 				if (textlabeldata) {
-                	SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, q.color ? colorTint : tint, textlabeldata->Roundness);
+                	SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, symbolColor, textlabeldata->Roundness);
 				} else {
-					RAYLIB_FUNCTIONAL::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, q.color ? colorTint : tint);
+					RAYLIB_FUNCTIONAL::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, symbolColor);
 				}
             }
         }
@@ -923,12 +1000,12 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		#else
 			FT_TextManagement::FT_Font&
 		#endif
-		font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, TexturedTextLabelData* data=nullptr) {
+		font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* data=nullptr) {
 
 		#ifdef EXCLUDE_SIMPLEUI_FREETYPE
 			RAYLIB_FUNCTIONAL::DrawTextEx(font, text, pos, fontSize, spacing, tint);
 		#else
-			FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint, data);
+			FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint, c, data);
 		#endif
 	}
 }
@@ -1238,10 +1315,6 @@ inline Shader getShader(int id) {
 		abort();
 	}
 	return it->second;
-}
-
-inline Vector2 GetMouseScreenPosition() {
-	return { GetMouseScreenPositionX(), GetMouseScreenPositionY() };
 }
 
 inline Color mulColor(Color other, float t) {
@@ -2582,9 +2655,8 @@ public:
 };
 
 inline SpecialVector2 getCanvasRealPos(Object2D*);
-inline SpecialVector2 getScrollFrameRS(Instance*);
-inline SpecialVector2 getScrollFrameRP(Instance*);
-inline bool isScrollFrameCropping(Instance*);
+inline SpecialVector2 getObject2DRS(Instance*);
+inline SpecialVector2 getObject2DRP(Instance*);
 
 inline void FlushRectanglesBatch();
 
@@ -2596,6 +2668,8 @@ struct RectInstance {
 	unsigned char r, g, b, a;
 	unsigned char br, bg, bb, ba;
 	float inset;
+	float clip;
+	float shape;
 };
 
 namespace RectGPU {
@@ -2624,8 +2698,10 @@ namespace RectGPU {
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(10, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, r));
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(11, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, br));
 		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(12, 1, RL_FLOAT, false, stride, offsetof(RectInstance, inset));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(13, 1, RL_FLOAT, false, stride, offsetof(RectInstance, clip));
+		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(14, 1, RL_FLOAT, false, stride, offsetof(RectInstance, shape));
 
-		for (int i = 6; i <= 12; i++) {
+		for (int i = 6; i <= 14; i++) {
 			RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(i);
 			RAYLIB_FUNCTIONAL::rlSetVertexAttributeDivisor(i, 1);
 		}
@@ -2653,7 +2729,7 @@ namespace RectGPU {
 		float use = 0;
 	};
 
-	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t) {
+	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t, float clip, float shape=0) {
 		float z = floorf(thickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 		float dw = t.use > 0.5f ? t.dest.width : 0.0f;
 		insts.push_back({
@@ -2663,7 +2739,9 @@ namespace RectGPU {
 			t.u0, t.v0, t.u1, t.v1,
 			fill.r, fill.g, fill.b, fill.a,
 			border.r, border.g, border.b, border.a,
-			inset
+			inset,
+			clip,
+			shape
 		});
 	}
 }
@@ -2708,7 +2786,10 @@ inline void DrawRoundRectBatch(const RoundRectData& r) {
 		r.Roundness, hasBorder ? (float)r.BorderThickness : 0.0f, off,
 		{ r.Color.r, r.Color.g, r.Color.b, fillA },
 		{ r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA },
-		r.Rotation, { r.Origin.x + off, r.Origin.y + off }, qt);
+		r.Rotation, { r.Origin.x + off, r.Origin.y + off }, qt, 
+		((SIMPLEUI_GLOBAL::clipping and !SIMPLEUI_GLOBAL::clipStack.empty()) ? SIMPLEUI_GLOBAL::clipStack.back() : -1),
+		r.BackgroundShape
+	);
 }
 
 inline void FlushRectanglesBatch() {
@@ -2720,6 +2801,12 @@ inline void FlushRectanglesBatch() {
 
 	RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
 	RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
+
+	static int clipLoc = RAYLIB_FUNCTIONAL::rlGetLocationUniform(shader.id, "clips");
+	if (!SIMPLEUI_GLOBAL::clips.empty()) {
+		int n = (int)std::min<size_t>(SIMPLEUI_GLOBAL::clips.size(), SIMPLEUI_GLOBAL::MAX_CLIP_STACK_SIZE);
+		RAYLIB_FUNCTIONAL::rlSetUniform(clipLoc, SIMPLEUI_GLOBAL::clips.data(), RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, n * 2);
+	}
 
 	RAYLIB_FUNCTIONAL::rlSetUniformMatrix(shader.locs[RAYLIB_FUNCTIONAL::SHADER_LOC_MATRIX_MVP], RectGPU::Mul(RAYLIB_FUNCTIONAL::rlGetMatrixModelview(), RAYLIB_FUNCTIONAL::rlGetMatrixProjection()));
 
@@ -2852,8 +2939,12 @@ public:
 	Color BorderColor{};
 	BorderPlacement BorderType = BorderPlacement::BORDER_INNER;
 
+	bool ClipDescendants = false;
+
 	int ZIndex = 0;
 	bool Active = false;
+
+	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe shape in rectangle_roundness.frag)
 
 	void getRealObject2Dsize() {
 		SpecialVector2 sizePx = {};
@@ -2986,25 +3077,17 @@ public:
 		};
 
 		rec.borderType = BorderType;
+		rec.BackgroundShape = BackgroundShape;
 
 		DrawRoundRectBatch(rec);
 	}
 
 	bool pointInObject(SpecialVector2 pos) {
-		SpecialVector2 mouse = SIMPLEUI_GLOBAL::mouseScreenPosition;
-		SpecialVector2 windowPos = SIMPLEUI_GLOBAL::windowPosition;
+		if (!SIMPLEUI_GLOBAL::mouseOnWindow) return false;
 
-		int width = SIMPLEUI_GLOBAL::winWidth;
-		int height = SIMPLEUI_GLOBAL::winHeight;
-
-		if (!(mouse.x >= windowPos.x and
-			mouse.x <= windowPos.x + width and
-			mouse.y >= windowPos.y and
-			mouse.y <= windowPos.y + height)) return false;
-
-		if (Parent and Parent->Class == SCROLLFRAME and isScrollFrameCropping(Parent)) {
-			SpecialVector2 scrRS = getScrollFrameRS(Parent);
-			SpecialVector2 scrRP = getScrollFrameRP(Parent);
+		if (Parent and Is2DInheritor(Parent) and static_cast<Object2D*>(Parent)->ClipDescendants) {
+			SpecialVector2 scrRS = getObject2DRS(Parent);
+			SpecialVector2 scrRP = getObject2DRP(Parent);
 			if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
 				scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
 				return false;
@@ -3067,10 +3150,24 @@ public:
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
+		bool c = ClipDescendants;
+
+		if (c) {
+			SIMPLEUI_GLOBAL::ClipData clip = {
+				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
+				Roundness, Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
+
+			SIMPLEUI_GLOBAL::PushClip(clip);
+		}
+
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
 			child->Update(tempRes);
 		}
+
+		if (c) SIMPLEUI_GLOBAL::PopClip();
 	}
 
 	Object2D* Clone() const override {
@@ -3162,7 +3259,7 @@ public:
 	void Draw() {
 		if (Visible and Thickness) {
 			auto [pos1, pos2] = getRealObject2Dposition();
-			SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(pos1, pos2, Thickness, LineColor, { 0,0 }, { 0, 0 }, 0);
+			SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(pos1, pos2, Thickness, LineColor, { 0,0 }, { 0, 0 }, 0, 0);
 		}
 	}
 
@@ -3209,7 +3306,7 @@ inline void updateChildren(Instance* parent) {
 }
 
 #ifdef EXCLUDE_SIMPLEUI_FREETYPE
-	inline Font getFont(const std::string& name) {
+	inline Font getFont(int index) {
 		auto it = SIMPLEUI_GLOBAL::Fonts.find(name);
 		if (it != SIMPLEUI_GLOBAL::Fonts.end())
 			return it->second;
@@ -3217,42 +3314,29 @@ inline void updateChildren(Instance* parent) {
 		return SIMPLEUI_GLOBAL::Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
 	}
 #else
-	inline FT_TextManagement::FT_Font& getFont(const std::string& name) {
-		auto it = FT_TextManagement::Fonts.find(name);
-		if (it != FT_TextManagement::Fonts.end())
-			return it->second;
-
-		return FT_TextManagement::Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
+	inline FT_TextManagement::FT_Font& getFont(int index) {
+		if (index < 0 or index >= FT_TextManagement::Fonts.size()) index = 0;
+		return FT_TextManagement::Fonts[index];
 	}
 #endif
 
-inline std::vector<Clip> clipStack;
+#ifdef EXCLUDE_SIMPLEUI_FREETYPE
+	inline int getFontIndex(const std::string& name) {
+		auto it = SIMPLEUI_GLOBAL::Fonts.find(name);
+		if (it != SIMPLEUI_GLOBAL::Fonts.end())
+			return it->second;
 
-inline Clip Intersect(const Clip& a, const Clip& b) {
-	int x1 = std::max(a.x, b.x);
-	int y1 = std::max(a.y, b.y);
-	int x2 = std::min(a.x + a.w, b.x + b.w);
-	int y2 = std::min(a.y + a.h, b.y + b.h);
-	if (x2 <= x1 or y2 <= y1) return { 0, 0, 0, 0 };
-	return { x1, y1, x2 - x1, y2 - y1 };
-}
-
-inline void PushClip(Clip last) {
-	if (!clipStack.empty())
-		last = Intersect(clipStack.back(), last);
-
-	clipStack.push_back(last);
-	SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(last.x, last.y, last.w, last.h);
-}
-
-inline void PopClip() {
-	SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
-	clipStack.pop_back();
-	if (!clipStack.empty()) {
-		Clip last = clipStack.back();
-		SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(last.x, last.y, last.w, last.h);
+		return SIMPLEUI_GLOBAL::Fonts.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
 	}
-}
+#else
+	inline int getFontIndex(const std::string& name) {
+		auto it = FT_TextManagement::FontsIndexes.find(name);
+		if (it != FT_TextManagement::FontsIndexes.end())
+			return it->second;
+
+		return FT_TextManagement::FontsIndexes.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME)->second;
+	}
+#endif
 
 class ScrollFrame : public Object2D {
 	friend inline void Instance::deleteAllChildren();
@@ -3505,8 +3589,8 @@ private:
 		}
 	}
 protected:
-	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; };
-	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; }
+	ScrollFrame(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; ClipDescendants = true; };
+	ScrollFrame(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; EnterEventCondition = EEC_IF_DESCENDANT_HIGHER; Active = true; ClipDescendants = true; }
 
 	ScrollFrame() = delete;
 	~ScrollFrame() override {
@@ -3549,9 +3633,9 @@ public:
 	SpecialVector2 CanvasPositionOFFSET = { 0,0 };
 	float ScrollSpeed = 0.25;
 	float ScrollSpeedOFFSET = 0;
-	bool CropDescendants = true;
 	Color SliderColor = { 15,15,15,255 };
 	float SliderTransparency = 0.5;
+	float SliderRoundness = 1;
 	unsigned int SliderSize = 5;
 	char Direction = 'Y';
 	bool ScrollEnabled = true;
@@ -3564,8 +3648,14 @@ public:
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
-		if (CropDescendants) {
-			PushClip({ (int)RealPos.x, (int)RealPos.y, (int)RealSize.x, (int)RealSize.y });
+		if (ClipDescendants) {
+			SIMPLEUI_GLOBAL::ClipData clip = {
+				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
+				Roundness, Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
+			
+			SIMPLEUI_GLOBAL::PushClip(clip);
 
 			for (auto& [id, ptr] : toUpdateSectors) {
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
@@ -3588,7 +3678,7 @@ public:
 				s->Update(tempRes);
 			}
 
-			PopClip();
+			SIMPLEUI_GLOBAL::PopClip();
 		} else {
 			for (Instance* child : Children) {
 				child->Update(tempRes);
@@ -3618,7 +3708,7 @@ public:
 						Origin.x * RealSize.x + OriginOFFSET.x,
 						Origin.y * RealSize.y + OriginOFFSET.y
 					};
-					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation, SliderRoundness);
 				}
 			}
 
@@ -3645,7 +3735,7 @@ public:
 
 					SpecialVector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
 					SpecialVector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
-					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation, SliderRoundness);
 				}
 			}
 		}
@@ -3828,26 +3918,26 @@ inline SpecialVector2 getCanvasRealPos(Object2D* obj) {
 	return { 0,0 };
 }
 
-inline SpecialVector2 getScrollFrameRS(Instance* sc) {
-	if (sc->Class == SCROLLFRAME) {
-		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
-		return scra->RealSize;
+inline SpecialVector2 getObject2DRS(Instance* sc) {
+	if (Is2DInheritor(sc)) {
+		Object2D* obj = static_cast<ScrollFrame*>(sc);
+		return obj->RealSize;
 	}
 
 	return { 0,0 };
 }
-inline SpecialVector2 getScrollFrameRP(Instance* sc) {
-	if (sc->Class == SCROLLFRAME) {
-		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
-		return scra->RealPos;
+inline SpecialVector2 getObject2DRP(Instance* sc) {
+	if (Is2DInheritor(sc)) {
+		Object2D* obj = static_cast<ScrollFrame*>(sc);
+		return obj->RealPos;
 	}
 
 	return { 0,0 };
 }
-inline bool isScrollFrameCropping(Instance* sc) {
+inline bool isScrollFrameClips(Instance* sc) {
 	if (sc->Class == SCROLLFRAME) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
-		return scra->CropDescendants;
+		return scra->ClipDescendants;
 	}
 
 	return false;
@@ -3880,7 +3970,13 @@ class TextLabel : public Object2D {
 	int lastSpacing = 0;
 	int lastTextured = false;
 
+	int FontFaceIndex = 0;
+
 	TexturedTextLabelData data{};
+
+	std::vector<Color> GlyphsColor;
+	bool lastPerSymbol = false;
+
 
 	void updateCharOffsets() {
 		charOffsets.clear();
@@ -3913,10 +4009,11 @@ class TextLabel : public Object2D {
 			visibleText = Text;
 		}
 
+		lastPerSymbol = UsePerSymbolColor;
 		lastMaxVisible = MaxVisibleSymbols;
 		lastMaxVisibleRight = MaxVisibleRight;
 		rebuildVisible = false;
-		refSize = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), MeasureRefFont, Spacing);
+		refSize = MeasureTextEx(getFont(FontFaceIndex), visibleText.c_str(), MeasureRefFont, Spacing);
 		lastSpacing = Spacing;
 	}
 
@@ -3952,7 +4049,7 @@ class TextLabel : public Object2D {
 			textSizeOnTexture = {};
 			return;
 		}
-		textSizeOnTexture = MeasureTextEx(getFont(!FontFace), visibleText.c_str(), rasterFont, Spacing);
+		textSizeOnTexture = MeasureTextEx(getFont(FontFaceIndex), visibleText.c_str(), rasterFont, Spacing);
 
 		bool noTexture = cachedText.id == 0 or !cachedText.currentAtlas;
 		bool tooSmall = textSizeOnTexture.x > maxTextureSize.x or textSizeOnTexture.y > maxTextureSize.y;
@@ -3978,18 +4075,14 @@ class TextLabel : public Object2D {
 		}
 
 		if (cachedText.id and cachedText.currentAtlas) {
-			bool hadClip = !clipStack.empty();
-			Clip current;
-			if (hadClip) current = clipStack.back();
-
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
 			cachedText.currentAtlas->blankArea(cachedText);
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(!FontFace), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, rasterFont, Spacing, { 255,255,255,255 });
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, rasterFont, Spacing, { 255,255,255,255 }, ((GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor)));
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 
-			if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
 	}
 protected:
@@ -4014,21 +4107,20 @@ public:
 	bool MaxVisibleRight = false;
 	bool RoundText = true; // Cropping text which pixels placed out of rounded border
 	bool Textured = false; // Text will bake into texture and texture will be drawn on FB. Textured better in static scenes (uses more VRAM). Always true if EXCLUDE_SIMPLEUI_FREETYPE defined
+	bool UsePerSymbolColor = false;
 
-	const SUI_Text& GetText() const { // Deprecated functional. Now you can use ***->Text;
-		return Text;
+	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol. Requires FreeType
+		GlyphsColor = c;
+		if (Textured) {
+			rebuildVisible = true;
+		}
 	}
 
-	void SetText(const std::string& T) { // Deprecated functional. Now you can use ***->Text = ***;
-		Text = T;
-	}
-
-	const SUI_Text& GetFont() const { // Deprecated functional. Now you can use ***->FontFace;
-		return FontFace;
-	}
-
-	void SetFont(const std::string& F) { // Deprecated functional. Now you can use ***->FontFace = ***;
-		FontFace = F;
+	void ClearPerSymbolColor() {
+		GlyphsColor.clear();
+		if (Textured) {
+			rebuildVisible = true;
+		}
 	}
 
 	void Draw() override {
@@ -4057,6 +4149,11 @@ public:
 			};
 
 			bool dirty = Text.isChanged() or FontFace.isChanged();
+
+			if (FontFace.isChanged()) {
+				FontFaceIndex = getFontIndex(FontFace);
+			}
+
 			Text.restate();
 			FontFace.restate();
 
@@ -4067,7 +4164,7 @@ public:
 				allocFailed = false;
 			}
 
-			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight or lastSpacing != Spacing or (Textured and lastTextured != Textured)) {
+			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight or lastSpacing != Spacing or (Textured and lastTextured != Textured) or lastPerSymbol != UsePerSymbolColor) {
 				rebuildVisible = true;
 			}
 
@@ -4102,7 +4199,7 @@ public:
 
 				Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
 				if (rasterFont > 1) {
-					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(!FontFace), visibleText.c_str(), { destRec.x, destRec.y }, rasterFont, Spacing, TextColor, &data);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { destRec.x, destRec.y }, rasterFont, Spacing, TextColor, (GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor), &data);
 				}
 			}
 
@@ -4204,6 +4301,11 @@ class TextBox : public Object2D {
 	SpecialVector2 lastNewSize{};
 	TextBoxType lastType = TextBoxType::TEXTBOX_RESIZING;
 	int lastCursorIndex = -1;
+	int FontFaceIndex = 0;
+
+	std::vector<Color> GlyphsColor;
+	bool lastPerSymbol = false;
+	bool changedGlyphs = false;
 
 	std::string visibleText = "";
 
@@ -4211,12 +4313,12 @@ class TextBox : public Object2D {
 		if (Type != TextBoxType::TEXTBOX_RESIZING) {
 			textParams.y = 0;
 			textParams.x = 0;
-			textParams.z = getTextCFrame("A", getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
+			textParams.z = getTextCFrame("A", getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
 		} else {
 			if (Text != "") {
-				textParams = getTextCFrame(Text.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+				textParams = getTextCFrame(Text.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 			} else {
-				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(!FontFace), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
+				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 			}
 		}
 	}
@@ -4228,12 +4330,14 @@ class TextBox : public Object2D {
 		lastRealSize = RealSize;
 		lastHideText = HideText;
 		lastType = Type;
+		changedGlyphs = false;
+		lastPerSymbol = UsePerSymbolColor;
 
 		if (Text != "") {
-			newSize = MeasureTextEx(getFont(!FontFace), Text.c_str(), textParams.z, Spacing);
+			newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
 		} else {
 			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
-				newSize = MeasureTextEx(getFont(!FontFace), PlaceholderText.c_str(), textParams.z, Spacing);
+				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
 			}
 		}
 
@@ -4253,11 +4357,7 @@ class TextBox : public Object2D {
 			return;
 		}
 
-		bool hadClip = !clipStack.empty();
-		Clip current;
-		if (hadClip) current = clipStack.back();
-
-		if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::EndScissorMode();
+		SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
 
 		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
 		cachedText.currentAtlas->blankArea(cachedText);
@@ -4278,16 +4378,16 @@ class TextBox : public Object2D {
 				if (c == '\n') lines++;
 			}
 
-			DrawTextEx(getFont(FontFace), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
+			DrawTextEx(getFont(FontFaceIndex), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 		} else {
 			lines = 0;
 			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
-				DrawTextEx(getFont(FontFace), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 });
+				DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 			}
 		}
 
 		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-		if (hadClip) SIMPLEUI_GRAPHICS_WRAPS::BeginScissorMode(current.x, current.y, current.w, current.h);
+		SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 	}
 protected:
 	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
@@ -4301,6 +4401,7 @@ protected:
 	}
 public:
 	Color CursorColor = { 0,0,0,255 };
+	float CursorRoundness = 0;
 	SUI_Text Text = "";
 	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
 	SUI_Text PlaceholderText = "PlaceholderText";
@@ -4323,6 +4424,17 @@ public:
 	SpecialVector2 viewportPosition{};
 	bool CanType = true;
 	bool CanClick = true;
+	bool UsePerSymbolColor = false;
+
+	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol. Requires FreeType
+		GlyphsColor = c;
+		changedGlyphs = true;
+	}
+
+	void ClearPerSymbolColor() {
+		GlyphsColor.clear();
+		changedGlyphs = true;
+	}
 
 	int CursorSize = 3;
 	TextBoxType Type = TextBoxType::TEXTBOX_RESIZING;
@@ -4341,20 +4453,25 @@ public:
 		}
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged() or Text.isChanged();
+		bool updateCondition2 = lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this));
+
+		if (FontFace.isChanged()) {
+			FontFaceIndex = getFontIndex(FontFace);
+		}
 
 		Text.restate();
 		FontFace.restate();
 		PlaceholderText.restate();
 
-		if (updateCondition1 or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this))) {
+		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs) {
 			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
 		} else {
 			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
 				updateTextParams();
 				if (Text == "") {
-					newSize = MeasureTextEx(getFont(!FontFace), PlaceholderText.c_str(), textParams.z, Spacing);
+					newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
 				} else {
-					newSize = MeasureTextEx(getFont(!FontFace), Text.c_str(), textParams.z, Spacing);
+					newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
 				}
 			}
 		}
@@ -4394,7 +4511,7 @@ public:
 		if (Text.empty()) {
 			if (CursorVisible and SIMPLEUI_GLOBAL::FocusedTextBox == this) {
 				if (textParams.z > 1) {
-					float sizeY = textParams.z;
+					float sizeY = RealSize.y;
 
 					Vector2 o = {
 						Origin.x * RealSize.x + OriginOFFSET.x,
@@ -4404,7 +4521,7 @@ public:
 					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y - viewY },
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY },
-						CursorSize, CursorColor, RealPos, o, Rotation
+						CursorSize, CursorColor, RealPos, o, Rotation, CursorRoundness
 					);
 				}
 			}
@@ -4434,18 +4551,18 @@ public:
 				if (Text[charOffsets[i]] == '\n') currentLine++;
 			}
 
-			SpecialVector2 size = MeasureTextEx(getFont(!FontFace), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
+			SpecialVector2 size = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
 
 			if (size.x == 0 or size.y == 0) {
-				size.y = MeasureTextEx(getFont(!FontFace), "A", textParams.z, Spacing).y;
+				size.y = MeasureTextEx(getFont(FontFaceIndex), "A", textParams.z, Spacing).y;
 				if (size.y == 0) size.y = textParams.z;
 			}
 
 			float yOffset = 0.0f;
 			if (currentLine > 0) {
 				std::string newlinesStr(currentLine, '\n');
-				float totalH = MeasureTextEx(getFont(!FontFace), newlinesStr.c_str(), textParams.z, Spacing).y;
-				float singleH = MeasureTextEx(getFont(!FontFace), "A", textParams.z, Spacing).y;
+				float totalH = MeasureTextEx(getFont(FontFaceIndex), newlinesStr.c_str(), textParams.z, Spacing).y;
+				float singleH = MeasureTextEx(getFont(FontFaceIndex), "A", textParams.z, Spacing).y;
 				yOffset = totalH - singleH;
 			}
 
@@ -4457,7 +4574,7 @@ public:
 			SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY },
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset + size.y - viewY },
-				CursorSize, CursorColor, RealPos, o, Rotation
+				CursorSize, CursorColor, RealPos, o, Rotation, CursorRoundness
 			);
 		}
 	}
@@ -4562,10 +4679,10 @@ public:
 
 						for (int i = startIdx; i <= endIdx; i++) {
 							int currentByte = (i < (int)charOffsets.size()) ? charOffsets[i] : Text.size();
-							float widthCurr = MeasureTextEx(getFont(!FontFace), Text.substr(byteStart, currentByte - byteStart).c_str(), textParams.z, Spacing).x;
+							float widthCurr = MeasureTextEx(getFont(FontFaceIndex), Text.substr(byteStart, currentByte - byteStart).c_str(), textParams.z, Spacing).x;
 
 							int prevByte = (i > startIdx) ? charOffsets[i - 1] : byteStart;
-							float widthPrev = (i > startIdx) ? MeasureTextEx(getFont(!FontFace), Text.substr(byteStart, prevByte - byteStart).c_str(), textParams.z, Spacing).x : 0.0f;
+							float widthPrev = (i > startIdx) ? MeasureTextEx(getFont(FontFaceIndex), Text.substr(byteStart, prevByte - byteStart).c_str(), textParams.z, Spacing).x : 0.0f;
 
 							if (clickX < (widthPrev + widthCurr) / 2.0) {
 								CursorIndex = (i > startIdx) ? i - 1 : startIdx;
@@ -4820,7 +4937,7 @@ public:
 				std::string textBeforeCursorOnLine = (s == -1 ? "" : Text.substr(s, charOffsets[CursorIndex] - s));
 				std::string textBeforeCursorOnPreviousLine = (s1 == -1 ? "" : Text.substr(s1, ((s - s1 > 0) ? (s - s1 - 1) : 0)));
 
-				float currentX = MeasureTextEx(getFont(FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing).x;
+				float currentX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing).x;
 
 				int left = charI1;
 				int right = (charI > 0) ? charI - 1 : charI1;
@@ -4829,7 +4946,7 @@ public:
 				while (left <= right) {
 					int mid = left + (right - left) / 2;
 					std::string prefix = Text.substr(s1, charOffsets[mid] - s1);
-					float midX = MeasureTextEx(getFont(FontFace), prefix.c_str(), textParams.z, Spacing).x;
+					float midX = MeasureTextEx(getFont(FontFaceIndex), prefix.c_str(), textParams.z, Spacing).x;
 
 					if (midX <= currentX) {
 						targetCharI = mid;
@@ -4841,10 +4958,10 @@ public:
 
 				if (targetCharI < ((charI > 0) ? charI - 1 : charI1)) {
 					std::string prefix1 = Text.substr(s1, charOffsets[targetCharI] - s1);
-					float x1 = MeasureTextEx(getFont(FontFace), prefix1.c_str(), textParams.z, Spacing).x;
+					float x1 = MeasureTextEx(getFont(FontFaceIndex), prefix1.c_str(), textParams.z, Spacing).x;
 
 					std::string prefix2 = Text.substr(s1, charOffsets[targetCharI + 1] - s1);
-					float x2 = MeasureTextEx(getFont(FontFace), prefix2.c_str(), textParams.z, Spacing).x;
+					float x2 = MeasureTextEx(getFont(FontFaceIndex), prefix2.c_str(), textParams.z, Spacing).x;
 
 					if ((x2 - currentX) < (currentX - x1)) {
 						targetCharI++;
@@ -4906,7 +5023,7 @@ public:
 				}
 
 				std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex] - s);
-				float currentX = MeasureTextEx(getFont(FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing).x;
+				float currentX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing).x;
 
 				int left = charI1;
 				int right = charI2;
@@ -4915,7 +5032,7 @@ public:
 				while (left <= right) {
 					int mid = left + (right - left) / 2;
 					std::string prefix = Text.substr(s1, charOffsets[mid] - s1);
-					float midX = MeasureTextEx(getFont(FontFace), prefix.c_str(), textParams.z, Spacing).x;
+					float midX = MeasureTextEx(getFont(FontFaceIndex), prefix.c_str(), textParams.z, Spacing).x;
 
 					if (midX <= currentX) {
 						targetCharI = mid;
@@ -4927,10 +5044,10 @@ public:
 
 				if (targetCharI < charI2) {
 					std::string prefix1 = Text.substr(s1, charOffsets[targetCharI] - s1);
-					float x1 = MeasureTextEx(getFont(FontFace), prefix1.c_str(), textParams.z, Spacing).x;
+					float x1 = MeasureTextEx(getFont(FontFaceIndex), prefix1.c_str(), textParams.z, Spacing).x;
 
 					std::string prefix2 = Text.substr(s1, charOffsets[targetCharI + 1] - s1);
-					float x2 = MeasureTextEx(getFont(FontFace), prefix2.c_str(), textParams.z, Spacing).x;
+					float x2 = MeasureTextEx(getFont(FontFaceIndex), prefix2.c_str(), textParams.z, Spacing).x;
 
 					if ((x2 - currentX) < (currentX - x1)) {
 						targetCharI++;
@@ -4992,8 +5109,8 @@ public:
 				if (!charOffsets.empty()) {
 					std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex] - s);
 					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-					SpecialVector2 textSizeY = MeasureTextEx(getFont(!FontFace), textBeforeCursor.c_str(), textParams.z, Spacing);
-					SpecialVector2 textSizeX = MeasureTextEx(getFont(!FontFace), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
+					SpecialVector2 textSizeY = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursor.c_str(), textParams.z, Spacing);
+					SpecialVector2 textSizeX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
 
 					SpecialVector2 textSize = { textSizeX.x, textSizeY.y };
 
@@ -5031,43 +5148,29 @@ public:
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
+		bool c = ClipDescendants;
+
+		if (c) {
+			SIMPLEUI_GLOBAL::ClipData clip = {
+				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
+				Roundness, Rotation, 
+				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			};
+			
+			SIMPLEUI_GLOBAL::PushClip(clip);
+		}
+
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
 			child->Update(tempRes);
 		}
+
+		if (c) SIMPLEUI_GLOBAL::PopClip();
 	};
 
 	size_t size() {
 		updateCharOffsets();
 		return charOffsets.size();
-	}
-
-	void SetText(const std::string& t) {
-		std::vector<int> offsets;
-		for (int i = 0; i < t.size();) {
-			unsigned char c = t[i];
-			offsets.push_back(i);
-			if (c < 0x80) i += 1;
-			else if ((c & 0xE0) == 0xC0) i += 2;
-			else if ((c & 0xF0) == 0xE0) i += 3;
-			else if ((c & 0xF8) == 0xF0) i += 4;
-			else i += 1;
-		}
-
-		if (offsets.size() > MaxSymbols) {
-			Text = t.substr(0, offsets[MaxSymbols]);
-			updateCharOffsets();
-			CursorIndex = MaxSymbols;
-			return;
-		}
-
-		Text = t;
-		updateCharOffsets();
-		CursorIndex = t.size();
-	}
-
-	const SUI_Text& GetText() const {
-		return Text;
 	}
 
 	TextBox* Clone() const override {
@@ -6033,7 +6136,7 @@ inline namespace debug {
 
 		TextLabel* lowerName = TextLabel::New(debugMenu);
 		lowerName->Name = "debugName";
-		lowerName->SetText("(F2) Debug Menu");
+		lowerName->Text = "(F2) Debug Menu";
 		lowerName->BackgroundColor = { 0,0,0,255 };
 		lowerName->TextSize = -1;
 		lowerName->TextColor = DefaultDebugColor;
@@ -6041,7 +6144,7 @@ inline namespace debug {
 		lowerName->Size = SpecialVector2{ 0.24, 0.1 };
 		lowerName->TextAnchor = TextAnchorEnum::SE;
 		lowerName->BackgroundTransparency = 1;
-		lowerName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		lowerName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		/************************
 		*       Settings        *
@@ -6058,7 +6161,7 @@ inline namespace debug {
 
 		TextLabel* SettingsName = TextLabel::New(SettingsFrame);
 		SettingsName->Name = "SettingsName";
-		SettingsName->SetText("Settings");
+		SettingsName->Text = "Settings";
 		SettingsName->TextSize = -1;
 		SettingsName->TextColor = DefaultDebugColor;
 		SettingsName->Position = SpecialVector2{ 0.5, 0 };
@@ -6067,29 +6170,29 @@ inline namespace debug {
 		SettingsName->TextAnchor = TextAnchorEnum::CENTER;
 		SettingsName->BackgroundTransparency = 1;
 		SettingsName->BackgroundColor = { 0,0,0,255 };
-		SettingsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		SettingsName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		TextLabel* AnimLabel = TextLabel::New(SettingsFrame);
 		AnimLabel->Size = SpecialVector2{ 0.7, 0.2 };
 		AnimLabel->BackgroundTransparency = 1;
 		AnimLabel->BackgroundColor = { 0,0,0,255 };
 		AnimLabel->Position = SpecialVector2{ 0, 0.1 };
-		AnimLabel->SetText(" Animations");
+		AnimLabel->Text = " Animations";
 		AnimLabel->TextAnchor = TextAnchorEnum::W;
 		AnimLabel->TextSize = -1;
 		AnimLabel->TextColor = DefaultDebugColor;
-		AnimLabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		AnimLabel->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		AnimLabel->Name = "animLabel";
 
 		TextLabel* AnimButton = TextLabel::New(SettingsFrame);
 		AnimButton->Size = SpecialVector2{ 0.19, 0.15 };
 		AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
 		AnimButton->Position = SpecialVector2{ 0.8, 0.125 };
-		AnimButton->SetText(Animations ? " On " : " Off ");
+		AnimButton->Text = Animations ? " On " : " Off ";
 		AnimButton->TextAnchor = TextAnchorEnum::W;
 		AnimButton->TextSize = -1;
 		AnimButton->TextColor = { 0,0,0,255 };
-		AnimButton->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		AnimButton->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		AnimButton->Name = "animButton";
 		AnimButton->Active = true;
 		AnimButton->AddEvent(MOUSE_CLICK, [](Instance* t) {Animations = !Animations; }, MOUSE_LEFT);
@@ -6100,22 +6203,22 @@ inline namespace debug {
 		LGMlabel->BackgroundTransparency = 1;
 		LGMlabel->BackgroundColor = { 0,0,0,255 };
 		LGMlabel->Position = SpecialVector2{ 0, 0.3 };
-		LGMlabel->SetText(" Low Graphics Mode");
+		LGMlabel->Text = " Low Graphics Mode";
 		LGMlabel->TextAnchor = TextAnchorEnum::W;
 		LGMlabel->TextSize = -1;
 		LGMlabel->TextColor = DefaultDebugColor;
-		LGMlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		LGMlabel->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		LGMlabel->Name = "LGMlabel";
 
 		TextLabel* LGMbutton = TextLabel::New(SettingsFrame);
 		LGMbutton->Size = SpecialVector2{ 0.19, 0.15 };
 		LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 };
 		LGMbutton->Position = SpecialVector2{ 0.8, 0.325 };
-		LGMbutton->SetText(lowGraphicsMode ? " On " : " Off ");
+		LGMbutton->Text = lowGraphicsMode ? " On " : " Off ";
 		LGMbutton->TextAnchor = TextAnchorEnum::W;
 		LGMbutton->TextSize = -1;
 		LGMbutton->TextColor = { 0,0,0,255 };
-		LGMbutton->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		LGMbutton->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		LGMbutton->Name = "LGMbutton";
 		LGMbutton->Active = true;
 		LGMbutton->AddEvent(MOUSE_CLICK, [](Instance* t) {lowGraphicsMode = !lowGraphicsMode; }, MOUSE_LEFT);
@@ -6126,11 +6229,11 @@ inline namespace debug {
 		FPSlabel->BackgroundTransparency = 1;
 		FPSlabel->BackgroundColor = { 0,0,0,255 };
 		FPSlabel->Position = SpecialVector2{ 0, 0.5 };
-		FPSlabel->SetText(" FPS mode");
+		FPSlabel->Text = " FPS mode";
 		FPSlabel->TextAnchor = TextAnchorEnum::W;
 		FPSlabel->TextSize = -1;
 		FPSlabel->TextColor = DefaultDebugColor;
-		FPSlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		FPSlabel->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		FPSlabel->Name = "FPSlabel";
 
 		Object2D* FPSframe = TextLabel::New(SettingsFrame);
@@ -6146,11 +6249,11 @@ inline namespace debug {
 		FPSleft->BackgroundTransparency = 1;
 		FPSleft->BackgroundColor = { 0,0,0,255 };
 		FPSleft->Position = SpecialVector2{ 0.0, 0.2 };
-		FPSleft->SetText("<");
+		FPSleft->Text = "<";
 		FPSleft->TextAnchor = TextAnchorEnum::CENTER;
 		FPSleft->TextSize = -1;
 		FPSleft->TextColor = DefaultDebugColor;
-		FPSleft->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		FPSleft->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		FPSleft->Name = "FPSleft";
 		FPSleft->Active = true;
 		FPSleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex--; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
@@ -6161,10 +6264,10 @@ inline namespace debug {
 		FPSquantity->BackgroundColor = { 0,0,0,255 };
 		FPSquantity->Position = SpecialVector2{ 0.25, 0 };
 		std::ostringstream st; st << " " << typeFPS[currentFPSindex] << " ";
-		FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str()));
+		FPSquantity->Text = currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : st.str());
 		FPSquantity->TextSize = -1;
 		FPSquantity->TextColor = DefaultDebugColor;
-		FPSquantity->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		FPSquantity->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		FPSquantity->Name = "FPSquantity";
 
 		TextLabel* FPSright = TextLabel::New(FPSframe);
@@ -6172,11 +6275,11 @@ inline namespace debug {
 		FPSright->BackgroundTransparency = 1;
 		FPSright->BackgroundColor = { 0,0,0,255 };
 		FPSright->Position = SpecialVector2{ 0.75, 0.2 };
-		FPSright->SetText(">");
+		FPSright->Text = ">";
 		FPSright->TextAnchor = TextAnchorEnum::CENTER;
 		FPSright->TextSize = -1;
 		FPSright->TextColor = DefaultDebugColor;
-		FPSright->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		FPSright->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		FPSright->Name = "FPSright";
 		FPSright->Active = true;
 		FPSright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentFPSindex++; currentFPSindex += 4; currentFPSindex = currentFPSindex % 4; }, MOUSE_LEFT);
@@ -6186,11 +6289,11 @@ inline namespace debug {
 		Colorlabel->BackgroundTransparency = 1;
 		Colorlabel->BackgroundColor = { 0,0,0,255 };
 		Colorlabel->Position = SpecialVector2{ 0, 0.7 };
-		Colorlabel->SetText(" Menu color");
+		Colorlabel->Text = " Menu color";
 		Colorlabel->TextAnchor = TextAnchorEnum::W;
 		Colorlabel->TextSize = -1;
 		Colorlabel->TextColor = DefaultDebugColor;
-		Colorlabel->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		Colorlabel->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		Colorlabel->Name = "Colorlabel";
 
 		Object2D* Colorframe = TextLabel::New(SettingsFrame);
@@ -6206,11 +6309,11 @@ inline namespace debug {
 		Colorleft->BackgroundTransparency = 1;
 		Colorleft->BackgroundColor = { 0,0,0,255 };
 		Colorleft->Position = SpecialVector2{ 0.0, 0.2 };
-		Colorleft->SetText("<");
+		Colorleft->Text = "<";
 		Colorleft->TextAnchor = TextAnchorEnum::CENTER;
 		Colorleft->TextSize = -1;
 		Colorleft->TextColor = DefaultDebugColor;
-		Colorleft->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		Colorleft->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		Colorleft->Name = "Colorleft";
 		Colorleft->Active = true;
 		Colorleft->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor--; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
@@ -6227,11 +6330,11 @@ inline namespace debug {
 		Colorright->BackgroundTransparency = 1;
 		Colorright->BackgroundColor = { 0,0,0,255 };
 		Colorright->Position = SpecialVector2{ 0.75, 0.2 };
-		Colorright->SetText(">");
+		Colorright->Text = ">";
 		Colorright->TextAnchor = TextAnchorEnum::CENTER;
 		Colorright->TextSize = -1;
 		Colorright->TextColor = DefaultDebugColor;
-		Colorright->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		Colorright->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 		Colorright->Name = "Colorright";
 		Colorright->Active = true;
 		Colorright->AddEvent(MOUSE_CLICK, [](Instance* t) { currentColor++; currentColor += 9; currentColor = currentColor % 9; }, MOUSE_LEFT);
@@ -6251,7 +6354,7 @@ inline namespace debug {
 
 		TextLabel* LogsName = TextLabel::New(LogsFrame);
 		LogsName->Name = "LogsName";
-		LogsName->SetText("Logs");
+		LogsName->Text = "Logs";
 		LogsName->TextSize = -1;
 		LogsName->TextColor = DefaultDebugColor;
 		LogsName->Position = SpecialVector2{ 0.5, 0 };
@@ -6259,7 +6362,7 @@ inline namespace debug {
 		LogsName->Size = SpecialVector2{ 0.8, 0.055 };
 		LogsName->TextAnchor = TextAnchorEnum::CENTER;
 		LogsName->BackgroundTransparency = 1;
-		LogsName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		LogsName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		console = ScrollFrame::New(LogsFrame);
 		console->BackgroundColor = { 0,0,0,255 };
@@ -6293,7 +6396,7 @@ inline namespace debug {
 
 		TextLabel* treeName = TextLabel::New(treeFrame);
 		treeName->Name = "treeName";
-		treeName->SetText("Objects hierarchy");
+		treeName->Text = "Objects hierarchy";
 		treeName->TextSize = -1;
 		treeName->TextColor = DefaultDebugColor;
 		treeName->Position = SpecialVector2{ 0.5, 0 };
@@ -6301,7 +6404,7 @@ inline namespace debug {
 		treeName->Size = SpecialVector2{ 0.8, 0.055 };
 		treeName->TextAnchor = TextAnchorEnum::CENTER;
 		treeName->BackgroundTransparency = 1;
-		treeName->SetFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME);
+		treeName->FontFace = SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME;
 
 		Object2D* manageMenu = Object2D::New(treeFrame);
 		manageMenu->Name = "manageMenu";
@@ -6378,9 +6481,9 @@ inline namespace debug {
 			}
 		});
 
-		ChangedSignal<int>::New(currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->SetText(currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str())); });
-		ChangedSignal<bool>::New(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->SetText(Animations ? " On " : " Off ");});
-		ChangedSignal<bool>::New(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->SetText(lowGraphicsMode ? " On " : " Off "); });
+		ChangedSignal<int>::New(currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->Text = currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str()); });
+		ChangedSignal<bool>::New(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->Text = Animations ? " On " : " Off ";});
+		ChangedSignal<bool>::New(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->Text = lowGraphicsMode ? " On " : " Off "; });
 
 		ChangedSignal<Instance*>::New(currentInstance, [way, treeScroll]() {
 			way->deleteAllChildren();
@@ -6403,7 +6506,7 @@ inline namespace debug {
 					element->TextColor = typeColor[currentColor];
 					element->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f, 0 };
 					element->Size = SpecialVector2{ 0.2, 0.9 };
-					element->SetText(objects[i]->Name);
+					element->Text = objects[i]->Name;
 					element->Active = true;
 
 					if (i != 0) {
@@ -6413,7 +6516,7 @@ inline namespace debug {
 						element2->TextColor = typeColor[currentColor];
 						element2->Position = SpecialVector2{ (objects.size() - i - 1) * 0.25f + 0.2f , 0 };
 						element2->Size = SpecialVector2{ 0.05, 0.9 };
-						element2->SetText(">");
+						element2->Text = ">";
 					}
 
 					element->AddEvent(MOUSE_CLICK, [i](Instance* t) { currentInstance = objects[i]; }, MOUSE_LEFT);
@@ -6437,7 +6540,7 @@ inline namespace debug {
 					element->Position = { 0, (i - dec) * 0.05f };
 					element->Size = { 1, 0.05 };
 					std::ostringstream pupupupu; pupupupu << " > " << currentInstance->Children[i]->Name;
-					element->SetText(pupupupu.str());
+					element->Text = pupupupu.str();
 					element->Active = true;
 					element->TextAnchor = TextAnchorEnum::W;
 					element->AddEvent(MOUSE_CLICK, [i, dec](Instance* t) { currentInstance = objects2[i - dec]; }, MOUSE_LEFT);
@@ -6491,7 +6594,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 	std::function<bool(Instance*, int)> getTop = [&getTop, &best, &maxDepth](Instance* parent, int localDepth) -> bool {
 		bool foundInThisBranch = false;
 
-		if (parent->Class == SCROLLFRAME and static_cast<ScrollFrame*>(parent)->CropDescendants) {
+		if (parent->Class == SCROLLFRAME and static_cast<ScrollFrame*>(parent)->ClipDescendants) {
 			ScrollFrame* scroll = static_cast<ScrollFrame*>(parent);
 
 			for (auto sector : scroll->sectorsOnView) {
@@ -6658,8 +6761,7 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 
 		static Vector2 previousMousePosition = {};
 		SIMPLEUI_GLOBAL::mousePosition = GetMousePosition();
-		SIMPLEUI_GLOBAL::mouseScreenPosition = GetMouseScreenPosition();
-		SIMPLEUI_GLOBAL::windowPosition = GetWindowPosition();
+		SIMPLEUI_GLOBAL::mouseOnWindow = IsCursorOnScreen();
 
 		static Vector2 previousWinSize = { -1, -1 };
 		SIMPLEUI_GLOBAL::winWidth = GetScreenWidth(); SIMPLEUI_GLOBAL::winHeight = GetScreenHeight();
@@ -6697,6 +6799,8 @@ inline void start(Instance* StartInstance = nullptr, Vector3 windowData = { 1280
 		SIMPLEUI_GLOBAL::framesSinceStart += 1;
 
 		DrawFrame(StartInstance);
+
+		SIMPLEUI_GLOBAL::clips.clear();
 
 		SIMPLEUI_GLOBAL::CollectDeadObjects();
 

@@ -42,17 +42,47 @@ ExternalProject_Add(raylib
         -DUSE_EXTERNAL_GLFW=ON
 )
 
+ExternalProject_Add(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG ${ZLIB_TAG}
+    GIT_SHALLOW ON
+    CMAKE_ARGS ${COMMON_ARGS}
+        -DZLIB_BUILD_SHARED=OFF
+        -DZLIB_BUILD_STATIC=ON
+        -DZLIB_BUILD_TESTING=OFF
+        -DZLIB_BUILD_EXAMPLES=OFF
+)
+
+ExternalProject_Add(libpng
+    GIT_REPOSITORY https://github.com/pnggroup/libpng.git
+    GIT_TAG ${PNG_TAG}
+    GIT_SHALLOW ON
+    DEPENDS zlib
+    CMAKE_ARGS ${COMMON_ARGS}
+        -DBUILD_SHARED_LIBS=OFF
+        -DPNG_SHARED=OFF
+        -DPNG_TESTS=OFF
+        -DPNG_TOOLS=OFF
+        -DPNG_FRAMEWORK=OFF
+        -DZLIB_ROOT=${DEPS_PREFIX}
+        -DZLIB_USE_STATIC_LIBS=ON
+)
+
 ExternalProject_Add(freetype
     GIT_REPOSITORY https://github.com/freetype/freetype.git
     GIT_TAG ${FT_TAG}
     GIT_SHALLOW ON
+    DEPENDS libpng zlib
     CMAKE_ARGS ${COMMON_ARGS}
         -DBUILD_SHARED_LIBS=ON
-        -DFT_DISABLE_ZLIB=ON
+        -DFT_REQUIRE_PNG=ON
+        -DFT_REQUIRE_ZLIB=ON
         -DFT_DISABLE_BZIP2=ON
-        -DFT_DISABLE_PNG=ON
         -DFT_DISABLE_BROTLI=ON
         -DFT_DISABLE_HARFBUZZ=ON
+        -DZLIB_ROOT=${DEPS_PREFIX}
+        -DZLIB_USE_STATIC_LIBS=ON
+        -DPNG_ROOT=${DEPS_PREFIX}
 )
 
 ExternalProject_Add(harfbuzz

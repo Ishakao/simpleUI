@@ -1035,15 +1035,18 @@ struct TexturedTextLabelData {
         inline std::unordered_map<std::string, int> FontsIndexes;
 
         inline bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
-            auto it = FontsIndexes.find(name);
-			if (it == FontsIndexes.end()) {
-            	Fonts.emplace_back(paths, size, startSide, maxSide);
-				FontsIndexes.insert({name, Fonts.size()-1});
-				return true;
+			if (FontsIndexes.find(name) != FontsIndexes.end()) return false;
+
+			Fonts.emplace_back(paths, size, startSide, maxSide);
+			if (!Fonts.back().Valid()) {
+				Fonts.pop_back();
+				std::cout << RED_ANSI << "Font \"" << name << "\" failed to load" << DEFAULT_ANSI << std::endl;
+				return false;
 			}
 
-			return false;
-        }
+			FontsIndexes.insert({ name, (int)Fonts.size() - 1 });
+			return true;
+		}
 
         inline void UnloadFonts() { Fonts.clear(); }
 
@@ -1918,15 +1921,11 @@ namespace Animate {
 
 	enum Function {
 		Linear,
-		Smooth,
 		Quad,
 		Cube,
-		Quart,
-		Quint,
 		Sine,
 		Circular,
 		Exponential,
-		Back,
 		Bounce
 	};
 
@@ -7043,6 +7042,14 @@ inline void UpdateHigher(Instance* StartInstance) {
 	SIMPLEUI_GLOBAL::higherObject = best;
 }
 
+inline std::string SUI_ResolveAsset(const std::string& rel) {
+	std::filesystem::path p(rel);
+	if (p.is_absolute()) return rel;
+	std::filesystem::path beside = std::filesystem::path(RAYLIB_FUNCTIONAL::GetApplicationDirectory()) / p;
+	if (std::filesystem::exists(beside)) return beside.string();
+	return rel;
+}
+
 struct WindowData {
 	int width = 1280;
 	int height = 720;
@@ -7097,8 +7104,15 @@ inline bool SUI_InitNewWindow(Instance* StartInstance = nullptr, WindowData wind
 }
 
 inline void SUI_LoadPendings() {
-	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
-	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
+	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, SUI_ResolveAsset("Fonts/arial.ttf"), 60); // Basic Font 1
+	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, SUI_ResolveAsset("Fonts/rogFont.otf"), 35); // Basic Font 2
+
+	#ifndef EXCLUDE_SIMPLEUI_FREETYPE
+		if (FT_TextManagement::FontsIndexes.find(SIMPLEUI_GLOBAL::BASIC_FONT_NAME) == FT_TextManagement::FontsIndexes.end()) {
+			SIMPLEUI_THROW("default font not found, expected Fonts/arial.ttf beside the executable");
+		}
+	#endif
+
 	SIMPLEUI_GLOBAL::RectangleRoundnessShader = LoadNewShaderFromMemory(SIMPLEUI_GLOBAL::RectangleRoundnessShaderVertexBytes, SIMPLEUI_GLOBAL::RectangleRoundnessShaderFragmentBytes); // Basic shader
 
 	for (auto& tup : SIMPLEUI_GLOBAL::queuedFonts) {

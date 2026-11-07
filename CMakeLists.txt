@@ -17,20 +17,13 @@ endif()
 set(HB_TAG "11.2.1" CACHE STRING "")
 set(RAYLIB_TAG "5.5" CACHE STRING "")
 set(GLFW_TAG "3.4" CACHE STRING "")
-set(ZLIB_TAG "v1.3.1" CACHE STRING "")
-set(PNG_TAG "v1.6.43" CACHE STRING "")
 set(FT_TAG "VER-2-13-3" CACHE STRING "")
+set(UTF8PROC_TAG "v2.10.0" CACHE STRING "")
 
 set(TOOLCHAIN "${CMAKE_CXX_COMPILER_ID}")
 set(LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${TOOLCHAIN}")
 set(BIN_DIR "${CMAKE_SOURCE_DIR}/bin/${TOOLCHAIN}")
 set(STAGE_DIR "${CMAKE_BINARY_DIR}/deps_stage")
-
-if(MSVC)
-    set(SUI_MSVC_LIKE 1)
-else()
-    set(SUI_MSVC_LIKE 0)
-endif()
 
 if(NOT EXISTS "${LIB_DIR}/.deps_ok")
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/deps_build" "${STAGE_DIR}")
@@ -48,9 +41,6 @@ if(NOT EXISTS "${LIB_DIR}/.deps_ok")
             -DGLFW_TAG=${GLFW_TAG}
             -DFT_TAG=${FT_TAG}
             -DHB_TAG=${HB_TAG}
-            -DDEPS_MSVC_LIKE=${SUI_MSVC_LIKE}
-            -DZLIB_TAG=${ZLIB_TAG}
-            -DPNG_TAG=${PNG_TAG}
         RESULT_VARIABLE DEPS_RES
     )
     if(NOT DEPS_RES EQUAL 0)
@@ -90,6 +80,7 @@ sui_find(SUI_GLFW glfw3dll glfw3 glfw)
 sui_find(SUI_FREETYPE freetype libfreetype)
 sui_find(SUI_HB harfbuzz)
 sui_find(SUI_HB_SUBSET harfbuzz-subset)
+sui_find(SUI_UTF8PROC utf8proc utf8proc_static libutf8proc)
 
 set(SUI_HB_EXTRA "")
 foreach(n harfbuzz-gpu harfbuzz-raster harfbuzz-vector)
@@ -117,6 +108,7 @@ target_link_libraries(SIMPLEUI_TEST PRIVATE
     ${SUI_HB_SUBSET}
     ${SUI_HB_EXTRA}
     ${SUI_FREETYPE}
+    ${SUI_UTF8PROC}
 )
 
 if(UNIX AND NOT APPLE)
@@ -131,7 +123,7 @@ endif()
 if(UNIX AND NOT APPLE)
     target_link_libraries(SIMPLEUI_TEST PRIVATE X11 GL m pthread dl)
     set_target_properties(SIMPLEUI_TEST PROPERTIES
-        BUILD_WITH_INSTALL_RPATH ON
+        BUILD_RPATH "${LIB_DIR}"
         INSTALL_RPATH "$ORIGIN"
     )
 endif()
@@ -140,7 +132,7 @@ if(WIN32)
     target_link_libraries(SIMPLEUI_TEST PRIVATE winmm gdi32)
 endif()
 
-target_compile_definitions(SIMPLEUI_TEST PRIVATE API_LIB_EXPORT=)
+target_compile_definitions(SIMPLEUI_TEST PRIVATE API_LIB_EXPORT= UTF8PROC_STATIC)
 
 if(MSVC)
     target_compile_options(SIMPLEUI_TEST PRIVATE /W0)
@@ -159,16 +151,7 @@ if(RUNTIME_DLLS)
     )
 endif()
 
-if(UNIX AND NOT APPLE)
-    add_custom_command(TARGET SIMPLEUI_TEST POST_BUILD
-        COMMAND sh -c "cp -a '${LIB_DIR}'/*.so* '$<TARGET_FILE_DIR:SIMPLEUI_TEST>/'"
-    )
-endif()
-
 add_custom_command(TARGET SIMPLEUI_TEST POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/Fonts $<TARGET_FILE_DIR:SIMPLEUI_TEST>/Fonts
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/simpleUI Shaders"
-        "$<TARGET_FILE_DIR:SIMPLEUI_TEST>/simpleUI Shaders"
 )

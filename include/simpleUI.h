@@ -181,6 +181,10 @@ using RAYLIB_FUNCTIONAL::KEY_ENTER;
 #include <type_traits>
 #include <atomic>
 #include <cstddef>
+#include <array>
+#include <cassert>
+#include <stdexcept>
+#include <utf8proc.h>
 
 #define RED_ANSI "\033[31m"
 #define GREEN_ANSI "\033[32m"
@@ -261,10 +265,15 @@ inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, flo
 	FlushRectanglesBatch();
 	RAYLIB_FUNCTIONAL::DrawTexturePro(t, s, d, o, r, c);
 }
+
 struct SpecialVector2 {
 	template <size_t Index>
 	struct num {
 		float n{};
+
+		num() = default;
+		explicit num(float v) : n(v) {}
+		num(const num&) = delete;
 
 		SpecialVector2* getOwner() {
 			size_t offset = (Index == 0) ? offsetof(SpecialVector2, x) : offsetof(SpecialVector2, y);
@@ -273,7 +282,7 @@ struct SpecialVector2 {
 
 		operator float() const { return n; }
 
-		template <typename T>
+		template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
 		num& operator=(T val) {
 			float new_val = static_cast<float>(val);
 			if (n != new_val) {
@@ -306,17 +315,16 @@ struct SpecialVector2 {
 	num_y y;
 
 	SpecialVector2() = default;
-
-	SpecialVector2(float x_val, float y_val, Object2D* parental = nullptr) : parentalObj(parental), x{ x_val }, y{ y_val } {}
-
-	SpecialVector2(const Vector2& other) : x{ other.x }, y{ other.y } {}
+	SpecialVector2(float x_val, float y_val, Object2D* parental = nullptr) : parentalObj(parental), x(x_val), y(y_val) {}
+	SpecialVector2(const Vector2& other) : x(other.x), y(other.y) {}
+	SpecialVector2(const SpecialVector2& other) : x(other.x.n), y(other.y.n) {}
 
 	operator Vector2() const {
 		return { x.n, y.n };
 	}
 
 	SpecialVector2& operator=(const SpecialVector2& other) {
-		if (alarmWhenChanged and (x.n != other.x or y.n != other.y)) {
+		if (alarmWhenChanged and (x.n != other.x.n or y.n != other.y.n)) {
 			alarmWhenChanged = false;
 			x = other.x;
 			y = other.y;
@@ -326,14 +334,14 @@ struct SpecialVector2 {
 				updateObject2DVector(parentalObj);
 			}
 		} else {
-			x.n = other.x;
-			y.n = other.y;
+			x.n = other.x.n;
+			y.n = other.y.n;
 		}
 		return *this;
 	}
 
 	bool operator==(const SpecialVector2& other) const {
-		return other.x == x and other.y == y;
+		return other.x.n == x.n and other.y.n == y.n;
 	}
 };
 
@@ -343,6 +351,9 @@ struct IChangedSignal {
 	friend inline void Delete(Instance*);
 	virtual ~IChangedSignal() = default;
 	virtual void Update() = 0;
+
+protected:
+	bool deleted = false;
 };
 
 namespace SIMPLEUI_GLOBAL {
@@ -360,6 +371,7 @@ namespace SIMPLEUI_GLOBAL {
 	inline constexpr const char* BASIC_FONT_NAME = "Arial";
 	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
 	inline std::unordered_map<int, Shader> Shaders;
+	inline bool UpdateStaticShader = true;
 	inline int ShadersCur = 0;
 	inline long long currentUniqueObjectID = 0;
 	inline bool sceneDirty = false; // true in frame where any object hierarchy, size or position changed
@@ -1672,6 +1684,29 @@ public:
 	}
 };
 
+inline std::vector<int> SUI_ClusterOffsets(const std::string& s) {
+	std::vector<int> out;
+	const utf8proc_uint8_t* p = reinterpret_cast<const utf8proc_uint8_t*>(s.data());
+	utf8proc_ssize_t n = static_cast<utf8proc_ssize_t>(s.size());
+	utf8proc_ssize_t i = 0;
+	utf8proc_int32_t prev = -1;
+	utf8proc_int32_t state = 0;
+
+	while (i < n) {
+		utf8proc_int32_t cp = 0;
+		utf8proc_ssize_t len = utf8proc_iterate(p + i, n - i, &cp);
+		if (len < 1) { cp = 0xFFFD; len = 1; }
+		if (prev < 0 or utf8proc_grapheme_break_stateful(prev, cp, &state)) {
+			out.push_back(static_cast<int>(i));
+		}
+		prev = cp;
+		i += len;
+	}
+
+	out.push_back(static_cast<int>(s.size()));
+	return out;
+}
+
 namespace Tasks {
 	class Task;
 	inline std::vector<Task*> ActiveTasks;
@@ -1721,14 +1756,19 @@ namespace Tasks {
 	}
 }
 
+namespace SIMPLEUI_GLOBAL {
+	inline std::vector<IChangedSignal*> SignalsToDetele;
+}
+
 template <typename T>
 class ChangedSignal : public IChangedSignal {
 public:
 	void Update() {
 		if (*SignalPTR != *LastValue) {
-			Callback();
 			delete LastValue;
 			LastValue = new T(*SignalPTR);
+
+			Callback();
 		}
 	}
 private:
@@ -1747,9 +1787,9 @@ private:
 	}
 public:
 	void Disconnect() {
-		auto z = find(SIMPLEUI_GLOBAL::ActiveSignals.begin(), SIMPLEUI_GLOBAL::ActiveSignals.end(), this);
-		if (z != SIMPLEUI_GLOBAL::ActiveSignals.end()) SIMPLEUI_GLOBAL::ActiveSignals.erase(z);
-		delete this;
+		if (deleted) return;
+		deleted = true;
+		SIMPLEUI_GLOBAL::SignalsToDetele.push_back(this);
 	}
 
 	static ChangedSignal* New(T& p, std::function<void(void)> func) {
@@ -1764,7 +1804,7 @@ public:
 		if (*SignalPTR != *LastValue) {
 			delete LastValue;
 			LastValue = new T(*SignalPTR);
-			
+
 			Callback();
 		}
 	}
@@ -1988,10 +2028,10 @@ namespace Animate {
 		float endValueF{};
 		Color startValueC{};
 		Color endValueC{};
-		SpecialVector2::num_x startValueNX{};
-		SpecialVector2::num_x startValueNY{};
-		SpecialVector2::num_y endValueNX{};
-		SpecialVector2::num_y endValueNY{};
+		float startValueNX{};
+		float startValueNY{};
+		float endValueNX{};
+		float endValueNY{};
 		SpecialVector2 startValueV{};
 		SpecialVector2 endValueV{};
 
@@ -2057,10 +2097,10 @@ namespace Animate {
 		float endValueF{};
 		Color startValueC{};
 		Color endValueC{};
-		SpecialVector2::num_x startValueNX{};
-		SpecialVector2::num_y startValueNY{};
-		SpecialVector2::num_x endValueNX{};
-		SpecialVector2::num_y endValueNY{};
+		float startValueNX{};
+		float startValueNY{};
+		float endValueNX{};
+		float endValueNY{};
 		SpecialVector2 startValueV{};
 		SpecialVector2 endValueV{};
 
@@ -2463,12 +2503,14 @@ public:
 
 class Instance {
 	friend void UpdateChildren(Instance*);
+	friend void SUI_RenderFrame(Instance*);
 	friend class Object2D;
 	friend void Delete(Instance* ptr);
 	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
 protected:
 	size_t lastUpdateFrame = 0;
 	bool DontSeekParent = false;
+	bool DestroyCalled = false;
 	bool updateChildrenZIndex = true;
 	int currentEventID = 0;
 public:
@@ -2487,7 +2529,7 @@ protected:
 	std::vector<std::pair<long, Instance*>> childsRemovedInFrame;
 
 	virtual void basicCloneOperation(Instance* copyfrom) {
-		this->Parent = nullptr;
+		this->Parent.SetDirectly(nullptr);
 		this->Children.clear();
 		updateWhenWillBeVisible = true;
 		SIMPLEUI_GLOBAL::sceneDirty = true;
@@ -2664,6 +2706,8 @@ public:
 	}
 
 	void Destroy() {
+		if (DestroyCalled) return;
+		DestroyCalled = true;
 		Delete(this);
 	}
 
@@ -3100,12 +3144,24 @@ inline void FlushRectanglesBatch() {
 	if (v.empty()) return;
 
 	static Shader shader = GetShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+
+	if (SIMPLEUI_GLOBAL::UpdateStaticShader) {
+		shader = GetShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+	}
+
 	if (!RectGPU::vao) RectGPU::Init();
 
 	RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
 	RAYLIB_FUNCTIONAL::rlEnableShader(shader.id);
 
 	static int clipLoc = RAYLIB_FUNCTIONAL::rlGetLocationUniform(shader.id, "clips");
+
+	if (SIMPLEUI_GLOBAL::UpdateStaticShader) {
+		clipLoc = RAYLIB_FUNCTIONAL::rlGetLocationUniform(shader.id, "clips");
+	}
+
+	SIMPLEUI_GLOBAL::UpdateStaticShader = false;
+
 	if (!SIMPLEUI_GLOBAL::clips.empty()) {
 		int n = (int)std::min<size_t>(SIMPLEUI_GLOBAL::clips.size(), SIMPLEUI_GLOBAL::MAX_CLIP_STACK_SIZE);
 		RAYLIB_FUNCTIONAL::rlSetUniform(clipLoc, SIMPLEUI_GLOBAL::clips.data(), RAYLIB_FUNCTIONAL::RL_SHADER_UNIFORM_VEC4, n * 2);
@@ -3147,8 +3203,8 @@ class Object2D : public Instance {
 	bool startedOnObject2 = false;
 	bool startedOnObject3 = false;
 
-	bool lastActive = Active;
-	int lastZIndex = ZIndex;
+	bool lastActive = false;
+	int lastZIndex = 0;
 protected:
 	bool lastVisible = false;
 	bool posOrSizeChangedResult = false;
@@ -3175,12 +3231,12 @@ protected:
 
 	// Updating parent pointer in SpecialVector2 (after cloning)
 	void UpdateAllVectorPointers() {
-		PositionOFFSET.parentalObj = this;
-		AnchorPositionOFFSET.parentalObj = this;
+		PositionOffset.parentalObj = this;
+		AnchorPositionOffset.parentalObj = this;
 		Position.parentalObj = this;
 		AnchorPosition.parentalObj = this;
 		Size.parentalObj = this;
-		SizeOFFSET.parentalObj = this;
+		SizeOffset.parentalObj = this;
 
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
 	}
@@ -3230,13 +3286,13 @@ public:
 	Vector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
 	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
 
-	SpecialVector2 PositionOFFSET{ 0, 0, this };
-	SpecialVector2 AnchorPositionOFFSET{ 0, 0, this };
+	SpecialVector2 PositionOffset{ 0, 0, this };
+	SpecialVector2 AnchorPositionOffset{ 0, 0, this };
 	SpecialVector2 Position{ 0, 0, this };
 	SpecialVector2 AnchorPosition{ 0, 0, this };
 
 	SpecialVector2 Size{ 0, 0, this };
-	SpecialVector2 SizeOFFSET{ 0, 0, this };
+	SpecialVector2 SizeOffset{ 0, 0, this };
 
 	float Rotation = 0; // Local object rotation
 	Vector2 Origin = { 0.5,0.5 }; // Local object origin
@@ -3284,8 +3340,8 @@ public:
 
 		Vector2 parentSizePx = parent2D ? parent2D->RealSize : Vector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 
-		sizePx.x = std::roundf(parentSizePx.x * self->Size.x + self->SizeOFFSET.x);
-		sizePx.y = std::roundf(parentSizePx.y * self->Size.y + self->SizeOFFSET.y);
+		sizePx.x = std::roundf(parentSizePx.x * self->Size.x + self->SizeOffset.x);
+		sizePx.y = std::roundf(parentSizePx.y * self->Size.y + self->SizeOffset.y);
 
 		RealSize = sizePx;
 	}
@@ -3295,8 +3351,8 @@ public:
 		Vector2 sizePx = RealSize;
 
 		Vector2 anchorPx = {
-			std::roundf(sizePx.x * AnchorPosition.x + AnchorPositionOFFSET.x),
-			std::roundf(sizePx.y * AnchorPosition.y + AnchorPositionOFFSET.y)
+			std::roundf(sizePx.x * AnchorPosition.x + AnchorPositionOffset.x),
+			std::roundf(sizePx.y * AnchorPosition.y + AnchorPositionOffset.y)
 		};
 
 		Instance* current = Parent;
@@ -3309,8 +3365,8 @@ public:
 			Vector2 parentPosPx = obj->RealPos;
 
 			Vector2 myLocalPx = {
-				std::roundf(parentSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
-				std::roundf(parentSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
+				std::roundf(parentSizePx.x * Position.x + PositionOffset.x - anchorPx.x),
+				std::roundf(parentSizePx.y * Position.y + PositionOffset.y - anchorPx.y)
 			};
 
 			if (obj->Class == SCROLLFRAME) {
@@ -3328,8 +3384,8 @@ public:
 
 		Vector2 rootSizePx = { static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
 		Vector2 rootLocalPx = {
-			std::roundf(rootSizePx.x * Position.x + PositionOFFSET.x - anchorPx.x),
-			std::roundf(rootSizePx.y * Position.y + PositionOFFSET.y - anchorPx.y)
+			std::roundf(rootSizePx.x * Position.x + PositionOffset.x - anchorPx.x),
+			std::roundf(rootSizePx.y * Position.y + PositionOffset.y - anchorPx.y)
 		};
 
 		RealPos = rootLocalPx;
@@ -3723,14 +3779,14 @@ private:
 		if (Is2DInheritor(obj)) {
 			Object2D* o = static_cast<Object2D*>(obj);
 
-			float w = std::roundf(pw * o->Size.x + o->SizeOFFSET.x);
-			float h = std::roundf(ph * o->Size.y + o->SizeOFFSET.y);
+			float w = std::roundf(pw * o->Size.x + o->SizeOffset.x);
+			float h = std::roundf(ph * o->Size.y + o->SizeOffset.y);
 
-			float ax = std::roundf(w * o->AnchorPosition.x + o->AnchorPositionOFFSET.x);
-			float ay = std::roundf(h * o->AnchorPosition.y + o->AnchorPositionOFFSET.y);
+			float ax = std::roundf(w * o->AnchorPosition.x + o->AnchorPositionOffset.x);
+			float ay = std::roundf(h * o->AnchorPosition.y + o->AnchorPositionOffset.y);
 
-			float x = px + std::roundf(pw * o->Position.x + o->PositionOFFSET.x - ax);
-			float y = py + std::roundf(ph * o->Position.y + o->PositionOFFSET.y - ay);
+			float x = px + std::roundf(pw * o->Position.x + o->PositionOffset.x - ax);
+			float y = py + std::roundf(ph * o->Position.y + o->PositionOffset.y - ay);
 
 			minX = std::min(minX, x);
 			minY = std::min(minY, y);
@@ -3808,7 +3864,7 @@ private:
 
 	void checkAndUpdateCurrentSectors(bool force = false) {
 		Vector2 fullSize = RealSize;
-		Vector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x, CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y };
+		Vector2 fullPos = { CanvasPosition.x * RealSize.x + CanvasPositionOffset.x, CanvasPosition.y * RealSize.y + CanvasPositionOffset.y };
 
 		if (force or lastVisible != Visible or SIMPLEUI_GLOBAL::windowSizeChanged or lastFullSize.x != fullSize.x or lastFullSize.y != fullSize.y or
 			lastCanvasFullPosition.x != fullPos.x or lastCanvasFullPosition.y != fullPos.y or sectorsDirty) {
@@ -3934,8 +3990,8 @@ public:
 
 	Vector2 CanvasSize = { 0,0 };
 	Vector2 CanvasPosition = { 0,0 };
-	Vector2 CanvasSizeOFFSET = { 0,0 };
-	Vector2 CanvasPositionOFFSET = { 0,0 };
+	Vector2 CanvasSizeOffset = { 0,0 };
+	Vector2 CanvasPositionOffset = { 0,0 };
 	float ScrollSpeed = 0.25;
 	float ScrollSpeedOFFSET = 0;
 	Color SliderColor = { 15,15,15,255 };
@@ -3991,16 +4047,16 @@ public:
 		}
 
 		if (SliderTransparency != 1 and SliderSize != 0) {
-			if (CanvasSize.y > 1 or CanvasSizeOFFSET.y > RealSize.y) {
+			if (CanvasSize.y > 1 or CanvasSizeOffset.y > RealSize.y) {
 				if (Direction == 'Y' or Direction == 'B') {
-					float totalContentHeight = CanvasSizeOFFSET.y + CanvasSize.y * RealSize.y;
+					float totalContentHeight = CanvasSizeOffset.y + CanvasSize.y * RealSize.y;
 					if (totalContentHeight < RealSize.y) totalContentHeight = RealSize.y;
 
 					float sliderHeight = RealSize.y * (RealSize.y / totalContentHeight);
 					if (sliderHeight > RealSize.y) sliderHeight = RealSize.y;
 
 					float maxScrollY = totalContentHeight - RealSize.y;
-					float currentScrollY = (RealSize.y * CanvasPosition.y) + CanvasPositionOFFSET.y;
+					float currentScrollY = (RealSize.y * CanvasPosition.y) + CanvasPositionOffset.y;
 
 					float sliderY = RealPos.y;
 					if (maxScrollY > 0) {
@@ -4017,16 +4073,16 @@ public:
 				}
 			}
 
-			if (CanvasSize.x > 1 or CanvasSizeOFFSET.x > RealSize.x) {
+			if (CanvasSize.x > 1 or CanvasSizeOffset.x > RealSize.x) {
 				if (Direction == 'X' or Direction == 'B') {
-					float totalContentWidth = CanvasSizeOFFSET.x + CanvasSize.x * RealSize.x;
+					float totalContentWidth = CanvasSizeOffset.x + CanvasSize.x * RealSize.x;
 					if (totalContentWidth < RealSize.x) totalContentWidth = RealSize.x;
 
 					float sliderWidth = RealSize.x * (RealSize.x / totalContentWidth);
 					if (sliderWidth > RealSize.x) sliderWidth = RealSize.x;
 
 					float maxScrollX = totalContentWidth - RealSize.x;
-					float currentScrollX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
+					float currentScrollX = (RealSize.x * CanvasPosition.x) + CanvasPositionOffset.x;
 
 					float sliderX = RealPos.x;
 					if (maxScrollX > 0) {
@@ -4092,24 +4148,24 @@ public:
 			UpdateChildren(this);
 		}
 
-		float maxScrollX = std::max(0.0f, (float)(CanvasSize.x * RealSize.x + CanvasSizeOFFSET.x - RealSize.x));
-		float maxScrollY = std::max(0.0f, (float)(CanvasSize.y * RealSize.y + CanvasSizeOFFSET.y - RealSize.y));
+		float maxScrollX = std::max(0.0f, (float)(CanvasSize.x * RealSize.x + CanvasSizeOffset.x - RealSize.x));
+		float maxScrollY = std::max(0.0f, (float)(CanvasSize.y * RealSize.y + CanvasSizeOffset.y - RealSize.y));
 
-		CanvasPositionOFFSET.x = std::max(0.0f, (float)CanvasPositionOFFSET.x);
-		CanvasPositionOFFSET.y = std::max(0.0f, (float)CanvasPositionOFFSET.y);
+		CanvasPositionOffset.x = std::max(0.0f, (float)CanvasPositionOffset.x);
+		CanvasPositionOffset.y = std::max(0.0f, (float)CanvasPositionOffset.y);
 		CanvasPosition.x = std::max(0.0f, (float)CanvasPosition.x);
 		CanvasPosition.y = std::max(0.0f, (float)CanvasPosition.y);
 
-		float currentScrollX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
+		float currentScrollX = (RealSize.x * CanvasPosition.x) + CanvasPositionOffset.x;
 		if (currentScrollX > maxScrollX) {
 			CanvasPosition.x = std::floor(maxScrollX / RealSize.x);
-			CanvasPositionOFFSET.x = maxScrollX - (RealSize.x * CanvasPosition.x);
+			CanvasPositionOffset.x = maxScrollX - (RealSize.x * CanvasPosition.x);
 		}
 
-		float currentScrollY = (RealSize.y * CanvasPosition.y) + CanvasPositionOFFSET.y;
+		float currentScrollY = (RealSize.y * CanvasPosition.y) + CanvasPositionOffset.y;
 		if (currentScrollY > maxScrollY) {
 			CanvasPosition.y = std::floor(maxScrollY / RealSize.y);
-			CanvasPositionOFFSET.y = maxScrollY - (RealSize.y * CanvasPosition.y);
+			CanvasPositionOffset.y = maxScrollY - (RealSize.y * CanvasPosition.y);
 		}
 
 		if (ScrollEnabled) {
@@ -4132,7 +4188,7 @@ public:
 					bool isX = (Direction == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and Direction == 'B'));
 
 					if (isY) {
-						float currentY = (RealSize.y * CanvasPosition.y) + CanvasPositionOFFSET.y;
+						float currentY = (RealSize.y * CanvasPosition.y) + CanvasPositionOffset.y;
 						float totalStep = (RealSize.y * ScrollSpeed) + ScrollSpeedOFFSET;
 						float newTotalY = currentY - (WheelMove * totalStep);
 
@@ -4142,14 +4198,14 @@ public:
 						float newY = newTotalY - (RealSize.y * newY1);
 
 						if (Animated) {
-							Animate::Animation::Create(&CanvasPositionOFFSET.y, 0.125f, newY);
-							Animate::Animation::Create(&CanvasPosition.y, 0.125f, newY1);
+							Animate::SafeAnimation::Create(this, &CanvasPositionOffset.y, 0.125f, newY);
+							Animate::SafeAnimation::Create(this, &CanvasPosition.y, 0.125f, newY1);
 						} else {
-							CanvasPositionOFFSET.y = newY;
+							CanvasPositionOffset.y = newY;
 							CanvasPosition.y = newY1;
 						}
 					} else if (isX) {
-						float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOFFSET.x;
+						float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOffset.x;
 						float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOFFSET;
 						float newTotalX = currentX - (WheelMove * totalStep);
 
@@ -4159,10 +4215,10 @@ public:
 						float newX = newTotalX - (RealSize.x * newX1);
 
 						if (Animated) {
-							Animate::Animation::Create(&CanvasPositionOFFSET.x, 0.125f, newX);
-							Animate::Animation::Create(&CanvasPosition.x, 0.125f, newX1);
+							Animate::SafeAnimation::Create(this, &CanvasPositionOffset.x, 0.125f, newX);
+							Animate::SafeAnimation::Create(this, &CanvasPosition.x, 0.125f, newX1);
 						} else {
-							CanvasPositionOFFSET.x = newX;
+							CanvasPositionOffset.x = newX;
 							CanvasPosition.x = newX1;
 						}
 					}
@@ -4170,10 +4226,10 @@ public:
 			}
 		}
 
-		bool canvasPosChanged = lastCanvasPos.x == (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x) and
-			lastCanvasPos.y == (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y);
+		bool canvasPosChanged = lastCanvasPos.x == (CanvasPosition.x * RealSize.x + CanvasPositionOffset.x) and
+			lastCanvasPos.y == (CanvasPosition.y * RealSize.y + CanvasPositionOffset.y);
 
-		lastCanvasPos = { (CanvasPosition.x * RealSize.x + CanvasPositionOFFSET.x), (CanvasPosition.y * RealSize.y + CanvasPositionOFFSET.y) };
+		lastCanvasPos = { (CanvasPosition.x * RealSize.x + CanvasPositionOffset.x), (CanvasPosition.y * RealSize.y + CanvasPositionOffset.y) };
 
 		Draw(posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or !canvasPosChanged);
 	}
@@ -4217,8 +4273,8 @@ inline Vector2 getCanvasRealPos(Object2D* obj) {
 		ScrollFrame* scra = static_cast<ScrollFrame*>(obj);
 		return
 		{
-			scra->CanvasPosition.x * scra->RealSize.x + scra->CanvasPositionOFFSET.x,
-			scra->CanvasPosition.y * scra->RealSize.y + scra->CanvasPositionOFFSET.y
+			scra->CanvasPosition.x * scra->RealSize.x + scra->CanvasPositionOffset.x,
+			scra->CanvasPosition.y * scra->RealSize.y + scra->CanvasPositionOffset.y
 		};
 	}
 	return { 0,0 };
@@ -4226,7 +4282,7 @@ inline Vector2 getCanvasRealPos(Object2D* obj) {
 
 inline Vector2 getObject2DRS(Instance* sc) {
 	if (Is2DInheritor(sc)) {
-		Object2D* obj = static_cast<ScrollFrame*>(sc);
+		Object2D* obj = static_cast<Object2D*>(sc);
 		return obj->RealSize;
 	}
 
@@ -4234,19 +4290,11 @@ inline Vector2 getObject2DRS(Instance* sc) {
 }
 inline Vector2 getObject2DRP(Instance* sc) {
 	if (Is2DInheritor(sc)) {
-		Object2D* obj = static_cast<ScrollFrame*>(sc);
+		Object2D* obj = static_cast<Object2D*>(sc);
 		return obj->RealPos;
 	}
 
 	return { 0,0 };
-}
-inline bool isScrollFrameClips(Instance* sc) {
-	if (sc->Class == SCROLLFRAME) {
-		ScrollFrame* scra = static_cast<ScrollFrame*>(sc);
-		return scra->ClipDescendants;
-	}
-
-	return false;
 }
 
 class TextLabel : public Object2D {
@@ -4567,33 +4615,16 @@ class TextBox : public Object2D {
 	bool deleteText = false;
 
 	void updateCharOffsets() {
-		charOffsets.clear();
-		for (int i = 0; i < Text.size();) {
-			charOffsets.push_back(i);
-			unsigned char c = Text[i];
-			if (c < 0x80) i += 1;
-			else if ((c & 0xE0) == 0xC0) i += 2;
-			else if ((c & 0xF0) == 0xE0) i += 3;
-			else if ((c & 0xF8) == 0xF0) i += 4;
-			else i += 1;
-		}
-		charOffsets.push_back(Text.size());
+		charOffsets = SUI_ClusterOffsets(!Text);
 	}
 
 	std::vector<int> getCharOffsets(const std::string& text) {
-		std::vector<int> c;
-		for (int i = 0; i < text.size();) {
-			c.push_back(i);
-			unsigned char c = text[i];
-			if (c < 0x80) i += 1;
-			else if ((c & 0xE0) == 0xC0) i += 2;
-			else if ((c & 0xF0) == 0xE0) i += 3;
-			else if ((c & 0xF8) == 0xF0) i += 4;
-			else i += 1;
-		}
-		c.push_back(text.size());
+		return SUI_ClusterOffsets(text);
+	}
 
-		return c;
+	int cursorFromByte(int byte) const {
+		auto it = std::lower_bound(charOffsets.begin(), charOffsets.end(), byte);
+		return static_cast<int>(it - charOffsets.begin());
 	}
 
 	std::vector<int> charOffsets;
@@ -4765,6 +4796,12 @@ public:
 
 		if (FontFace.isChanged()) {
 			FontFaceIndex = getFontIndex(FontFace);
+		}
+
+		if (Text.isChanged()) {
+			updateCharOffsets();
+			int maxIndex = static_cast<int>(charOffsets.size()) - 1;
+			if (CursorIndex > maxIndex) CursorIndex = maxIndex;
 		}
 
 		Text.restate();
@@ -5033,10 +5070,10 @@ public:
 
 				if (addedSymbols > 0) {
 					updateCharOffsets();
-					int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : Text.size();
+					int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
 					Text = Text.substr(0, bytePos) + buf + Text.substr(bytePos);
-					CursorIndex += addedSymbols;
 					updateCharOffsets();
+					CursorIndex = cursorFromByte(bytePos + (int)buf.size());
 					CursorVisible = true; CursorTime = 0.0f;
 				}
 			}
@@ -5177,23 +5214,23 @@ public:
 				int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
 
 				if (symbolsLeft > 0 or MaxSymbols < 0) {
-					std::string toPaste = clipboardText;
+					std::string toPaste = clipboardText.substr(0, std::min<int>(symbolsLeft, clipboardText.size()));
 
 					bool allowed = true;
 					if (ClipboardPasteCondition and !ClipboardPasteCondition(toPaste)) allowed = false;
 
 					if (allowed) {
 						updateCharOffsets();
-						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : Text.size();
+						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
 						Text = Text.substr(0, bytePos) + toPaste + Text.substr(bytePos);
-						CursorIndex += getCharOffsets(toPaste).size() - 1;
 						updateCharOffsets();
+						CursorIndex = cursorFromByte(bytePos + (int)toPaste.size());
 						CursorVisible = true; CursorTime = 0.0f;
 					}
 				}
 			}
 
-			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (MaxSymbols < charOffsets.size() or MaxSymbols < 0)) {
+			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (MaxSymbols > charOffsets.size() or MaxSymbols < 0)) {
 				bool enter = IsKeyPressed(KEY_ENTER);
 
 				if (enter) {
@@ -5208,10 +5245,10 @@ public:
 
 					if (allowed) {
 						updateCharOffsets();
-						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : Text.size();
+						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
 						Text = Text.substr(0, bytePos) + '\n' + Text.substr(bytePos);
-						CursorIndex += 1;
 						updateCharOffsets();
+						CursorIndex = cursorFromByte(bytePos + 1);
 						CursorVisible = true; CursorTime = 0.0f;
 					}
 				}
@@ -5777,41 +5814,18 @@ inline void Object2D::PosOrSizeChanged() {
 	}
 }
 
+namespace SIMPLEUI_GLOBAL {
+	inline std::vector<std::tuple<Instance*, int, EventType, InstanceCallback, MouseButtonType>> EventToAdd;
+	inline std::vector<std::tuple<Instance*, int>> EventToRemove;
+}
+
 inline int Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE) {
-	events.push_back({ currentEventID, t, f, m });
-
-	if (t == EventType::TICK) {
-		Instance* asc = FindFirstAncestorOfClass(SCROLLFRAME);
-
-		if (asc) {
-			static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
-		}
-	}
-
+	SIMPLEUI_GLOBAL::EventToAdd.push_back({this, currentEventID, t, f, m});
 	return currentEventID++;
 }
 
 inline void Instance::RemoveEvent(int id) {
-	if (id >= 0 and id <= currentEventID) {
-		int z = 0;
-		for (auto& [i, t, __, ___] : events) {
-			if (i == id) {
-				events.erase(events.begin() + z);
-
-				if (t == EventType::TICK) {
-					Instance* asc = FindFirstAncestorOfClass(SCROLLFRAME);
-
-					if (asc) {
-						static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
-					}
-				}
-
-				return;
-			}
-
-			z++;
-		}
-	}
+	SIMPLEUI_GLOBAL::EventToRemove.push_back({this, id});
 }
 
 inline void Instance::SetParent(Instance* ptr) {
@@ -6230,7 +6244,7 @@ inline void DrawFrame(Instance* StartInstance) {
 #include <SUIextension.h>
 #endif
 
-inline namespace SIMPLEUI_DEBUG {
+namespace SIMPLEUI_DEBUG {
 	inline bool fpsVisible = false;
 	inline TextLabel* labelFPS = nullptr;
 	inline Object2D* background = nullptr;
@@ -6272,7 +6286,7 @@ inline namespace SIMPLEUI_DEBUG {
 
 			background->Size = { 0.2, Y };
 			background->Position = { 0.8, 0 };
-			background->PositionOFFSET = { -3, 3 };
+			background->PositionOffset = { -3, 3 };
 			background->ZIndex = 10000000;
 			background->Visible = false;
 			background->Roundness = 0.075;
@@ -6763,7 +6777,7 @@ inline namespace SIMPLEUI_DEBUG {
 		*  Events Handler   *
 		********************/
 
-		ChangedSignal<int>::New(currentColor, [treeScroll, way, manageMenu, treeName, LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
+		SafeChangedSignal<int>::New(debugMenu, currentColor, [treeScroll, way, manageMenu, treeName, LogsName, LogsFrame, lowerName, Colorright, ColorBlock, Colorleft, Colorlabel, FPSright, FPSquantity, FPSleft, FPSlabel, LGMlabel, AnimLabel, SettingsName, SettingsFrame]() {
 			Colorright->TextColor = typeColor[currentColor];
 			ColorBlock->BackgroundColor = typeColor[currentColor];
 			Colorleft->TextColor = typeColor[currentColor];
@@ -6810,11 +6824,11 @@ inline namespace SIMPLEUI_DEBUG {
 			}
 		});
 
-		ChangedSignal<int>::New(currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->Text = currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str()); });
-		ChangedSignal<bool>::New(Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->Text = Animations ? " On " : " Off ";});
-		ChangedSignal<bool>::New(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->Text = lowGraphicsMode ? " On " : " Off "; });
+		SafeChangedSignal<int>::New(debugMenu, currentFPSindex, [FPSquantity]() { SetTargetFPS(getCurrentMaxFPS()); std::ostringstream s; s << " " << typeFPS[currentFPSindex] << " "; FPSquantity->Text = currentFPSindex == 2 ? "FULL" : ((currentFPSindex == 3) ? "V-SYNC" : s.str()); });
+		SafeChangedSignal<bool>::New(debugMenu, Animations, [AnimButton]() { AnimButton->BackgroundColor = Animations ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; AnimButton->Text = Animations ? " On " : " Off ";});
+		SafeChangedSignal<bool>::New(debugMenu, lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->Text = lowGraphicsMode ? " On " : " Off "; });
 
-		ChangedSignal<Instance*>::New(currentInstance, [way, treeScroll]() {
+		SafeChangedSignal<Instance*>::New(debugMenu, currentInstance, [way, treeScroll]() {
 			way->DeleteAllChildren();
 			treeScroll->DeleteAllChildren();
 
@@ -6928,8 +6942,8 @@ inline void UpdateHigher(Instance* StartInstance) {
 
 			for (auto sector : scroll->sectorsOnView) {
 				Vector2 mousePosOnScroll = { 
-					SIMPLEUI_GLOBAL::mousePosition.x - scroll->RealPos.x + scroll->CanvasPosition.x * scroll->RealSize.x + scroll->CanvasPositionOFFSET.x, 
-					SIMPLEUI_GLOBAL::mousePosition.y - scroll->RealPos.y + scroll->CanvasPosition.y * scroll->RealSize.y + scroll->CanvasPositionOFFSET.y 
+					SIMPLEUI_GLOBAL::mousePosition.x - scroll->RealPos.x + scroll->CanvasPosition.x * scroll->RealSize.x + scroll->CanvasPositionOffset.x, 
+					SIMPLEUI_GLOBAL::mousePosition.y - scroll->RealPos.y + scroll->CanvasPosition.y * scroll->RealSize.y + scroll->CanvasPositionOffset.y 
 				};
 				if (!(sector->X * SCROLLFRAME_GRID_SIZE <= mousePosOnScroll.x and (sector->X + 1) * SCROLLFRAME_GRID_SIZE > mousePosOnScroll.x and
 					sector->Y * SCROLLFRAME_GRID_SIZE <= mousePosOnScroll.y and (sector->Y + 1) * SCROLLFRAME_GRID_SIZE > mousePosOnScroll.y)) {
@@ -7167,6 +7181,50 @@ inline void SUI_RenderFrame(Instance* StartInstance) {
 	}
 	SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.clear();
 
+	for (auto& [ptr, id, t, f, m] : SIMPLEUI_GLOBAL::EventToAdd) {
+		ptr->events.push_back({ id, t, f, m });
+
+		if (t == EventType::TICK) {
+			Instance* asc = ptr->FindFirstAncestorOfClass(SCROLLFRAME);
+
+			if (asc) {
+				static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(ptr);
+			}
+		}
+	}
+	SIMPLEUI_GLOBAL::EventToAdd.clear();
+
+	for (auto& [ptr, id] : SIMPLEUI_GLOBAL::EventToRemove) {
+		if (id >= 0 and id <= ptr->currentEventID) {
+			int z = 0;
+			for (auto& [i, t, __, ___] : ptr->events) {
+				if (i == id) {
+					ptr->events.erase(ptr->events.begin() + z);
+
+					if (t == EventType::TICK) {
+						Instance* asc = ptr->FindFirstAncestorOfClass(SCROLLFRAME);
+
+						if (asc) {
+							static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(ptr);
+						}
+					}
+
+					return;
+				}
+
+				z++;
+			}
+		}
+	}
+	SIMPLEUI_GLOBAL::EventToRemove.clear();
+
+	for (IChangedSignal* s : SIMPLEUI_GLOBAL::SignalsToDetele) {
+		auto z = find(SIMPLEUI_GLOBAL::ActiveSignals.begin(), SIMPLEUI_GLOBAL::ActiveSignals.end(), s);
+		if (z != SIMPLEUI_GLOBAL::ActiveSignals.end()) SIMPLEUI_GLOBAL::ActiveSignals.erase(z);
+		delete s;
+	}
+	SIMPLEUI_GLOBAL::SignalsToDetele.clear();
+
 	SIMPLEUI_GLOBAL::CollectDeadObjects();
 
 	SIMPLEUI_GLOBAL::windowSizeChanged = false;
@@ -7200,9 +7258,26 @@ inline void SUI_CleanUp() {
 	UnloadShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 
 	SIMPLEUI_GLOBAL::deletedObjectsByID.clear();
+	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 	SIMPLEUI_GLOBAL::AtlasTextureId = 1;
 	SIMPLEUI_GLOBAL::currentUniqueObjectID = 1;
 	SIMPLEUI_GLOBAL::framesSinceStart = 0;
+	SIMPLEUI_GLOBAL::UpdateStaticShader = true;
+
+	SIMPLEUI_DEBUG::fpsVisible = false;
+	SIMPLEUI_DEBUG::labelFPS = nullptr;
+	SIMPLEUI_DEBUG::background = nullptr;
+	#ifndef EXCLUDE_SIMPLEUI_EXTENSION
+		SIMPLEUI_DEBUG::msGRAPH = nullptr;
+		SIMPLEUI_DEBUG::msSEQ = -1;
+	#endif
+
+	SIMPLEUI_DEBUG::msBuffer.clear();
+	SIMPLEUI_DEBUG::textQueue.clear();
+	SIMPLEUI_DEBUG::console = nullptr;
+	SIMPLEUI_DEBUG::debugMenu = nullptr;
+	SIMPLEUI_DEBUG::treeFrame = nullptr;
+	SIMPLEUI_DEBUG::currentInstance = nullptr;
 }
 
 inline void StartNewWindow(Instance* StartInstance = nullptr, WindowData windowData = {1280, 720, 0}, const char* name = "simpleUI window", const char* iconName = "", unsigned int flags = FLAG_WINDOW_RESIZABLE) {

@@ -590,11 +590,11 @@ class ToggleSwitcher : public Object2D {
 	}
 
 	void checkClick() {
-		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 			bool canBePressed = (
 				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->IsDescendantOf(this))) : false)
 				);
 
 			if (canBePressed) {
@@ -719,12 +719,12 @@ public:
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
 		if (!events.empty()) {
-			eventHandler();
-			if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+			EventHandler();
+			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
@@ -859,11 +859,11 @@ class CheckBox : public Object2D {
 	}
 
 	void checkClick() {
-		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 			bool canBePressed = (
 				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->IsDescendantOf(this))) : false)
 				);
 
 			if (!canBePressed) return;
@@ -1166,12 +1166,12 @@ public:
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
 		if (!events.empty()) {
-			eventHandler();
-			if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+			EventHandler();
+			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {

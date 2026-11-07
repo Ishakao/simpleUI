@@ -31,6 +31,7 @@
 // Added roundness clipping and ClipDescendants for every 2D object												//
 // Added user-made shapes for 2D objects background																//
 // Per-Symbol coloring (UsePerSymbolColor, SetPerSymbolColor, ClearPerSymbolColor) for TextLabel and TextBox	//
+// Upgraded secure objects management (protected Children and Parent fields, UniqueID is const now)				//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -359,14 +360,160 @@ namespace SIMPLEUI_GLOBAL {
 	inline constexpr const char* BASIC_FONT_NAME = "Arial";
 	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
 	inline std::unordered_map<int, Shader> Shaders;
-	inline long currentUniqueObjectID = 0;
+	inline int ShadersCur = 0;
+	inline long long currentUniqueObjectID = 0;
 	inline bool sceneDirty = false; // true in frame where any object hierarchy, size or position changed
 
 	inline Vector2 windowMinimalSize = { 0,0 };
 	inline bool ALLOW_DEBUG = false;
 	inline bool ALLOW_FPS = false;
 
-	inline int TextureRoundnessShader = -1;
+	inline const char* RectangleRoundnessShaderVertexBytes = R"(
+		#version 330
+		layout(location = 0) in vec2 corner;
+		layout(location = 6) in vec4 iPosSize;
+		layout(location = 7) in vec4 iOriginRotZ;
+		layout(location = 8) in vec4 iDest;
+		layout(location = 9) in vec4 iUV;
+		layout(location = 10) in vec4 iColor;
+		layout(location = 11) in vec4 iBorderColor;
+		layout(location = 12) in float iInset;
+		layout(location = 13) in float iClip;
+		layout(location = 14) in float iShape;
+
+		uniform mat4 mvp;
+
+		out vec2 fragLocal;
+		out vec2 fragUV;
+		out vec4 fragColor;
+		flat out vec4 fragBorderColor;
+		flat out float fragUseTex;
+		flat out vec2 fragSDBounds;
+		flat out float fragRadius;
+		flat out float fragBorderThickness;
+		flat out float fragInset;
+		out vec2 fragWorld;
+		flat out float fragClip;
+		flat out float fragShape;
+
+		void main() {
+			vec2 halfSize = iPosSize.zw * 0.5;
+			vec2 center = iPosSize.xy + halfSize;
+			vec2 org = iPosSize.xy + iOriginRotZ.xy;
+			float useTex = iDest.z > 0.0 ? 1.0 : 0.0;
+
+			vec2 mn = useTex > 0.5 ? iDest.xy - center : -halfSize - 1.0;
+			vec2 mx = useTex > 0.5 ? mn + iDest.zw : halfSize + 1.0;
+			vec2 l = mix(mn, mx, corner);
+
+			vec2 d = center + l - org;
+			float s = sin(iOriginRotZ.z);
+			float co = cos(iOriginRotZ.z);
+			vec2 p = org + vec2(d.x * co - d.y * s, d.x * s + d.y * co);
+
+			float z = iOriginRotZ.w;
+			float b = floor(z);
+			fragBorderThickness = b;
+			float roundness = clamp((z - b) / 0.99, 0.0, 1.0);
+			fragRadius = min(halfSize.x, halfSize.y) * roundness;
+			fragSDBounds = halfSize - vec2(fragRadius);
+
+			fragLocal = l;
+			fragUV = mix(iUV.xy, iUV.zw, corner);
+			fragUseTex = useTex;
+			fragColor = iColor;
+			fragBorderColor = iBorderColor;
+			fragInset = iInset;
+			fragWorld = p;
+			fragClip = iClip;
+			fragShape = iShape;
+
+			gl_Position = mvp * vec4(p, 0.0, 1.0);
+		}
+	)";
+
+	inline const char* RectangleRoundnessShaderFragmentBytes = R"(
+		#version 330
+		in vec2 fragLocal;
+		in vec2 fragUV;
+		in vec4 fragColor;
+		in vec2 fragWorld;
+		flat in vec4 fragBorderColor;
+		flat in float fragUseTex;
+		flat in vec2 fragSDBounds;
+		flat in float fragRadius;
+		flat in float fragBorderThickness;
+		flat in float fragInset;
+		flat in float fragClip;
+		flat in float fragShape; // your background shape. base shape: 0
+		uniform sampler2D texture0;
+		uniform vec4 clips[256];
+		out vec4 finalColor;
+
+		float sdRoundBox(vec2 p, vec2 hb, float r) {
+			vec2 q = abs(p) - hb;
+			return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+		}
+
+		float clipSDF(vec2 p, vec4 a, vec4 b) {
+			vec2 q = p - a.xy;
+			q = vec2(b.x * q.x + b.y * q.y, -b.y * q.x + b.x * q.y);
+			vec2 d = abs(q) - a.zw + b.z;
+			return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - b.z;
+		}
+
+		float clipCoverage(vec2 p, float idxf) {
+			if (idxf < 0.0) return 1.0;
+			int idx = int(idxf + 0.5);
+			float d = -1e9;
+			for (int i = 0; i < 8 && idx >= 0; i++) {
+				vec4 a = clips[idx * 2];
+				vec4 b = clips[idx * 2 + 1];
+				d = max(d, clipSDF(p, a, b));
+				idx = int(b.w);
+			}
+			return clamp(0.5 - d, 0.0, 1.0);
+		}
+
+		void main() {
+			int shape = int(fragShape + 0.5);
+
+			if (shape == 0) { // here is basic rectangle shape
+				vec2 outerHalf = fragSDBounds + vec2(fragRadius);
+				float outerMin = min(outerHalf.x, outerHalf.y);
+				float roundness = outerMin > 0.0 ? fragRadius / outerMin : 0.0;
+
+				bool hasB = fragBorderThickness > 0.5;
+				float dOut = sdRoundBox(fragLocal, fragSDBounds, fragRadius);
+
+				vec2 innerHalf = max(outerHalf - vec2(fragInset), vec2(0.0));
+				float innerR = min(innerHalf.x, innerHalf.y) * roundness;
+				float dIn = sdRoundBox(fragLocal, innerHalf - vec2(innerR), innerR);
+				float fillCov = 1.0 - smoothstep(-0.5, 0.5, dIn - (hasB ? 1.0 : 0.0));
+
+				float ringCov = 0.0;
+				float outerCov = 1.0;
+				if (hasB) {
+					ringCov = smoothstep(-0.5, 0.5, dOut + fragBorderThickness);
+					outerCov = 1.0 - smoothstep(-0.5, 0.5, dOut);
+				}
+
+				vec4 fc = fragColor;
+				if (fragUseTex > 0.5) fc *= texture(texture0, fragUV);
+
+				float fa = fc.a * fillCov;
+				float ba = fragBorderColor.a * ringCov;
+				float oa = ba + fa * (1.0 - ba);
+				if (oa <= 0.0) discard;
+				vec3 rgb = (fragBorderColor.rgb * ba + fc.rgb * fa * (1.0 - ba)) / oa;
+				oa *= outerCov;
+				oa *= clipCoverage(fragWorld, fragClip);
+				if (oa <= 0.0) discard;
+				finalColor = vec4(rgb, oa);
+			} // here you can create your "shape" branch
+		}
+	)";
+
 	inline int RectangleRoundnessShader = -1;
 	inline int CurrentCustomShader = -1;
 	inline std::vector<RoundRectData> CurrentRectanglesBatch;
@@ -1311,15 +1458,17 @@ inline std::pair<Image, AtlasTexture> getImage(const std::string& name) {
 	return {};
 }
 
-inline int loadNewShader(const std::string& vs, const std::string& fs) {
-	static int cur = 0;
-
-	SIMPLEUI_GLOBAL::Shaders.emplace(cur, RAYLIB_FUNCTIONAL::LoadShader(vs.c_str(), fs.c_str()));
-
-	return cur++;
+inline int LoadNewShader(const std::string& vs, const std::string& fs) {
+	SIMPLEUI_GLOBAL::Shaders.emplace(SIMPLEUI_GLOBAL::ShadersCur, RAYLIB_FUNCTIONAL::LoadShader(vs.c_str(), fs.c_str()));
+	return SIMPLEUI_GLOBAL::ShadersCur++;
 }
 
-inline Shader getShader(int id) {
+inline int LoadNewShaderFromMemory(const char* vs, const char* fs) {
+	SIMPLEUI_GLOBAL::Shaders.emplace(SIMPLEUI_GLOBAL::ShadersCur, RAYLIB_FUNCTIONAL::LoadShaderFromMemory(vs, fs));
+	return SIMPLEUI_GLOBAL::ShadersCur++;
+}
+
+inline Shader GetShader(int id) {
 	auto it = SIMPLEUI_GLOBAL::Shaders.find(id);
 	if (it == SIMPLEUI_GLOBAL::Shaders.end()) {
 		std::cout << YELLOW_ANSI << "Shader: " << id << " was not found" << DEFAULT_ANSI << std::endl;
@@ -1328,8 +1477,8 @@ inline Shader getShader(int id) {
 	return it->second;
 }
 
-inline void unloadShader(int id) {
-	RAYLIB_FUNCTIONAL::UnloadShader(getShader(id));
+inline void UnloadShader(int id) {
+	RAYLIB_FUNCTIONAL::UnloadShader(GetShader(id));
 }
 
 inline Color mulColor(Color other, float t) {
@@ -2147,7 +2296,7 @@ enum InstanceType : int {
 
 inline Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr);
 inline void Delete(Instance* ptr);
-inline void updateChildren(Instance*);
+inline void UpdateChildren(Instance*);
 
 template<typename F>
 struct function_traits : function_traits<decltype(&F::operator())> {};
@@ -2196,22 +2345,141 @@ struct InstanceCallback {
 	}
 };
 
+class ParentInstance {
+	friend class Instance;
+	void SetDirectly(Instance*);
+
+	Instance* Parent = nullptr;
+	Instance* GetThis() const;
+public:
+	template<class T>
+	operator T*() const;
+
+	Instance* operator->() const {
+		return Parent;
+	}
+
+	template<class T, std::enable_if_t<std::is_pointer_v<T> and std::is_convertible_v<T, const Instance*>, int> = 0>
+	bool operator==(T o) const {
+		return Parent == o;
+	}
+
+	template<class T, std::enable_if_t<std::is_pointer_v<T> and std::is_convertible_v<T, const Instance*>, int> = 0>
+	bool operator!=(T o) const {
+		return Parent != o;
+	}
+
+	bool operator==(std::nullptr_t) const { return Parent == nullptr; }
+	bool operator!=(std::nullptr_t) const { return Parent != nullptr; }
+
+	explicit operator bool() const {
+		return Parent != nullptr;
+	}
+
+	void operator=(Instance* ptr) const;
+	void operator=(const ParentInstance& o) { *this = static_cast<Instance*>(o.Parent); }
+	ParentInstance(Instance* p) : Parent(p) {}
+};
+
+class ChildrenInstance {
+	friend class Instance;
+	friend inline void Delete(Instance*);
+	friend inline void UpdateChildren(Instance*);
+
+	std::vector<Instance*> Children;
+
+	void clear() {
+		Children.clear();
+	}
+
+	void erase(std::vector<Instance*>::const_iterator it) {
+		Children.erase(it);
+	}
+
+	void push_back(Instance* obj) {
+		Children.push_back(obj);
+	}
+
+	auto mbegin() { return Children.begin(); }
+	auto mend() { return Children.end(); }
+
+	ChildrenInstance() = default;
+	ChildrenInstance(const ChildrenInstance& o) {
+		Children = o.Children;
+	}
+	ChildrenInstance(const ChildrenInstance&& o) = delete;
+	ChildrenInstance& operator=(const ChildrenInstance&) = delete;
+public:
+	auto begin() const { return Children.cbegin(); }
+	auto end() const { return Children.cend(); }
+	auto rbegin() const { return Children.crbegin(); }
+	auto rend() const { return Children.crend(); }
+
+	size_t size() const {
+		return Children.size();
+	}
+
+	size_t capacity() const {
+		return Children.capacity();
+	}
+
+	Instance* operator[](size_t index) const {
+		assert(index < Children.size() and "operator[] out of bounds in children");
+		return Children[index];
+	}
+
+	Instance* at(size_t index) const {
+		assert(index < Children.size() and "operator[] out of bounds in children");
+		return Children[index];
+	}
+
+	const std::vector<Instance*>* operator->() const {
+		return &Children;
+	}
+};
+
+template<typename T>
+class ConstValue {
+	friend class Instance;
+	T Value;
+	const ConstValue& operator=(T v) {
+		Value = v;
+		return *this;
+	}
+public:
+	operator T() const {
+		return Value;
+	}
+
+	ConstValue() = delete;
+	ConstValue(T v) : Value(v) {}
+	ConstValue(const ConstValue<T>& o) {
+		Value = o.Value;
+	}
+	ConstValue(const ConstValue<T>&& o) {
+		Value = std::move(o.Value);
+	}
+};
+
 class Instance {
+	friend void UpdateChildren(Instance*);
+	friend class Object2D;
 	friend void Delete(Instance* ptr);
 	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
 protected:
 	size_t lastUpdateFrame = 0;
 	bool DontSeekParent = false;
-public:
-	Instance* Parent = nullptr;
-	std::vector<Instance*> Children;
-	long uniqueID = -1;
-	InstanceType Class = InstanceType::INSTANCE;
 	bool updateChildrenZIndex = true;
+	int currentEventID = 0;
+public:
+	ParentInstance Parent{nullptr};
+	ChildrenInstance Children;
+	ConstValue<long long> UniqueID = -1;
+	InstanceType Class = InstanceType::INSTANCE;
 protected:
 	bool updateWhenWillBeVisible = true;
 	bool __ParentObject{};
-	std::vector<std::tuple<EventType, InstanceCallback, MouseButtonType>> events;
+	std::vector<std::tuple<int, EventType, InstanceCallback, MouseButtonType>> events;
 public:
 	std::string Name = "Instance";
 protected:
@@ -2224,29 +2492,29 @@ protected:
 		updateWhenWillBeVisible = true;
 		SIMPLEUI_GLOBAL::sceneDirty = true;
 
-		this->uniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
+		this->UniqueID = SIMPLEUI_GLOBAL::currentUniqueObjectID++;
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 		if (!copyfrom) return;
 
 		for (Instance* c : copyfrom->Children) {
-			c->Clone()->setParent(this);
+			c->Clone()->SetParent(this);
 		}
 	}
 
-	Instance(bool a) : uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++), __ParentObject(true) {
+	Instance(bool a) : UniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++), __ParentObject(true) {
 		SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 	}
 
 	Instance(Instance* p);
 	Instance() = delete;
 	virtual ~Instance() {}
-
 public:
-	void AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
+	int AddEvent(EventType t, InstanceCallback f, MouseButtonType m);
+	void RemoveEvent(int id);
 
-	virtual bool hasEvent(EventType t) const {
-		for (auto& [type, _, __] : events) {
+	virtual bool HasEvent(EventType t) const {
+		for (auto& [id, type, _, __] : events) {
 			if (type == t) {
 				return true;
 			}
@@ -2254,9 +2522,9 @@ public:
 		return false;
 	}
 
-	void setParent(Instance* ptr);
+	void SetParent(Instance* ptr);
 
-	Instance* findChild(const std::string& name) const {
+	Instance* FindChild(const std::string& name) const {
 		for (auto obj : Children) {
 			if (obj->Name == name) {
 				return obj;
@@ -2265,8 +2533,8 @@ public:
 		return nullptr;
 	}
 
-	Instance* findChildOfClass(InstanceType cls) {
-		for (Instance*& obj : Children) {
+	Instance* FindChildOfClass(InstanceType cls) {
+		for (Instance* obj : Children) {
 			if (obj->Class == cls) {
 				return obj;
 			}
@@ -2274,7 +2542,7 @@ public:
 		return nullptr;
 	}
 
-	bool isAncestorOf(Instance* other) const {
+	bool IsAncestorOf(Instance* other) const {
 		Instance* ptr = other;
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == this) return true;
@@ -2283,7 +2551,7 @@ public:
 		return false;
 	}
 
-	Instance* findFirstAncestorOfClass(InstanceType cls) {
+	Instance* FindFirstAncestorOfClass(InstanceType cls) {
 		Instance* ptr = this;
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent->Class == cls) return ptr->Parent;
@@ -2292,7 +2560,7 @@ public:
 		return nullptr;
 	}
 
-	Instance* findFirstDescendantOfClass(InstanceType cls) {
+	Instance* FindFirstDescendantOfClass(InstanceType cls) {
 		std::function<Instance* (Instance*)> l = [&](Instance* ptr) -> Instance* {
 			for (Instance* child : ptr->Children) {
 				if (child->Class == cls) {
@@ -2308,7 +2576,7 @@ public:
 		return l(this);
 	}
 
-	Instance* findFirstDescendant(const std::string& name) {
+	Instance* FindFirstDescendant(const std::string& name) {
 		std::function<Instance* (Instance*)> l = [&](Instance* ptr) -> Instance* {
 			for (Instance* child : ptr->Children) {
 				if (child->Name == name) {
@@ -2324,7 +2592,7 @@ public:
 		return l(this);
 	}
 
-	std::vector<Instance*> getDescendants(const std::function<bool(Instance*)>& condition = [](Instance* _) { return true; }) {
+	std::vector<Instance*> GetDescendants(const std::function<bool(Instance*)>& condition = [](Instance* _) { return true; }) {
 		std::vector<Instance*> out;
 		std::function<void(Instance*)> l = [&](Instance* ptr) {
 			for (Instance* child : ptr->Children) {
@@ -2338,9 +2606,9 @@ public:
 		return out;
 	}
 
-	void deleteAllChildren();
+	void DeleteAllChildren();
 
-	bool isDescendantOf(Instance* maybeAncestor) const {
+	bool IsDescendantOf(Instance* maybeAncestor) const {
 		const Instance* ptr = this;
 		while (ptr->Parent != nullptr and !ptr->__ParentObject) {
 			if (ptr->Parent == maybeAncestor) return true;
@@ -2349,10 +2617,10 @@ public:
 		return false;
 	}
 
-	virtual void eventHandler() {
+	virtual void EventHandler() {
 		if (events.empty()) return;
 
-		for (const auto& [type, func, _] : events) {
+		for (const auto& [id, type, func, _] : events) {
 			if (type == TICK) {
 				func(this);
 			} else if (type == CHILD_ADDED) {
@@ -2376,11 +2644,11 @@ public:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 
 		for (int i = 0; i < Children.size(); i++) {
 			Instance* child = Children[i];
@@ -2405,6 +2673,23 @@ public:
 		return i;
 	}
 };
+
+inline void ParentInstance::SetDirectly(Instance* ptr) {
+	Parent = ptr;
+}
+
+inline Instance* ParentInstance::GetThis() const {
+    return reinterpret_cast<Instance*>(reinterpret_cast<char*>(const_cast<ParentInstance*>(this)) - offsetof(Instance, Parent));
+}
+
+template<class T>
+inline ParentInstance::operator T*() const {
+	return static_cast<T*>(Parent);
+}
+
+inline void ParentInstance::operator=(Instance* ptr) const {
+	GetThis()->SetParent(ptr);
+}
 
 // Create or get root object. It always a default Instance named "Root"
 inline Instance* GetRoot() {
@@ -2814,7 +3099,7 @@ inline void FlushRectanglesBatch() {
 	auto& v = RectGPU::insts;
 	if (v.empty()) return;
 
-	static Shader shader = getShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+	static Shader shader = GetShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 	if (!RectGPU::vao) RectGPU::Init();
 
 	RAYLIB_FUNCTIONAL::rlDrawRenderBatchActive();
@@ -2880,9 +3165,11 @@ protected:
 
 		childsAddedInFrame.clear();
 		childsRemovedInFrame.clear();
+
+		ClipIndex = SIMPLEUI_GLOBAL::clipStack.empty() ? -1 : SIMPLEUI_GLOBAL::clipStack.back();
 	}
 
-	void eventHandler() override;
+	void EventHandler() override;
 	void PosOrSizeChanged();
 	void updateAncestorWhichParentIsScroll();
 
@@ -2896,6 +3183,26 @@ protected:
 		SizeOFFSET.parentalObj = this;
 
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart - 1;
+	}
+
+	int ClipIndex = -1;
+
+	inline bool PointInClipChain(int idx, Vector2 p) {
+		while (idx >= 0) {
+			const SIMPLEUI_GLOBAL::ClipDesc& d = SIMPLEUI_GLOBAL::clips[idx];
+			float dx = p.x - d.cx;
+			float dy = p.y - d.cy;
+			float lx = fabsf(dx * d.cosA + dy * d.sinA);
+			float ly = fabsf(-dx * d.sinA + dy * d.cosA);
+			if (lx > d.hw or ly > d.hh) return false;
+			if (d.radius > 0.0f) {
+				float qx = lx - (d.hw - d.radius);
+				float qy = ly - (d.hh - d.radius);
+				if (qx > 0.0f and qy > 0.0f and qx * qx + qy * qy > d.radius * d.radius) return false;
+			}
+			idx = (int)d.parent;
+		}
+		return true;
 	}
 
 	Object2D(bool a) : Instance(a) {
@@ -2917,16 +3224,6 @@ protected:
 public:
 	void VectorChanged() {
 		PosOrSizeChanged();
-	}
-
-	bool hasEvent(EventType t) const override {
-		for (auto& [type, _, __] : events) {
-			if (type == t) {
-				return true;
-			}
-		}
-
-		return false;
 	}
 
 	Vector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
@@ -2962,7 +3259,7 @@ public:
 	int ZIndex = 0;
 	bool Active = false;
 
-	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe shape in rectangle_roundness.frag)
+	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe custom shape in SIMPLEUI_GLOBAL::RectangleRoundnessShaderFragmentBytes on ~400 line in simpleUI.h)
 
 	void getRealObject2Dsize() {
 		Vector2 sizePx = {};
@@ -3100,17 +3397,10 @@ public:
 		DrawRoundRectBatch(rec);
 	}
 
-	bool pointInObject(Vector2 pos) {
+	bool PointInObject(Vector2 pos) {
 		if (!SIMPLEUI_GLOBAL::mouseOnWindow) return false;
 
-		if (Parent and Is2DInheritor(Parent) and static_cast<Object2D*>(Parent)->ClipDescendants) {
-			Vector2 scrRS = getObject2DRS(Parent);
-			Vector2 scrRP = getObject2DRP(Parent);
-			if (scrRP.x > pos.x or scrRP.x + scrRS.x < pos.x or
-				scrRP.y > pos.y or scrRP.y + scrRS.y < pos.y) {
-				return false;
-			}
-		}
+		if (!PointInClipChain(ClipIndex, pos)) return false;
 
 		float px = pos.x;
 		float py = pos.y;
@@ -3136,8 +3426,8 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 
 		if (lastVisible != Visible) {
 			SIMPLEUI_GLOBAL::sceneDirty = true;
@@ -3152,7 +3442,7 @@ public:
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
@@ -3283,8 +3573,8 @@ public:
 		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 		Draw();
 	}
 
@@ -3302,10 +3592,10 @@ public:
 	}
 };
 
-inline void updateChildren(Instance* parent) {
+inline void UpdateChildren(Instance* parent) {
 	if (!parent) return;
 	parent->updateChildrenZIndex = false;
-	std::sort(parent->Children.begin(), parent->Children.end(), [](Instance* a, Instance* b) {
+	std::stable_sort(parent->Children.mbegin(), parent->Children.mend(), [](Instance* a, Instance* b) {
 		int zA = 0;
 		int zB = 0;
 
@@ -3352,7 +3642,7 @@ inline void updateChildren(Instance* parent) {
 #endif
 
 class ScrollFrame : public Object2D {
-	friend inline void Instance::deleteAllChildren();
+	friend inline void Instance::DeleteAllChildren();
 	constexpr static const char* DefaultName = "ScrollFrame";
 	constexpr static InstanceType DefaultClass = SCROLLFRAME;
 	constexpr static unsigned int GridSectorSize = SCROLLFRAME_GRID_SIZE;
@@ -3377,9 +3667,9 @@ private:
 
 		UpdateSectors(child);
 
-		if (child->hasEvent(TICK)) {
+		if (child->HasEvent(TICK)) {
 			Tick.push_back(child);
-			isTick.insert({ child->uniqueID, child });
+			isTick.insert({ child->UniqueID, child });
 		}
 	}
 
@@ -3499,14 +3789,14 @@ private:
 			sectorsDirty = true;
 		}
 
-		sector->Objects.push_back({ obj->uniqueID, obj });
+		sector->Objects.push_back({ obj->UniqueID, obj });
 
-		auto it3 = SectorsOnObject.find(obj->uniqueID);
+		auto it3 = SectorsOnObject.find(obj->UniqueID);
 
 		if (it3 == SectorsOnObject.end()) {
-			SectorsOnObject[obj->uniqueID] = { sector };
+			SectorsOnObject[obj->UniqueID] = { sector };
 		} else {
-			SectorsOnObject[obj->uniqueID].push_back(sector);
+			SectorsOnObject[obj->UniqueID].push_back(sector);
 		}
 	}
 private:
@@ -3571,16 +3861,16 @@ private:
 		std::array<int, 4> rect;
 		bool hasRect = getSectorRect(child, rect);
 
-		auto checkIt = SectorsOnObject.find(child->uniqueID);
+		auto checkIt = SectorsOnObject.find(child->UniqueID);
 		if (checkIt == SectorsOnObject.end()) {
-			checkIt = SectorsOnObject.insert({ child->uniqueID, {} }).first;
+			checkIt = SectorsOnObject.insert({ child->UniqueID, {} }).first;
 		} else {
-			auto rc = SectorRectOnObject.find(child->uniqueID);
+			auto rc = SectorRectOnObject.find(child->UniqueID);
 			if (hasRect and rc != SectorRectOnObject.end() and rc->second == rect) return;
 
 			for (ScrollSector* sector : checkIt->second) {
 				for (int i = 0; i < sector->Objects.size(); i++) {
-					if (sector->Objects[i].first == child->uniqueID) {
+					if (sector->Objects[i].first == child->UniqueID) {
 						sector->Objects.erase(sector->Objects.begin() + i);
 						break;
 					}
@@ -3591,11 +3881,11 @@ private:
 		}
 
 		if (!hasRect) {
-			SectorRectOnObject.erase(child->uniqueID);
+			SectorRectOnObject.erase(child->UniqueID);
 			return;
 		}
 
-		SectorRectOnObject[child->uniqueID] = rect;
+		SectorRectOnObject[child->UniqueID] = rect;
 
 		for (int i = rect[0]; i <= rect[1]; i++) {
 			for (int j = rect[2]; j <= rect[3]; j++) {
@@ -3617,19 +3907,19 @@ protected:
 	}
 public:
 	void UpdateSectors(Instance* child) {
-		auto it = toUpdateSectorsC.find(child->uniqueID);
+		auto it = toUpdateSectorsC.find(child->UniqueID);
 		if (it != toUpdateSectorsC.end()) return;
 
-		toUpdateSectors.push_back({ child->uniqueID, child });
-		toUpdateSectorsC.insert({ child->uniqueID, child });
+		toUpdateSectors.push_back({ child->UniqueID, child });
+		toUpdateSectorsC.insert({ child->UniqueID, child });
 	}
 
 	void UpdateObjectTickState(Instance* child) {
-		auto it = isTick.find(child->uniqueID);
-		bool hasTick = child->hasEvent(TICK);
+		auto it = isTick.find(child->UniqueID);
+		bool hasTick = child->HasEvent(TICK);
 
 		if (hasTick and it == isTick.end()) {
-			isTick.insert({ child->uniqueID, child });
+			isTick.insert({ child->UniqueID, child });
 			Tick.push_back(child);
 		} else if (!hasTick and it != isTick.end()) {
 			isTick.erase(it);
@@ -3765,8 +4055,8 @@ public:
 			Direction = 'Y';
 		}
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 
 		if (lastVisible != Visible) {
 			SIMPLEUI_GLOBAL::sceneDirty = true;
@@ -3799,7 +4089,7 @@ public:
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
 		float maxScrollX = std::max(0.0f, (float)(CanvasSize.x * RealSize.x + CanvasSizeOFFSET.x - RealSize.x));
@@ -3830,7 +4120,7 @@ public:
 				bool enterAllowed = (
 					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
 					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->isDescendantOf(this))) : false)
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->IsDescendantOf(this))) : false)
 					);
 
 				if (Visible and ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::PreviousHigherObject != this) or enterAllowed)) {
@@ -4609,7 +4899,7 @@ public:
 		if (CursorTime >= CursorCooldown) { CursorVisible = !CursorVisible; CursorTime = 0.0f; }
 
 		if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) and CanClick) {
-			if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::FocusedTextBox != this and SIMPLEUI_GLOBAL::higherObject == this and ClearOnClick) {
+			if (PointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::FocusedTextBox != this and SIMPLEUI_GLOBAL::higherObject == this and ClearOnClick) {
 				Text = "";
 			}
 			if (SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject) {
@@ -4620,7 +4910,7 @@ public:
 				}
 			} else if (not SIMPLEUI_GLOBAL::higherObject) {
 				SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
-			} else if (pointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::higherObject == this) {
+			} else if (PointInObject(SIMPLEUI_GLOBAL::mousePosition) and SIMPLEUI_GLOBAL::higherObject == this) {
 				CursorTime = 0.0f;
 				CursorVisible = true;
 				SIMPLEUI_GLOBAL::FocusedTextBox = this;
@@ -5085,8 +5375,8 @@ public:
 
 		if (SIMPLEUI_GLOBAL::FocusedTextBox != this) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
 
-		eventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[uniqueID]) return;
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 
 		if (lastVisible != Visible) {
 			SIMPLEUI_GLOBAL::sceneDirty = true;
@@ -5105,7 +5395,7 @@ public:
 		SameUpdate();
 
 		if (updateChildrenZIndex) {
-			updateChildren(this);
+			UpdateChildren(this);
 		}
 
 		if (lastCursorIndex != CursorIndex) {
@@ -5246,7 +5536,7 @@ public:
 	Color ImageColor = { 255,255,255,255 };
 	bool RoundImage = false;
 
-	void setImage(const std::string& name = "") {
+	void SetImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
 			RAYLIB_FUNCTIONAL::UnloadImage(imageIfMemory);
 			imageIfMemory = Image{};
@@ -5318,7 +5608,7 @@ public:
 			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
-			setImage(currentPair);
+			SetImage(currentPair);
 		}
 	}
 
@@ -5487,39 +5777,70 @@ inline void Object2D::PosOrSizeChanged() {
 	}
 }
 
-inline void Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE) {
-	events.push_back({ t, f, m });
+inline int Instance::AddEvent(EventType t, InstanceCallback f, MouseButtonType m = MouseButtonType::MOUSE_NONE) {
+	events.push_back({ currentEventID, t, f, m });
 
-	Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
+	if (t == EventType::TICK) {
+		Instance* asc = FindFirstAncestorOfClass(SCROLLFRAME);
 
-	if (asc) {
-		static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
+		if (asc) {
+			static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
+		}
+	}
+
+	return currentEventID++;
+}
+
+inline void Instance::RemoveEvent(int id) {
+	if (id >= 0 and id <= currentEventID) {
+		int z = 0;
+		for (auto& [i, t, __, ___] : events) {
+			if (i == id) {
+				events.erase(events.begin() + z);
+
+				if (t == EventType::TICK) {
+					Instance* asc = FindFirstAncestorOfClass(SCROLLFRAME);
+
+					if (asc) {
+						static_cast<ScrollFrame*>(asc)->UpdateObjectTickState(this);
+					}
+				}
+
+				return;
+			}
+
+			z++;
+		}
 	}
 }
 
-inline void Instance::setParent(Instance* ptr) {
-	if (ptr == this) return;
+inline void Instance::SetParent(Instance* ptr) {
+	if (ptr == this or ptr == Parent) return;
+	for (Instance* p = ptr; p; p = p->Parent) {
+		if (p == this) return;
+	}
 
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
 	if (Parent and !DontSeekParent) {
-		for (int i = 0; i < Parent->Children.size(); i++) {
+		for (size_t i = 0; i < Parent->Children.size(); i++) {
 			if (Parent->Children[i] == this) {
 				Parent->Children.erase(Parent->Children.begin() + i);
 				break;
 			}
 		}
 
-		Parent->childsRemovedInFrame.push_back({uniqueID, this});
+		Parent->childsRemovedInFrame.push_back({UniqueID, this});
 	}
 
-	Parent = ptr;
+	Parent.SetDirectly(ptr);
+
 	if (ptr) {
 		ptr->Children.push_back(this);
-		ptr->childsAddedInFrame.push_back({uniqueID, this});
+		ptr->childsAddedInFrame.push_back({UniqueID, this});
 		ptr->updateChildrenZIndex = true;
 
-		Instance* asc = findFirstAncestorOfClass(SCROLLFRAME);
+		Instance* asc = FindFirstAncestorOfClass(SCROLLFRAME);
 
 		if (asc) {
 			static_cast<ScrollFrame*>(asc)->UpdateSectors(this);
@@ -5554,10 +5875,10 @@ inline void Delete(Instance* ptr) {
 		SIMPLEUI_GLOBAL::SafeActiveSignals.erase(ptr);
 	}
 
-	SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->uniqueID] = 1;
+	SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->UniqueID] = 1;
 
 	if (ptr->Parent and !ptr->DontSeekParent) {
-		ptr->Parent->childsRemovedInFrame.push_back({ptr->uniqueID, ptr});
+		ptr->Parent->childsRemovedInFrame.push_back({ptr->UniqueID, ptr});
 
 		Instance* scrollChild = (ptr->Parent->Class == SCROLLFRAME ? ptr : getAncestorWhichParentIsScrollFrame(ptr));
 
@@ -5573,8 +5894,8 @@ inline void Delete(Instance* ptr) {
 		}
 	}
 
-	ptr->setParent(nullptr);
-	ptr->deleteAllChildren();
+	ptr->SetParent(nullptr);
+	ptr->DeleteAllChildren();
 
 	if (ptr == SIMPLEUI_GLOBAL::FocusedTextBox) SIMPLEUI_GLOBAL::FocusedTextBox = nullptr;
 	if (ptr == SIMPLEUI_GLOBAL::higherObject) SIMPLEUI_GLOBAL::higherObject = nullptr;
@@ -5582,7 +5903,7 @@ inline void Delete(Instance* ptr) {
 	SIMPLEUI_GLOBAL::WillDelete.push_back(ptr);
 }
 
-inline void Instance::deleteAllChildren() {
+inline void Instance::DeleteAllChildren() {
 	if (!DontSeekParent and Parent) {
 		Instance* scrollChild = (this->Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
 
@@ -5593,7 +5914,7 @@ inline void Instance::deleteAllChildren() {
 
 	for (int i = 0; i < Children.size(); i++) {
 		Children[i]->DontSeekParent = true;
-		childsRemovedInFrame.push_back({ Children[i]->uniqueID, Children[i] });
+		childsRemovedInFrame.push_back({ Children[i]->UniqueID, Children[i] });
 		Delete(Children[i]);
 	}
 
@@ -5616,13 +5937,13 @@ inline void Instance::deleteAllChildren() {
 	}
 }
 
-inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
+inline Instance::Instance(Instance* p) : Parent(p), UniqueID(SIMPLEUI_GLOBAL::currentUniqueObjectID++) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 	SIMPLEUI_GLOBAL::deletedObjectsByID.push_back(0);
 
 	if (p) {
 		p->Children.push_back(this);
-		p->childsAddedInFrame.push_back({uniqueID, this});
+		p->childsAddedInFrame.push_back({UniqueID, this});
 		p->updateChildrenZIndex = true;
 
 		ScrollFrame* prob = (p->Class == SCROLLFRAME ? static_cast<ScrollFrame*>(p) : (ScrollFrame*)nullptr);
@@ -5632,7 +5953,7 @@ inline Instance::Instance(Instance* p) : Parent(p), uniqueID(SIMPLEUI_GLOBAL::cu
 	}
 }
 
-inline void Object2D::eventHandler() {
+inline void Object2D::EventHandler() {
 	if (events.empty()) return;
 
 	bool mouseOnObject = false;
@@ -5648,7 +5969,7 @@ inline void Object2D::eventHandler() {
 	Instance* higherObject = SIMPLEUI_GLOBAL::higherObject;
 	Instance* PreviousHigherObject = SIMPLEUI_GLOBAL::PreviousHigherObject;
 
-	for (const auto& [type, func, mouse] : events) {
+	for (const auto& [id, type, func, mouse] : events) {
 		switch (type) {
 		case TICK: {
 			func(this);
@@ -5656,7 +5977,7 @@ inline void Object2D::eventHandler() {
 		} case MOUSE_ENTER: {
 			bool entered = false;
 			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 				mouseCalculated = true;
 			}
 
@@ -5664,7 +5985,7 @@ inline void Object2D::eventHandler() {
 				bool enterAllowed = (
 					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
 					);
 
 				if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
@@ -5679,14 +6000,14 @@ inline void Object2D::eventHandler() {
 			break;
 		} case MOUSE_LEAVE: {
 			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 				mouseCalculated = true;
 			}
 
 			bool enterAllowed = (
 				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->isDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
 				);
 
 			if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
@@ -5696,7 +6017,7 @@ inline void Object2D::eventHandler() {
 			break;
 		} case MOUSE_CLICK: {
 			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 				mouseCalculated = true;
 			}
 
@@ -5706,7 +6027,7 @@ inline void Object2D::eventHandler() {
 			break;
 		} case MOUSE_HOLD_START: {
 			if (!mouseCalculated) {
-				mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 				mouseCalculated = true;
 			}
 
@@ -5769,7 +6090,7 @@ inline void Object2D::eventHandler() {
 
 	if (not hasStartHold1 and IsMouseButtonPressed(MOUSE_LEFT) and higherObject == this) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -5780,7 +6101,7 @@ inline void Object2D::eventHandler() {
 
 	if (not hasStartHold2 and IsMouseButtonPressed(MOUSE_RIGHT) and higherObject == this) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -5791,7 +6112,7 @@ inline void Object2D::eventHandler() {
 
 	if (not hasStartHold3 and IsMouseButtonPressed(MOUSE_MIDDLE) and higherObject == this) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -5802,7 +6123,7 @@ inline void Object2D::eventHandler() {
 
 	if (mouseReleased1 and startedOnObject1) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -5810,7 +6131,7 @@ inline void Object2D::eventHandler() {
 	}
 	if (mouseReleased2 and startedOnObject2) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -5818,7 +6139,7 @@ inline void Object2D::eventHandler() {
 	}
 	if (mouseReleased3 and startedOnObject3) {
 		if (!mouseCalculated) {
-			mouseOnObject = pointInObject(SIMPLEUI_GLOBAL::mousePosition);
+			mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
 			mouseCalculated = true;
 		}
 
@@ -6494,8 +6815,8 @@ inline namespace SIMPLEUI_DEBUG {
 		ChangedSignal<bool>::New(lowGraphicsMode, [LGMbutton]() { LGMbutton->BackgroundColor = lowGraphicsMode ? Color{ 204, 255, 204, 255 } : Color{ 255, 204, 204, 255 }; LGMbutton->Text = lowGraphicsMode ? " On " : " Off "; });
 
 		ChangedSignal<Instance*>::New(currentInstance, [way, treeScroll]() {
-			way->deleteAllChildren();
-			treeScroll->deleteAllChildren();
+			way->DeleteAllChildren();
+			treeScroll->DeleteAllChildren();
 
 			if (currentInstance) {
 				Instance* obj = currentInstance;
@@ -6635,7 +6956,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 
 						if (!obj->Visible) continue;
 						nextDepth = localDepth + 1;
-						if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+						if (obj->Active and obj->PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 							isTarget = true;
 						}
 
@@ -6677,7 +6998,7 @@ inline void UpdateHigher(Instance* StartInstance) {
 
 					if (!obj->Visible) continue;
 					nextDepth = localDepth + 1;
-					if (obj->Active and obj->pointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+					if (obj->Active and obj->PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
 						isTarget = true;
 					}
 
@@ -6764,7 +7085,7 @@ inline bool SUI_InitNewWindow(Instance* StartInstance = nullptr, WindowData wind
 inline void SUI_LoadPendings() {
 	CreateFont(SIMPLEUI_GLOBAL::BASIC_FONT_NAME, "Fonts/arial.ttf", 60); // Basic font 1
 	CreateFont(SIMPLEUI_GLOBAL::DEBUG_MENU_FONT_NAME, "Fonts/rogFont.otf", 35); // Basic font 2
-	SIMPLEUI_GLOBAL::RectangleRoundnessShader = loadNewShader("simpleUI Shaders/rectangle_roundness.vert", "simpleUI Shaders/rectangle_roundness.frag"); // Basic shader 2
+	SIMPLEUI_GLOBAL::RectangleRoundnessShader = LoadNewShaderFromMemory(SIMPLEUI_GLOBAL::RectangleRoundnessShaderVertexBytes, SIMPLEUI_GLOBAL::RectangleRoundnessShaderFragmentBytes); // Basic shader
 
 	for (auto& tup : SIMPLEUI_GLOBAL::queuedFonts) {
 		CreateFont(std::get<0>(tup), std::get<1>(tup), std::get<2>(tup));
@@ -6853,7 +7174,7 @@ inline void SUI_RenderFrame(Instance* StartInstance) {
 
 inline void SUI_CleanUp() {
 	if (GetRoot()) {
-		GetRoot()->deleteAllChildren();
+		GetRoot()->DeleteAllChildren();
 	}
 
 	for (auto& pair : SIMPLEUI_GLOBAL::loadedImages) {
@@ -6876,7 +7197,7 @@ inline void SUI_CleanUp() {
 		FT_TextManagement::Fonts.clear();
 	#endif
 
-	unloadShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
+	UnloadShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 
 	SIMPLEUI_GLOBAL::deletedObjectsByID.clear();
 	SIMPLEUI_GLOBAL::AtlasTextureId = 1;

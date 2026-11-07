@@ -40,7 +40,7 @@
 int main() {
 	Instance* Root = GetRoot();
 
-    CreateFont("segoe", "Fonts/segoeui.ttf", 64);
+	CreateFont("segoe", "Fonts/segoeui.ttf", 64);
 	LoadImage("bg_image", "textures/test.jpg"); // add your image path cuz textures was not in simpleUI repo
 
 	ImageLabel* Background = ImageLabel::New(Root);

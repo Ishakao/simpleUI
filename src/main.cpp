@@ -10,7 +10,7 @@ int main() {
 	ImageLabel* Background = ImageLabel::New(Root);
 	Background->Size = { 1,1 };
 	Background->BackgroundColor = { 15, 24, 36, 255 };
-	Background->setImage("bg_image");
+	Background->SetImage("bg_image");
 	Background->Overlay = IMAGE_STRETCH;
 	Background->ImageTransparency = 0.9;
 

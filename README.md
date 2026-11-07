@@ -25,6 +25,7 @@
     <li>stb_rect_pack (included header implementation)</li>
     <li>FreeType</li>
     <li>HarfBuzz</li>
+    <li>utf8proc</li>
 </ul>
 <h3>All dependencies will be downloaded and builded in your envieronment (check CMakeLists.txt and cmake/deps/CMakeLists.txt)</h3>
 

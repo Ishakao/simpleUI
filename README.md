@@ -40,7 +40,7 @@
 int main() {
 	Instance* Root = GetRoot();
 
-	CreateFont("segoe", "Fonts/segoeui.ttf", 64);
+    CreateFont("segoe", "Fonts/segoeui.ttf", 64);
 	LoadImage("bg_image", "textures/test.jpg"); // add your image path cuz textures was not in simpleUI repo
 
 	ImageLabel* Background = ImageLabel::New(Root);
@@ -53,7 +53,7 @@ int main() {
 	TextLabel* Tryf1f2 = TextLabel::New(Background);
 	Tryf1f2->AnchorPosition = { 0.5, 0 };
 	Tryf1f2->Position = { 0.5, 0 };
-	Tryf1f2->SizeOFFSET = { 500, 0 };
+	Tryf1f2->SizeOffset = { 500, 0 };
 	Tryf1f2->Size.y = 0.07;
 	Tryf1f2->FontFace = "segoe";
 	Tryf1f2->Text = " Try F1 and F2 binds "; 
@@ -64,8 +64,8 @@ int main() {
 	TextLabel* Hello = TextLabel::New(Background);
 	Hello->AnchorPosition = { 0.5, 0.5 };
 	Hello->Position = { 0.5, 0.5 };
-	Hello->PositionOFFSET = { -200, 0 };
-	Hello->SizeOFFSET = { 340, 80 };
+	Hello->PositionOffset = { -200, 0 };
+	Hello->SizeOffset = { 340, 80 };
 	Hello->FontFace = "segoe";
 	Hello->Text = " Hello "; 
 	Hello->Roundness = 0.2;
@@ -75,14 +75,14 @@ int main() {
 	Hello->BorderColor = { 0, 51, 25, 255 };
 	Hello->BackgroundColor = { 0, 204, 0, 255 };
 	Hello->AddEvent(MOUSE_ENTER, [Hello](Instance* th) {
-		Animate::Animation::Create(&Hello->SizeOFFSET, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out);
-		Animate::Animation::Create(&Hello->Roundness, 0.4, 1, Animate::Bounce, Animate::Out);
-		Animate::Animation::Create(&Hello->Rotation, 0.4, 10, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->SizeOffset, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->Roundness, 0.4, 1, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->Rotation, 0.4, 10, Animate::Bounce, Animate::Out);
 	});
 	Hello->AddEvent(MOUSE_LEAVE, [Hello](Instance* th) {
-		Animate::Animation::Create(&Hello->SizeOFFSET, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
-		Animate::Animation::Create(&Hello->Roundness, 0.4, 0.2, Animate::Bounce, Animate::Out);
-		Animate::Animation::Create(&Hello->Rotation, 0.4, 0, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->SizeOffset, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->Roundness, 0.4, 0.2, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(Hello, &Hello->Rotation, 0.4, 0, Animate::Bounce, Animate::Out);
 	});
 	Hello->AddEvent(MOUSE_CLICK, [Hello](Instance* th) { 
 		for (int i = 0; i < 5; i++) {
@@ -97,8 +97,8 @@ int main() {
 	TextBox* World = TextBox::New(Background);
 	World->AnchorPosition = { 0.5, 0.5 };
 	World->Position = { 0.5, 0.5 };
-	World->PositionOFFSET = { 200, 0 };
-	World->SizeOFFSET = { 340, 80 };
+	World->PositionOffset = { 200, 0 };
+	World->SizeOffset = { 340, 80 };
 	World->FontFace = "segoe";
 	World->Text = "";
 	World->PlaceholderText = " World ";
@@ -112,12 +112,12 @@ int main() {
 	World->BorderColor = { 0, 102, 102, 255 };
 	World->AddEvent(MOUSE_ENTER, [World](Instance* th) {
 		// SafeAnimation linked to object World. This animation will be deleted when World deletes
-		Animate::SafeAnimation::Create(World, &World->SizeOFFSET, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out); 
-		Animate::Animation::Create(&World->Rotation, 0.4, -10, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(World, &World->SizeOffset, 0.4, SpecialVector2{ 400, 100 }, Animate::Bounce, Animate::Out); 
+		Animate::SafeAnimation::Create(World, &World->Rotation, 0.4, -10, Animate::Bounce, Animate::Out);
 	});
 	World->AddEvent(MOUSE_LEAVE, [World](Instance* th) {
-		Animate::SafeAnimation::Create(World, &World->SizeOFFSET, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
-		Animate::Animation::Create(&World->Rotation, 0.4, 0, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(World, &World->SizeOffset, 0.4, SpecialVector2{ 340, 80 }, Animate::Bounce, Animate::Out);
+		Animate::SafeAnimation::Create(World, &World->Rotation, 0.4, 0, Animate::Bounce, Animate::Out);
 	});
 	World->AddEvent(CHILD_ADDED, [](Instance* th, Instance* child) {
 		std::cout << "Child added " << child->Name << std::endl;

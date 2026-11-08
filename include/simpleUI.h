@@ -5043,7 +5043,6 @@ public:
 		PlaceholderText.restate();
 
 		if (updateCondition1) {
-			std::cout << 1 << std::endl;
 			updateVisible();
 		}
 

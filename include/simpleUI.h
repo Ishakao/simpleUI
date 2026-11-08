@@ -26,7 +26,7 @@
 // Improved performance on big quantity of rectangles															//
 // Several architecture changes. ODR fix, ::New(), ::Destroy(), GetRoot() to get singleton root Instance		//
 // Textures draw optimization. Batching for textures and rectangles												//
-// Local Rotation and Origin support																			//
+// Rotation and Origin support																					//
 // Added SafeChangedSignal which works like SafeAnimation (destroys when linked object deletes)					//
 // Added roundness clipping and ClipDescendants for every 2D object												//
 // Added user-made shapes for 2D objects background																//
@@ -52,7 +52,6 @@
 #ifndef EXCLUDE_SIMPLEUI_FREETYPE
 	#include <freetype2/ft2build.h>
 	#include FT_FREETYPE_H
-	#define BASIC_FREETYPE_FONT_SIZE 512
 	#include <harfbuzz/hb.h>
 	#include <harfbuzz/hb-ft.h>
 #endif
@@ -267,6 +266,7 @@ inline void DrawTexturePro(Texture2D t, Rectangle s, Rectangle d, Vector2 o, flo
 }
 
 struct SpecialVector2 {
+	friend class Object2D;
 	template <size_t Index>
 	struct num {
 		float n{};
@@ -308,8 +308,10 @@ struct SpecialVector2 {
 	using num_x = num<0>;
 	using num_y = num<1>;
 
+private:
 	Object2D* parentalObj = nullptr;
 	bool alarmWhenChanged = true;
+public:
 
 	num_x x;
 	num_y y;
@@ -337,6 +339,7 @@ struct SpecialVector2 {
 			x.n = other.x.n;
 			y.n = other.y.n;
 		}
+
 		return *this;
 	}
 
@@ -1609,7 +1612,7 @@ public:
 		if (text.size() != st.size()) {
 			changed = true;
 		} else {
-			changed = text != st;
+			changed = changed or (text != st);
 		}
 
 		text = st;
@@ -1620,7 +1623,7 @@ public:
 		if (text.size() != other.size()) {
 			changed = true;
 		} else {
-			changed = text != !other;
+			changed = changed or (text != !other);
 		}
 
 		text = !other;
@@ -2415,7 +2418,7 @@ public:
 		return Parent != nullptr;
 	}
 
-	void operator=(Instance* ptr) const;
+	void operator=(Instance* ptr);
 	void operator=(const ParentInstance& o) { *this = static_cast<Instance*>(o.Parent); }
 	ParentInstance(Instance* p) : Parent(p) {}
 };
@@ -2460,6 +2463,18 @@ public:
 
 	size_t capacity() const {
 		return Children.capacity();
+	}
+
+	bool empty() const {
+		return Children.empty();
+	}
+
+	Instance* const back() const {
+		return Children.back();
+	}
+
+	Instance* const front() const {
+		return Children.front();
 	}
 
 	Instance* operator[](size_t index) const {
@@ -2730,7 +2745,7 @@ inline ParentInstance::operator T*() const {
 	return static_cast<T*>(Parent);
 }
 
-inline void ParentInstance::operator=(Instance* ptr) const {
+inline void ParentInstance::operator=(Instance* ptr) {
 	GetThis()->SetParent(ptr);
 }
 
@@ -3020,41 +3035,50 @@ struct RectInstance {
 
 namespace RectGPU {
 	constexpr int MaxQuads = 65536;
-	inline unsigned int vao = 0;
-	inline unsigned int vbo = 0;
-	inline std::vector<RectInstance> insts;
+    constexpr int RingMultiplier = 4;
+    constexpr int RingCapacity = MaxQuads * RingMultiplier;
 
-	inline void Init() {
-		float corners[8] = { 0, 0, 0, 1, 1, 1, 1, 0 };
-		unsigned short idx[6] = { 0, 1, 3, 1, 2, 3 };
+    inline unsigned int vao = 0;
+    inline unsigned int vbo = 0;
+    inline int vboCursor = 0;
+    inline std::vector<RectInstance> insts;
 
-		vao = RAYLIB_FUNCTIONAL::rlLoadVertexArray();
-		RAYLIB_FUNCTIONAL::rlEnableVertexArray(vao);
+    inline void BindInstanceAttributes(int baseByteOffset) {
+        int stride = (int)sizeof(RectInstance);
+        RAYLIB_FUNCTIONAL::rlEnableVertexBuffer(vbo);
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(6, 4, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, x));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(7, 4, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, ox));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(8, 4, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, dx));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(9, 4, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, u0));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(10, 4, RL_UNSIGNED_BYTE, true, stride, baseByteOffset + offsetof(RectInstance, r));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(11, 4, RL_UNSIGNED_BYTE, true, stride, baseByteOffset + offsetof(RectInstance, br));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(12, 1, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, inset));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(13, 1, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, clip));
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(14, 1, RL_FLOAT, false, stride, baseByteOffset + offsetof(RectInstance, shape));
+    }
 
-		RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(corners, sizeof(corners), false);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(0, 2, RL_FLOAT, false, 2 * sizeof(float), 0);
-		RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(0);
+    inline void Init() {
+        float corners[8] = { 0, 0, 0, 1, 1, 1, 1, 0 };
+        unsigned short idx[6] = { 0, 1, 3, 1, 2, 3 };
 
-		vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, MaxQuads * (int)sizeof(RectInstance), true);
-		int stride = (int)sizeof(RectInstance);
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(6, 4, RL_FLOAT, false, stride, offsetof(RectInstance, x));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(7, 4, RL_FLOAT, false, stride, offsetof(RectInstance, ox));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(8, 4, RL_FLOAT, false, stride, offsetof(RectInstance, dx));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(9, 4, RL_FLOAT, false, stride, offsetof(RectInstance, u0));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(10, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, r));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(11, 4, RL_UNSIGNED_BYTE, true, stride, offsetof(RectInstance, br));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(12, 1, RL_FLOAT, false, stride, offsetof(RectInstance, inset));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(13, 1, RL_FLOAT, false, stride, offsetof(RectInstance, clip));
-		RAYLIB_FUNCTIONAL::rlSetVertexAttribute(14, 1, RL_FLOAT, false, stride, offsetof(RectInstance, shape));
+        vao = RAYLIB_FUNCTIONAL::rlLoadVertexArray();
+        RAYLIB_FUNCTIONAL::rlEnableVertexArray(vao);
 
-		for (int i = 6; i <= 14; i++) {
-			RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(i);
-			RAYLIB_FUNCTIONAL::rlSetVertexAttributeDivisor(i, 1);
-		}
+        RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(corners, sizeof(corners), false);
+        RAYLIB_FUNCTIONAL::rlSetVertexAttribute(0, 2, RL_FLOAT, false, 2 * sizeof(float), 0);
+        RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(0);
 
-		RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx, sizeof(idx), false);
-		RAYLIB_FUNCTIONAL::rlDisableVertexArray();
-	}
+        vbo = RAYLIB_FUNCTIONAL::rlLoadVertexBuffer(nullptr, RingCapacity * (int)sizeof(RectInstance), true);
+        BindInstanceAttributes(0);
+
+        for (int i = 6; i <= 14; i++) {
+            RAYLIB_FUNCTIONAL::rlEnableVertexAttribute(i);
+            RAYLIB_FUNCTIONAL::rlSetVertexAttributeDivisor(i, 1);
+        }
+
+        RAYLIB_FUNCTIONAL::rlLoadVertexBufferElement(idx, sizeof(idx), false);
+        RAYLIB_FUNCTIONAL::rlDisableVertexArray();
+    }
 
 	inline RAYLIB_FUNCTIONAL::Matrix Mul(const RAYLIB_FUNCTIONAL::Matrix& l, const RAYLIB_FUNCTIONAL::Matrix& r) {
 		RAYLIB_FUNCTIONAL::Matrix out;
@@ -3138,9 +3162,23 @@ inline void DrawRoundRectBatch(const RoundRectData& r) {
 	);
 }
 
+constexpr inline bool SIMPLEUI_TEST_BATCH_COUNT = false;
+
 inline void FlushRectanglesBatch() {
 	auto& v = RectGPU::insts;
 	if (v.empty()) return;
+
+	if (SIMPLEUI_TEST_BATCH_COUNT) {
+		static int b = 0;
+		static size_t last = 0;
+		if (last != SIMPLEUI_GLOBAL::framesSinceStart) {
+			last = SIMPLEUI_GLOBAL::framesSinceStart;
+			std::cout << b << std::endl;
+			b = 0;
+		}
+
+		b++;
+	}
 
 	static Shader shader = GetShader(SIMPLEUI_GLOBAL::RectangleRoundnessShader);
 
@@ -3178,16 +3216,35 @@ inline void FlushRectanglesBatch() {
 	RAYLIB_FUNCTIONAL::rlActiveTextureSlot(0);
 	RAYLIB_FUNCTIONAL::rlEnableTexture(texId);
 
-	size_t done = 0;
-	while (done < RectGPU::insts.size()) {
-		int n = (int)std::min<size_t>(RectGPU::MaxQuads, RectGPU::insts.size() - done);
-		RAYLIB_FUNCTIONAL::rlUpdateVertexBuffer(RectGPU::vbo, RectGPU::insts.data() + done, n * (int)sizeof(RectInstance), 0);
-		RAYLIB_FUNCTIONAL::rlEnableVertexArray(RectGPU::vao);
-		RAYLIB_FUNCTIONAL::rlDrawVertexArrayElementsInstanced(0, 6, nullptr, n);
-		done += n;
-	}
+	int stride = (int)sizeof(RectInstance);
+    size_t done = 0;
 
-	RAYLIB_FUNCTIONAL::rlDisableVertexArray();
+    RAYLIB_FUNCTIONAL::rlEnableVertexArray(RectGPU::vao);
+
+    while (done < RectGPU::insts.size()) {
+        int n = (int)std::min<size_t>(RectGPU::MaxQuads, RectGPU::insts.size() - done);
+
+        if (RectGPU::vboCursor + n > RectGPU::RingCapacity) {
+            RectGPU::vboCursor = 0;
+        }
+
+        int byteOffset = RectGPU::vboCursor * stride;
+
+        RAYLIB_FUNCTIONAL::rlUpdateVertexBuffer(
+            RectGPU::vbo, 
+            RectGPU::insts.data() + done, 
+            n * stride, 
+            byteOffset
+        );
+
+        RectGPU::BindInstanceAttributes(byteOffset);
+        RAYLIB_FUNCTIONAL::rlDrawVertexArrayElementsInstanced(0, 6, nullptr, n);
+
+        RectGPU::vboCursor += n;
+        done += n;
+    }
+
+    RAYLIB_FUNCTIONAL::rlDisableVertexArray();
 	RAYLIB_FUNCTIONAL::rlDisableTexture();
 
 	v.clear();
@@ -3206,6 +3263,8 @@ class Object2D : public Instance {
 	int lastZIndex = 0;
 protected:
 	bool lastVisible = false;
+	float lastRotation = 0;
+	size_t lastFrameUpdatedRealProps = 0;
 	bool posOrSizeChangedResult = false;
 
 	void SameUpdate() {
@@ -3283,6 +3342,7 @@ public:
 
 	Vector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
 	Vector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
+	float RealRotation{};
 	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
 
 	SpecialVector2 PositionOffset{ 0, 0, this };
@@ -3293,16 +3353,15 @@ public:
 	SpecialVector2 Size{ 0, 0, this };
 	SpecialVector2 SizeOffset{ 0, 0, this };
 
-	float Rotation = 0; // Local object rotation
-	Vector2 Origin = { 0.5,0.5 }; // Local object origin
-	Vector2 OriginOFFSET = { 0, 0 }; // Local object origin in pixels
+	float Rotation = 0;
+	SpecialVector2 Origin = { 0.5,0.5, this };
+	SpecialVector2 OriginOffset = { 0, 0, this };
 
 	float BackgroundTransparency{};
 	Color BackgroundColor = { 255,255,255,255 };
 	bool Visible = true;
 
 	float Roundness = 0.0f;
-	short Segments = 5; // Deprecated value, now simpleUI using SDF for corners
 
 	short BorderThickness{};
 	float BorderTransparency{};
@@ -3317,77 +3376,184 @@ public:
 	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe custom shape in SIMPLEUI_GLOBAL::RectangleRoundnessShaderFragmentBytes on ~400 line in simpleUI.h)
 
 	void getRealObject2Dsize() {
-		Vector2 sizePx = {};
-		Object2D* self = this;
+		float accScaleX = Size.x;
+		float accScaleY = Size.y;
+		float accOffsetX = std::roundf(SizeOffset.x);
+		float accOffsetY = std::roundf(SizeOffset.y);
+
 		Instance* current = Parent;
-		Object2D* parent2D = nullptr;
+		Vector2 baseSizePx = {
+			std::roundf(static_cast<float>(SIMPLEUI_GLOBAL::winWidth)),
+			std::roundf(static_cast<float>(SIMPLEUI_GLOBAL::winHeight))
+		};
 
 		while (current) {
 			if (!Is2DInheritor(current->Class)) {
-				if (current->Parent) { current = current->Parent; continue; }
-				parent2D = nullptr;
-				break;
+				current = current->Parent;
+				continue;
 			}
-			parent2D = static_cast<Object2D*>(current);
+
+			Object2D* parent2D = static_cast<Object2D*>(current);
 
 			if (parent2D->__ParentObject) {
-				parent2D = nullptr;
+				break;
 			}
 
-			break;
+			if (parent2D->lastFrameUpdatedRealProps == SIMPLEUI_GLOBAL::framesSinceStart) {
+				baseSizePx = {
+					std::roundf(parent2D->RealSize.x),
+					std::roundf(parent2D->RealSize.y)
+				};
+				break;
+			}
+
+			accOffsetX = std::roundf(std::roundf(parent2D->SizeOffset.x * accScaleX) + accOffsetX);
+			accOffsetY = std::roundf(std::roundf(parent2D->SizeOffset.y * accScaleY) + accOffsetY);
+			accScaleX *= parent2D->Size.x;
+			accScaleY *= parent2D->Size.y;
+
+			current = parent2D->Parent;
 		}
 
-		Vector2 parentSizePx = parent2D ? parent2D->RealSize : Vector2{ static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
-
-		sizePx.x = std::roundf(parentSizePx.x * self->Size.x + self->SizeOffset.x);
-		sizePx.y = std::roundf(parentSizePx.y * self->Size.y + self->SizeOffset.y);
-
-		RealSize = sizePx;
+		RealSize = {
+			std::roundf(baseSizePx.x * accScaleX + accOffsetX),
+			std::roundf(baseSizePx.y * accScaleY + accOffsetY)
+		};
 	}
 
 	void getRealObject2Dposition() {
-		Vector2 posPx = { 0.0f, 0.0f };
-		Vector2 sizePx = RealSize;
-
-		Vector2 anchorPx = {
-			std::roundf(sizePx.x * AnchorPosition.x + AnchorPositionOffset.x),
-			std::roundf(sizePx.y * AnchorPosition.y + AnchorPositionOffset.y)
+		Vector2 mySizePx = {
+			std::roundf(RealSize.x),
+			std::roundf(RealSize.y)
 		};
 
-		Instance* current = Parent;
-		while (current) {
-			if (!Is2DInheritor(current)) { current = current->Parent; continue; }
+		Vector2 myOriginPx = {
+			std::roundf(mySizePx.x * Origin.x + OriginOffset.x),
+			std::roundf(mySizePx.y * Origin.y + OriginOffset.y)
+		};
 
-			Object2D* obj = static_cast<Object2D*>(current);
+		Vector2 trackedPoint = myOriginPx;
+		float totalRot = Rotation;
 
-			Vector2 parentSizePx = obj->RealSize;
-			Vector2 parentPosPx = obj->RealPos;
+		Object2D* child = this;
+		Instance* curr = Parent;
 
-			Vector2 myLocalPx = {
-				std::roundf(parentSizePx.x * Position.x + PositionOffset.x - anchorPx.x),
-				std::roundf(parentSizePx.y * Position.y + PositionOffset.y - anchorPx.y)
-			};
-
-			if (obj->Class == SCROLLFRAME) {
-				Vector2 canvasPx = getCanvasRealPos(obj);
-				posPx.x = std::roundf(parentPosPx.x + myLocalPx.x - canvasPx.x);
-				posPx.y = std::roundf(parentPosPx.y + myLocalPx.y - canvasPx.y);
-			} else {
-				posPx.x = std::roundf(parentPosPx.x + myLocalPx.x);
-				posPx.y = std::roundf(parentPosPx.y + myLocalPx.y);
+		while (curr) {
+			if (!Is2DInheritor(curr)) {
+				curr = curr->Parent;
+				continue;
 			}
 
-			RealPos = posPx;
-			return;
+			Object2D* parent = static_cast<Object2D*>(curr);
+
+			Vector2 parentSizePx = {
+				std::roundf(parent->RealSize.x),
+				std::roundf(parent->RealSize.y)
+			};
+
+			Vector2 childSizePx = {
+				std::roundf(child->RealSize.x),
+				std::roundf(child->RealSize.y)
+			};
+
+			Vector2 childAnchorPx = {
+				std::roundf(childSizePx.x * child->AnchorPosition.x + child->AnchorPositionOffset.x),
+				std::roundf(childSizePx.y * child->AnchorPosition.y + child->AnchorPositionOffset.y)
+			};
+
+			Vector2 childLocalTopLeft = {
+				std::roundf(parentSizePx.x * child->Position.x + child->PositionOffset.x - childAnchorPx.x),
+				std::roundf(parentSizePx.y * child->Position.y + child->PositionOffset.y - childAnchorPx.y)
+			};
+
+			if (parent->Class == SCROLLFRAME) {
+				Vector2 canvasPx = getCanvasRealPos(parent);
+				childLocalTopLeft.x = std::roundf(childLocalTopLeft.x - std::roundf(canvasPx.x));
+				childLocalTopLeft.y = std::roundf(childLocalTopLeft.y - std::roundf(canvasPx.y));
+			}
+
+			Vector2 pointInParent = {
+				std::roundf(childLocalTopLeft.x + trackedPoint.x),
+				std::roundf(childLocalTopLeft.y + trackedPoint.y)
+			};
+
+			Vector2 parentOriginPx = {
+				std::roundf(parentSizePx.x * parent->Origin.x + parent->OriginOffset.x),
+				std::roundf(parentSizePx.y * parent->Origin.y + parent->OriginOffset.y)
+			};
+
+			float dx = std::roundf(pointInParent.x - parentOriginPx.x);
+			float dy = std::roundf(pointInParent.y - parentOriginPx.y);
+
+			if (parent->lastFrameUpdatedRealProps == SIMPLEUI_GLOBAL::framesSinceStart) {
+				float rad = parent->RealRotation * (3.1415926535f / 180.0f);
+				float cosA = std::cos(rad);
+				float sinA = std::sin(rad);
+
+				float rotX = std::roundf(dx * cosA - dy * sinA);
+				float rotY = std::roundf(dx * sinA + dy * cosA);
+
+				Vector2 worldOrigin = {
+					std::roundf(std::roundf(parent->RealPos.x) + parentOriginPx.x + rotX),
+					std::roundf(std::roundf(parent->RealPos.y) + parentOriginPx.y + rotY)
+				};
+
+				RealPos = {
+					std::roundf(worldOrigin.x - myOriginPx.x),
+					std::roundf(worldOrigin.y - myOriginPx.y)
+				};
+				RealRotation = totalRot + parent->RealRotation;
+				return;
+			}
+
+			float rad = parent->Rotation * (3.1415926535f / 180.0f);
+			float cosA = std::cos(rad);
+			float sinA = std::sin(rad);
+
+			float rotX = std::roundf(dx * cosA - dy * sinA);
+			float rotY = std::roundf(dx * sinA + dy * cosA);
+
+			trackedPoint = {
+				std::roundf(parentOriginPx.x + rotX),
+				std::roundf(parentOriginPx.y + rotY)
+			};
+
+			totalRot += parent->Rotation;
+
+			child = parent;
+			curr = curr->Parent;
 		}
 
-		Vector2 rootSizePx = { static_cast<float>(SIMPLEUI_GLOBAL::winWidth), static_cast<float>(SIMPLEUI_GLOBAL::winHeight) };
-		Vector2 rootLocalPx = {
-			std::roundf(rootSizePx.x * Position.x + PositionOffset.x - anchorPx.x),
-			std::roundf(rootSizePx.y * Position.y + PositionOffset.y - anchorPx.y)
+		Vector2 rootSizePx = {
+			std::roundf(static_cast<float>(SIMPLEUI_GLOBAL::winWidth)),
+			std::roundf(static_cast<float>(SIMPLEUI_GLOBAL::winHeight))
 		};
 
-		RealPos = rootLocalPx;
+		Vector2 childSizePx = {
+			std::roundf(child->RealSize.x),
+			std::roundf(child->RealSize.y)
+		};
+
+		Vector2 childAnchorPx = {
+			std::roundf(childSizePx.x * child->AnchorPosition.x + child->AnchorPositionOffset.x),
+			std::roundf(childSizePx.y * child->AnchorPosition.y + child->AnchorPositionOffset.y)
+		};
+
+		Vector2 rootTopLeft = {
+			std::roundf(rootSizePx.x * child->Position.x + child->PositionOffset.x - childAnchorPx.x),
+			std::roundf(rootSizePx.y * child->Position.y + child->PositionOffset.y - childAnchorPx.y)
+		};
+
+		Vector2 worldOrigin = {
+			std::roundf(rootTopLeft.x + trackedPoint.x),
+			std::roundf(rootTopLeft.y + trackedPoint.y)
+		};
+
+		RealPos = {
+			std::roundf(worldOrigin.x - myOriginPx.x),
+			std::roundf(worldOrigin.y - myOriginPx.y)
+		};
+		RealRotation = totalRot;
 	}
 
 	Vector2 getMousePosition() {
@@ -3399,12 +3565,12 @@ public:
 	Rectangle GetRotatedBounds() {
 		Vector2 pos = RealPos;
 		Vector2 size = RealSize;
-		if (Rotation == 0.0f) return { pos.x, pos.y, size.x, size.y };
+		if (RealRotation == 0.0f) return { pos.x, pos.y, size.x, size.y };
 
-		float sn = sinf(Rotation * DEG2RAD);
-		float cs = cosf(Rotation * DEG2RAD);
-		float ox = pos.x + Origin.x * size.x + OriginOFFSET.x;
-		float oy = pos.y + Origin.y * size.y + OriginOFFSET.y;
+		float sn = sinf(RealRotation * DEG2RAD);
+		float cs = cosf(RealRotation * DEG2RAD);
+		float ox = pos.x + Origin.x * size.x + OriginOffset.x;
+		float oy = pos.y + Origin.y * size.y + OriginOffset.y;
 
 		float xs[4] = { pos.x, pos.x + size.x, pos.x + size.x, pos.x };
 		float ys[4] = { pos.y, pos.y, pos.y + size.y, pos.y + size.y };
@@ -3430,7 +3596,7 @@ public:
 		if (BackgroundTransparency >= 1.0f and (BorderThickness == 0 or BorderTransparency >= 1.0f)) return;
 
 		float bt = (float)BorderThickness;
-		if (Rotation == 0.0f) {
+		if (RealRotation == 0.0f) {
 			if (RealPos.x + RealSize.x + bt < 0 or RealPos.x - bt > SIMPLEUI_GLOBAL::winWidth or RealPos.y + RealSize.y + bt < 0 or RealPos.y - bt > SIMPLEUI_GLOBAL::winHeight) return;
 		} else {
 			Rectangle b = GetRotatedBounds();
@@ -3442,8 +3608,8 @@ public:
 			BackgroundColor, BorderColor,
 			BackgroundTransparency, Roundness, BorderTransparency,
 			BorderThickness,
-			Rotation,
-			{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+			RealRotation,
+			{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 		};
 
 		rec.borderType = BorderType;
@@ -3460,11 +3626,11 @@ public:
 		float px = pos.x;
 		float py = pos.y;
 
-		if (Rotation != 0.0f) {
-			float ox = RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x;
-			float oy = RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y;
-			float sn = sinf(Rotation * DEG2RAD);
-			float cs = cosf(Rotation * DEG2RAD);
+		if (RealRotation != 0.0f) {
+			float ox = RealPos.x + Origin.x * RealSize.x + OriginOffset.x;
+			float oy = RealPos.y + Origin.y * RealSize.y + OriginOffset.y;
+			float sn = sinf(RealRotation * DEG2RAD);
+			float cs = cosf(RealRotation * DEG2RAD);
 			float dx = pos.x - ox;
 			float dy = pos.y - oy;
 			px = ox + dx * cs + dy * sn;
@@ -3490,7 +3656,7 @@ public:
 		}
 
 		if (!Visible) {
-			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true;
 			return;
 		}
 
@@ -3500,14 +3666,18 @@ public:
 			UpdateChildren(this);
 		}
 
-		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+		bool dirty = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
+
+		if (dirty) {
+			lastRotation = Rotation;
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
 		}
 
 		Draw();
 
-		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		bool tempRes = dirty;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
@@ -3516,8 +3686,8 @@ public:
 		if (c) {
 			SIMPLEUI_GLOBAL::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
-				Roundness, Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+				Roundness, RealRotation, 
+				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 
 			SIMPLEUI_GLOBAL::PushClip(clip);
@@ -3706,7 +3876,26 @@ class ScrollFrame : public Object2D {
 		int X = 0;
 		int Y = 0;
 		std::vector<std::pair<long, Instance*>> Objects;
+		size_t lastFrameSorted = 0;
+		bool needSort = false;
 	};
+
+	void sortSector(ScrollSector* s) {
+		std::stable_sort(s->Objects.begin(), s->Objects.end(), [](std::pair<long, Instance*> a, std::pair<long, Instance*> b) {
+			int zA = 0;
+			int zB = 0;
+
+			if (Is2DInheritor(a.second->Class)) {
+				zA = static_cast<Object2D*>(a.second)->ZIndex;
+			}
+
+			if (Is2DInheritor(b.second->Class)) {
+				zB = static_cast<Object2D*>(b.second)->ZIndex;
+			}
+
+			return zA < zB;
+		});
+	} 
 
 	std::unordered_map<int, std::unordered_map<int, ScrollSector*>> Grid;
 	std::unordered_map<long, std::vector<ScrollSector*>> SectorsOnObject;
@@ -3775,6 +3964,8 @@ private:
 		float cw = pw;
 		float ch = ph;
 
+		bool next = true;
+
 		if (Is2DInheritor(obj)) {
 			Object2D* o = static_cast<Object2D*>(obj);
 
@@ -3796,10 +3987,14 @@ private:
 			cy = y;
 			cw = w;
 			ch = h;
+
+			if (o->ClipDescendants) next = false;
 		}
 
-		for (Instance* child : obj->Children) {
-			accumulateBounds(child, cx, cy, cw, ch, minX, minY, maxX, maxY);
+		if (next) {
+			for (Instance* child : obj->Children) {
+				accumulateBounds(child, cx, cy, cw, ch, minX, minY, maxX, maxY);
+			}
 		}
 	}
 
@@ -3845,6 +4040,7 @@ private:
 		}
 
 		sector->Objects.push_back({ obj->UniqueID, obj });
+		sector->needSort = true;
 
 		auto it3 = SectorsOnObject.find(obj->UniqueID);
 
@@ -4004,15 +4200,16 @@ public:
 	void Draw(bool posOrSizeChanged) {
 		Object2D::Draw();
 
-		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
+		lastRotation = Rotation;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
 		if (ClipDescendants) {
 			SIMPLEUI_GLOBAL::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
-				Roundness, Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+				Roundness, RealRotation, 
+				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
 			SIMPLEUI_GLOBAL::PushClip(clip);
@@ -4028,6 +4225,12 @@ public:
 			checkAndUpdateCurrentSectors();
 
 			for (ScrollSector* s : sectorsOnView) {
+				if (s->lastFrameSorted < SIMPLEUI_GLOBAL::framesSinceStart and s->needSort) {
+					s->needSort = false;
+					s->lastFrameSorted = SIMPLEUI_GLOBAL::framesSinceStart;
+					sortSector(s);
+				}
+
 				for (auto& [id, ptr] : s->Objects) {
 					if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
 					ptr->Update(tempRes);
@@ -4065,10 +4268,10 @@ public:
 					Vector2 firstPoint = { RealPos.x + RealSize.x - SliderSize * 0.6f, sliderY };
 					Vector2 secondPoint = { firstPoint.x, sliderY + sliderHeight };
 					Vector2 o = {
-						Origin.x * RealSize.x + OriginOFFSET.x,
-						Origin.y * RealSize.y + OriginOFFSET.y
+						Origin.x * RealSize.x + OriginOffset.x,
+						Origin.y * RealSize.y + OriginOffset.y
 					};
-					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation, SliderRoundness);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, RealRotation, SliderRoundness);
 				}
 			}
 
@@ -4089,13 +4292,13 @@ public:
 					}
 
 					Vector2 o = {
-						  Origin.x * RealSize.x + OriginOFFSET.x,
-						  Origin.y * RealSize.y + OriginOFFSET.y
+						  Origin.x * RealSize.x + OriginOffset.x,
+						  Origin.y * RealSize.y + OriginOffset.y
 					};
 
 					Vector2 firstPoint = { sliderX, RealPos.y + RealSize.y - SliderSize * 0.6f };
 					Vector2 secondPoint = { sliderX + sliderWidth, firstPoint.y };
-					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, Rotation, SliderRoundness);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(firstPoint, secondPoint, SliderSize, { SliderColor.r, SliderColor.g, SliderColor.b, (unsigned char)(SliderColor.a * (1 - SliderTransparency)) }, RealPos, o, RealRotation, SliderRoundness);
 				}
 			}
 		}
@@ -4119,13 +4322,14 @@ public:
 		}
 
 		if (!Visible) {
-			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true;
 			return;
 		}
 
-		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
 
 			for (Instance* obj : Children) {
 				obj->SetSizePosUpdateFlag();
@@ -4318,9 +4522,12 @@ class TextLabel : public Object2D {
 	Vector2 maxTextureSize{};
 	Rectangle whereDrawText{};
 	float rasterFont = 0.0f;
+	float targetSize = 0;
 	float currentScale = 1.0f;
 	Vector2 refSize{};
 	int lastSpacing = 0;
+	TextAnchorEnum lastAnchor = TextAnchorEnum::CENTER;
+	Vector2 lastSize = {0,0};
 	int lastTextured = false;
 
 	int FontFaceIndex = 0;
@@ -4367,7 +4574,6 @@ class TextLabel : public Object2D {
 		lastMaxVisibleRight = MaxVisibleRight;
 		rebuildVisible = false;
 		refSize = MeasureTextEx(getFont(FontFaceIndex), visibleText.c_str(), MeasureRefFont, Spacing);
-		lastSpacing = Spacing;
 	}
 
 	float rasterTarget() const {
@@ -4385,14 +4591,20 @@ class TextLabel : public Object2D {
 			return;
 		}
 
-		float scale = std::min(RealSize.x / textSizeOnTexture.x, RealSize.y / textSizeOnTexture.y);
-		if (TextSize > 0) scale = std::min(scale, TextSize / rasterFont);
-		currentScale = scale;
+		if (Textured) {
+			float scale = std::min(RealSize.x / textSizeOnTexture.x, RealSize.y / textSizeOnTexture.y);
+			if (TextSize > 0) scale = std::min(scale, TextSize / rasterFont);
+			currentScale = scale;
 
-		Vector2 f = getTextOffset(TextAnchor);
-		float w = textSizeOnTexture.x * scale;
-		float h = textSizeOnTexture.y * scale;
-		whereDrawText = { (RealSize.x - w) * f.x, (RealSize.y - h) * f.y, w, h };
+			Vector2 f = getTextOffset(TextAnchor);
+			float w = textSizeOnTexture.x * scale;
+			float h = textSizeOnTexture.y * scale;
+			whereDrawText = { (RealSize.x - w) * f.x, (RealSize.y - h) * f.y, w, h };
+		} else {
+			Vector3 f = getTextCFrame(Text.c_str(), getFont(FontFaceIndex), {RealPos.x, RealPos.y, RealSize.x, RealSize.y}, TextAnchor, TextSize, Spacing);
+			targetSize = f.z;
+			whereDrawText = { f.x, f.y };
+		}
 	}
 
 	void updateTexture() {
@@ -4497,8 +4709,8 @@ public:
 			}
 
 			Vector2 o = {
-				Origin.x * RealSize.x + OriginOFFSET.x,
-				Origin.y * RealSize.y + OriginOFFSET.y
+				Origin.x * RealSize.x + OriginOffset.x,
+				Origin.y * RealSize.y + OriginOffset.y
 			};
 
 			bool dirty = Text.isChanged() or FontFace.isChanged();
@@ -4510,14 +4722,19 @@ public:
 			Text.restate();
 			FontFace.restate();
 
-			updateLayout();
+			bool spacingDirty = lastSpacing != Spacing;
+			lastSpacing = Spacing;
+
+			if (Textured) {
+				updateLayout();
+			}
 
 			if (dirty) {
 				rebuildVisible = true;
 				allocFailed = false;
 			}
 
-			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight or lastSpacing != Spacing or (Textured and lastTextured != Textured) or lastPerSymbol != UsePerSymbolColor) {
+			if (lastMaxVisible != MaxVisibleSymbols or lastMaxVisibleRight != MaxVisibleRight or spacingDirty or (Textured and lastTextured != Textured) or lastPerSymbol != UsePerSymbolColor) {
 				rebuildVisible = true;
 			}
 
@@ -4539,22 +4756,31 @@ public:
 					Rectangle sourceRec = { 0.0f, 0.0f, textSizeOnTexture.x, textSizeOnTexture.y };
 					Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
 
-					SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
+					SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, RealRotation, { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) }, (RoundText ? Roundness : 0));
 				} else {
 					rebuildVisible = true;
 				}
 			} else {
 				if (rebuildVisible or rasterFont < 1) rebuildVisibleText();
+
+				if (spacingDirty or dirty or lastAnchor != TextAnchor or lastSize.x != RealSize.x or lastSize.y != RealSize.y or targetSize < 1) {
+					lastSize = RealSize;
+					lastAnchor = TextAnchor;
+					
+					updateLayout();
+
+				}
+
 				rasterFont = rasterTarget();
 				data.Origin = o;
-				data.Rotation = Rotation;
+				data.Rotation = RealRotation;
 				data.RealPos = RealPos;
 				data.RealSize = RealSize;
 				data.Roundness = Roundness;
 
 				Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
 				if (rasterFont > 1) {
-					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { destRec.x, destRec.y }, rasterFont, Spacing, TextColor, (GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor), &data);
+					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { destRec.x, destRec.y }, targetSize, Spacing, TextColor, (GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor), &data);
 				}
 			}
 
@@ -4844,11 +5070,11 @@ public:
 				}
 
 				Vector2 o = {
-						Origin.x * RealSize.x + OriginOFFSET.x,
-						Origin.y * RealSize.y + OriginOFFSET.y
+						Origin.x * RealSize.x + OriginOffset.x,
+						Origin.y * RealSize.y + OriginOffset.y
 				};
 
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, Rotation, clr, 0);
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, RealRotation, clr, 0);
 			}
 		}
 
@@ -4858,14 +5084,14 @@ public:
 					float sizeY = RealSize.y;
 
 					Vector2 o = {
-						Origin.x * RealSize.x + OriginOFFSET.x,
-						Origin.y * RealSize.y + OriginOFFSET.y
+						Origin.x * RealSize.x + OriginOffset.x,
+						Origin.y * RealSize.y + OriginOffset.y
 					};
 
 					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y - viewY },
 						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY },
-						CursorSize, CursorColor, RealPos, o, Rotation, CursorRoundness
+						CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness
 					);
 				}
 			}
@@ -4911,14 +5137,14 @@ public:
 			}
 
 			Vector2 o = {
-				Origin.x * RealSize.x + OriginOFFSET.x,
-				Origin.y * RealSize.y + OriginOFFSET.y
+				Origin.x * RealSize.x + OriginOffset.x,
+				Origin.y * RealSize.y + OriginOffset.y
 			};
 
 			SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY },
 				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset + size.y - viewY },
-				CursorSize, CursorColor, RealPos, o, Rotation, CursorRoundness
+				CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness
 			);
 		}
 	}
@@ -4974,11 +5200,11 @@ public:
 				float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
 
 				Vector2 o = {
-					Origin.x * RealSize.x + OriginOFFSET.x,
-					Origin.y * RealSize.y + OriginOFFSET.y
+					Origin.x * RealSize.x + OriginOffset.x,
+					Origin.y * RealSize.y + OriginOffset.y
 				};
 
-				float rad = -Rotation * DEG2RAD;
+				float rad = -RealRotation * DEG2RAD;
 				float cs = cosf(rad);
 				float sn = sinf(rad);
 				float px = RealPos.x + o.x;
@@ -5419,13 +5645,15 @@ public:
 			lastVisible = Visible;
 		}
 
-		if (!Visible) { CursorIndex = -1; CursorVisible = false; deleteText = true; if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true; return; }
+		if (!Visible) { CursorIndex = -1; CursorVisible = false; deleteText = true; if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true; return; }
 
 		inputHandler();
 
-		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
+			lastRotation = Rotation;
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
 		}
 
 		SameUpdate();
@@ -5488,7 +5716,8 @@ public:
 
 		Draw();
 
-		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
+		lastRotation = Rotation;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
@@ -5497,8 +5726,8 @@ public:
 		if (c) {
 			SIMPLEUI_GLOBAL::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
-				Roundness, Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+				Roundness, RealRotation, 
+				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
 			SIMPLEUI_GLOBAL::PushClip(clip);
@@ -5641,7 +5870,7 @@ public:
 			destRec.width = std::ceilf(destRec.width);
 			destRec.height = std::ceilf(destRec.height);
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOFFSET.x + Origin.x * RealSize.x, OriginOFFSET.y + Origin.y * RealSize.y }, Rotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
 			SetImage(currentPair);
@@ -5749,7 +5978,7 @@ public:
 				return;
 			}
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(texture, RealPos, RealSize, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, { Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y }, Rotation, TextureColor, {RoundTexture ? Roundness : 0});
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(texture, RealPos, RealSize, { 0,0,(float)texture.width,(float)texture.height }, { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, { Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y }, RealRotation, TextureColor, {RoundTexture ? Roundness : 0});
 		}
 	}
 
@@ -5836,7 +6065,13 @@ inline void Instance::SetParent(Instance* ptr) {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
 	if (Parent and !DontSeekParent) {
-		for (size_t i = 0; i < Parent->Children.size(); i++) {
+		Instance* scrollChild = (Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
+
+		if (scrollChild) {
+			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
+		}
+
+		for (int i = 0; i < Parent->Children.size(); i++) {
 			if (Parent->Children[i] == this) {
 				Parent->Children.erase(Parent->Children.begin() + i);
 				break;
@@ -5889,23 +6124,6 @@ inline void Delete(Instance* ptr) {
 	}
 
 	SIMPLEUI_GLOBAL::deletedObjectsByID[ptr->UniqueID] = 1;
-
-	if (ptr->Parent and !ptr->DontSeekParent) {
-		ptr->Parent->childsRemovedInFrame.push_back({ptr->UniqueID, ptr});
-
-		Instance* scrollChild = (ptr->Parent->Class == SCROLLFRAME ? ptr : getAncestorWhichParentIsScrollFrame(ptr));
-
-		if (scrollChild) {
-			static_cast<ScrollFrame*>(scrollChild->Parent)->UpdateSectors(scrollChild);
-		}
-
-		for (int i = 0; i < ptr->Parent->Children.size(); i++) {
-			if (ptr->Parent->Children[i] == ptr) {
-				ptr->Parent->Children.erase(ptr->Parent->Children.begin() + i);
-				break;
-			}
-		}
-	}
 
 	ptr->SetParent(nullptr);
 	ptr->DeleteAllChildren();
@@ -7223,7 +7441,7 @@ inline void SUI_RenderFrame(Instance* StartInstance) {
 						}
 					}
 
-					return;
+					break;
 				}
 
 				z++;

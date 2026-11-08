@@ -128,7 +128,7 @@ class GraphBuilder : public Object2D {
 							seq->color, seq->color, 
 							0.0f, ColumnsRoundness, 1.0f,
 							0,
-							Rotation,
+							RealRotation,
 							Origin,
 						};
 
@@ -530,14 +530,14 @@ public:
 			}
 
 			Vector2 o = {
-				std::floorf(Origin.x * RealSize.x) + OriginOFFSET.x,
-				std::floorf(Origin.y * RealSize.y) + OriginOFFSET.y
+				std::floorf(Origin.x * RealSize.x) + OriginOffset.x,
+				std::floorf(Origin.y * RealSize.y) + OriginOffset.y
 			};
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, Rotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, RealRotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
 			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, Rotation, c, (RoundTextures ? Roundness : 0));
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, Rotation, c, (RoundTextures ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, RealRotation, c, (RoundTextures ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, RealRotation, c, (RoundTextures ? Roundness : 0));
 			}
 		}
 	}
@@ -608,15 +608,15 @@ class ToggleSwitcher : public Object2D {
 					float cx = RealBallPosX + SliderBorderThickness + halfSize;
 					float cy = RealPos.y + SliderBorderThickness + halfSize;
 
-					float px = RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x;
-					float py = RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y;
+					float px = RealPos.x + Origin.x * RealSize.x + OriginOffset.x;
+					float py = RealPos.y + Origin.y * RealSize.y + OriginOffset.y;
 
 					float mx = SIMPLEUI_GLOBAL::mousePosition.x;
 					float my = SIMPLEUI_GLOBAL::mousePosition.y;
 
-					if (Rotation != 0.0f) {
-						float sn = sinf(-Rotation * DEG2RAD);
-						float cs = cosf(-Rotation * DEG2RAD);
+					if (RealRotation != 0.0f) {
+						float sn = sinf(-RealRotation * DEG2RAD);
+						float cs = cosf(-RealRotation * DEG2RAD);
 						float rx = mx - px;
 						float ry = my - py;
 						mx = px + rx * cs - ry * sn;
@@ -685,8 +685,8 @@ public:
 			Vector2 RealSize1 = { RealSize.y, RealSize.y };
 
 			Vector2 pivot = {
-				RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x,
-				RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y
+				RealPos.x + Origin.x * RealSize.x + OriginOffset.x,
+				RealPos.y + Origin.y * RealSize.y + OriginOffset.y
 			};
 
 			const RoundRectData rec = {
@@ -694,7 +694,7 @@ public:
 				SliderColor, SliderBorderColor,
 				SliderTransparency, Roundness, SliderBorderTransparency,
 				SliderBorderThickness,
-				Rotation,
+				RealRotation,
 				{ pivot.x - RealPos1.x, pivot.y - RealPos1.y }
 			};
 
@@ -712,7 +712,7 @@ public:
 		}
 
 		if (!Visible) {
-			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true;
 			return;
 		}
 
@@ -727,16 +727,18 @@ public:
 			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 		}
 
-		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
 		}
 
 		checkClick();
 
 		Draw();
 
-		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
+		lastRotation = Rotation;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
@@ -744,8 +746,8 @@ public:
 		if (c) {
 			SIMPLEUI_GLOBAL::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
-				Roundness, Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+				Roundness, RealRotation, 
+				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
 			SIMPLEUI_GLOBAL::PushClip(clip);
@@ -876,8 +878,8 @@ class CheckBox : public Object2D {
 			float r = (MultiChoice ? MultiChoiceRoundness : 1) * halfSize;
 
 			Vector2 pivot = {
-				RealPos.x + Origin.x * RealSize.x + OriginOFFSET.x,
-				RealPos.y + Origin.y * RealSize.y + OriginOFFSET.y
+				RealPos.x + Origin.x * RealSize.x + OriginOffset.x,
+				RealPos.y + Origin.y * RealSize.y + OriginOffset.y
 			};
 
 			float mx = SIMPLEUI_GLOBAL::mousePosition.x;
@@ -1101,8 +1103,8 @@ public:
 			}
 
 			Vector2 o = {
-				Origin.x * RealSize.x + OriginOFFSET.x,
-				Origin.y * RealSize.y + OriginOFFSET.y
+				Origin.x * RealSize.x + OriginOffset.x,
+				Origin.y * RealSize.y + OriginOffset.y
 			};
 
 			Vector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
@@ -1129,7 +1131,7 @@ public:
 					but.ButtonColor, but.ButtonBorderColor,
 					but.ButtonTransparency, (MultiChoice ? MultiChoiceRoundness : 1), but.ButtonBorderTransparency,
 					but.ButtonBorderThickness,
-					Rotation,
+					RealRotation,
 					{ pivot.x - rectPos.x, pivot.y - rectPos.y }
 				};
 
@@ -1139,7 +1141,7 @@ public:
 					{ 0, 0, but.tex.size.x, but.tex.size.y },
 					{ RealPos.x + (AnchorToLeft ? buttonSize : 0), RealPos.y + rowHeight * i, currentTextureButtonSize.x, currentTextureButtonSize.y },
 					o,
-					Rotation,
+					RealRotation,
 					but.TextColor,
 					(RoundTexture ? Roundness : 0)
 				);
@@ -1159,7 +1161,7 @@ public:
 		}
 
 		if (!Visible) {
-			if (posOrSizeChanged or posOrSizeChangedResult) updateWhenWillBeVisible = true;
+			if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true;
 			return;
 		}
 
@@ -1174,16 +1176,18 @@ public:
 			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 		}
 
-		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible) {
+		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
+			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
 		}
 
 		checkClick();
 
 		Draw();
 
-		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible;
+		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
+		lastRotation = Rotation;
 		posOrSizeChangedResult = false;
 		updateWhenWillBeVisible = false;
 
@@ -1191,8 +1195,8 @@ public:
 		if (c) {
 			SIMPLEUI_GLOBAL::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
-				Roundness, Rotation, 
-				{Origin.x * RealSize.x + OriginOFFSET.x, Origin.y * RealSize.y + OriginOFFSET.y}
+				Roundness, RealRotation, 
+				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
 			SIMPLEUI_GLOBAL::PushClip(clip);

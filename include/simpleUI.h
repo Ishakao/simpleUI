@@ -190,7 +190,7 @@ using RAYLIB_FUNCTIONAL::KEY_ENTER;
 #define YELLOW_ANSI "\033[33m"
 #define BLUE_ANSI "\033[36m"
 #define DEFAULT_ANSI "\033[0m"
-#define SCROLLFRAME_GRID_SIZE 512
+#define SCROLLFRAME_GRID_SIZE 256
 #define MAX_TEXTURE_LIMIT 16384
 #define DEFAULT_ATLAS_SIZE 2048
 #define FLT_MAX          3.402823466e+38F        // max value  (from float.h)
@@ -614,6 +614,8 @@ namespace SIMPLEUI_GLOBAL {
 	}
 
 	inline void PopClip() { clipStack.pop_back(); }
+
+	bool changedParentThisFrame = false;
 }
 
 inline void ChangeWindowColor(Color c) {
@@ -1116,7 +1118,7 @@ struct TexturedTextLabelData {
             return L;
         }
 
-        inline Vector2 MeasureTextEx(FT_Font& font, const char* text, int size, int spacing) {
+        inline Vector2 MeasureTextEx(FT_Font& font, const char* text, float size, int spacing) {
             const Layout& L = GetLayout(font, text);
             float s = (float)size / (float)font.BaseSize();
             float maxW = 0.0f;
@@ -1127,11 +1129,11 @@ struct TexturedTextLabelData {
             return { maxW, (float)L.lines.size() * L.baseLineH * s };
         }
 
-        inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* textlabeldata=nullptr) {
+        inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* textlabeldata=nullptr) {
             const Layout& L = GetLayout(font, text);
             Texture2D tex = font.BaseTexture();
             Color colorTint = { 255, 255, 255, tint.a };
-            float s = (float)fontSize / (float)font.BaseSize();
+            float s = fontSize / (float)font.BaseSize();
 
 			int i = 0;
 
@@ -1169,7 +1171,7 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		#else
 			FT_TextManagement::FT_Font&
 		#endif
-		font, const char* text, Vector2 pos, int fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* data=nullptr) {
+		font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* data=nullptr) {
 
 		#ifdef EXCLUDE_SIMPLEUI_FREETYPE
 			RAYLIB_FUNCTIONAL::DrawTextEx(font, text, pos, fontSize, spacing, tint);
@@ -1607,7 +1609,7 @@ public:
 	}
 
 	const SUI_Text& operator=(const char* other) {
-		std::string st = other;
+		std::string_view st = other;
 
 		if (text.size() != st.size()) {
 			changed = true;
@@ -2519,14 +2521,18 @@ class Instance {
 	friend void UpdateChildren(Instance*);
 	friend void SUI_RenderFrame(Instance*);
 	friend class Object2D;
+	friend class ScrollFrame;
 	friend void Delete(Instance* ptr);
 	friend void SIMPLEUI_GLOBAL::CollectDeadObjects();
+	friend Instance* getAncestorWhichParentIsScrollFrame(Instance*);
 protected:
 	size_t lastUpdateFrame = 0;
 	bool DontSeekParent = false;
 	bool DestroyCalled = false;
 	bool updateChildrenZIndex = true;
 	int currentEventID = 0;
+	Instance* AncestorScrollFrame = nullptr;
+	bool inSectorQueue = false;
 public:
 	ParentInstance Parent{nullptr};
 	ChildrenInstance Children;
@@ -2760,10 +2766,17 @@ inline Instance* GetRoot() {
 }
 
 inline Instance* getAncestorWhichParentIsScrollFrame(Instance* ptr) {
+	if (!SIMPLEUI_GLOBAL::changedParentThisFrame) return ptr->AncestorScrollFrame;
+
 	while (ptr->Parent != nullptr) {
-		if (ptr->Parent->Class == SCROLLFRAME) return ptr;
+		if (ptr->Parent->Class == SCROLLFRAME) {
+			ptr->AncestorScrollFrame = ptr;
+			return ptr;
+		}
 		ptr = ptr->Parent;
 	}
+
+	ptr->AncestorScrollFrame = nullptr;
 
 	return nullptr;
 }
@@ -3486,10 +3499,13 @@ public:
 			float dy = std::roundf(pointInParent.y - parentOriginPx.y);
 
 			if (parent->lastFrameUpdatedRealProps == SIMPLEUI_GLOBAL::framesSinceStart) {
-				float rad = parent->RealRotation * (3.1415926535f / 180.0f);
-				float cosA = std::cos(rad);
-				float sinA = std::sin(rad);
-
+				float cosA = 1.0f;
+				float sinA = 0.0f;
+				if (parent->RealRotation != 0.0f) {
+					float rad = parent->RealRotation * (3.1415926535f / 180.0f);
+					cosA = std::cos(rad);
+					sinA = std::sin(rad);
+				}
 				float rotX = std::roundf(dx * cosA - dy * sinA);
 				float rotY = std::roundf(dx * sinA + dy * cosA);
 
@@ -3506,9 +3522,13 @@ public:
 				return;
 			}
 
-			float rad = parent->Rotation * (3.1415926535f / 180.0f);
-			float cosA = std::cos(rad);
-			float sinA = std::sin(rad);
+			float cosA = 1.0f;
+			float sinA = 0.0f;
+			if (parent->Rotation != 0.0f) {
+				float rad = parent->Rotation * (3.1415926535f / 180.0f);
+				cosA = std::cos(rad);
+				sinA = std::sin(rad);
+			}
 
 			float rotX = std::roundf(dx * cosA - dy * sinA);
 			float rotY = std::roundf(dx * sinA + dy * cosA);
@@ -3920,17 +3940,6 @@ private:
 	void SectorsRemoveChild(long childID) {
 		if (childID == -1) return;
 
-		auto upit = toUpdateSectorsC.find(childID);
-		if (upit != toUpdateSectorsC.end()) {
-			toUpdateSectorsC.erase(upit);
-			for (int i = 0; i < toUpdateSectors.size(); i++) {
-				if (toUpdateSectors[i].first == childID) {
-					toUpdateSectors.erase(toUpdateSectors.begin() + i);
-					break;
-				}
-			}
-		}
-
 		auto it = SectorsOnObject.find(childID);
 		if (it != SectorsOnObject.end()) {
 			for (ScrollSector* sector : it->second) {
@@ -4103,7 +4112,6 @@ private:
 		}
 	}
 
-	std::unordered_map<long, Instance*> toUpdateSectorsC;
 	std::vector<std::pair<long, Instance*>> toUpdateSectors;
 
 	void secUpd(Instance* child) {
@@ -4158,11 +4166,9 @@ protected:
 	}
 public:
 	void UpdateSectors(Instance* child) {
-		auto it = toUpdateSectorsC.find(child->UniqueID);
-		if (it != toUpdateSectorsC.end()) return;
-
+		if (child->inSectorQueue) return;
+		child->inSectorQueue = true;
 		toUpdateSectors.push_back({ child->UniqueID, child });
-		toUpdateSectorsC.insert({ child->UniqueID, child });
 	}
 
 	void UpdateObjectTickState(Instance* child) {
@@ -4216,11 +4222,11 @@ public:
 
 			for (auto& [id, ptr] : toUpdateSectors) {
 				if (SIMPLEUI_GLOBAL::deletedObjectsByID[id]) continue;
+				ptr->inSectorQueue = false;
 				secUpd(ptr);
 			}
 
 			toUpdateSectors.clear();
-			toUpdateSectorsC.clear();
 
 			checkAndUpdateCurrentSectors();
 
@@ -4448,7 +4454,6 @@ public:
 		i->isTick.clear();
 		i->sectorsOnView.clear();
 		i->toUpdateSectors.clear();
-		i->toUpdateSectorsC.clear();
 		i->SectorRectOnObject.clear();
 		i->lastFullSize.x = -123123;
 
@@ -4877,7 +4882,7 @@ class TextBox : public Object2D {
 		if (Type != TextBoxType::TEXTBOX_RESIZING) {
 			textParams.y = 0;
 			textParams.x = 0;
-			textParams.z = getTextCFrame("A", getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
+			textParams.z = getTextCFrame("|", getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
 		} else {
 			if (Text != "") {
 				textParams = getTextCFrame(Text.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
@@ -4887,9 +4892,29 @@ class TextBox : public Object2D {
 		}
 	}
 
+	void updateVisible() {
+		if (Text != "") {
+			lines = 1;
+
+			if (HideText == '\0') {
+				visibleText = Text;
+			} else {
+				visibleText = "";
+				for (int i = 0; i < charOffsets.size() - 1; i++) {
+					visibleText += HideText;
+				}
+			}
+
+			for (char c : visibleText) {
+				if (c == '\n') lines++;
+			}
+		} else {
+			lines = 0;
+		}
+	}
+
 	void updateTexture() {
-		updateTextParams();
-		lastFocused = SIMPLEUI_GLOBAL::FocusedTextBox;
+		updateVisible();
 		lastParams = textParams;
 		lastRealSize = RealSize;
 		lastHideText = HideText;
@@ -4926,25 +4951,9 @@ class TextBox : public Object2D {
 		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
 		cachedText.currentAtlas->blankArea(cachedText);
 
-		if (Text != "") {
-			lines = 1;
-
-			std::string t;
-			if (HideText == '\0') {
-				t = Text;
-			} else {
-				for (int i = 0; i < charOffsets.size() - 1; i++) {
-					t += HideText;
-				}
-			}
-
-			for (char c : t) {
-				if (c == '\n') lines++;
-			}
-
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), t.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
+		if (visibleText != "") {
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 		} else {
-			lines = 0;
 			if (CursorIndex == -1 or SIMPLEUI_GLOBAL::FocusedTextBox != this) {
 				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 			}
@@ -5033,16 +5042,18 @@ public:
 		FontFace.restate();
 		PlaceholderText.restate();
 
-		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs) {
+		if (updateCondition1) {
+			std::cout << 1 << std::endl;
+			updateVisible();
+		}
+
+		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs or lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
+			updateTextParams();
 			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
-		} else {
-			if (lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
-				updateTextParams();
-				if (Text == "") {
-					newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
-				} else {
-					newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
-				}
+			if (Text == "") {
+				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
+			} else {
+				newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
 			}
 		}
 
@@ -5081,7 +5092,7 @@ public:
 		if (Text.empty()) {
 			if (CursorVisible and SIMPLEUI_GLOBAL::FocusedTextBox == this) {
 				if (textParams.z > 1) {
-					float sizeY = RealSize.y;
+					float sizeY = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
 
 					Vector2 o = {
 						Origin.x * RealSize.x + OriginOffset.x,
@@ -5124,7 +5135,7 @@ public:
 			Vector2 size = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
 
 			if (size.x == 0 or size.y == 0) {
-				size.y = MeasureTextEx(getFont(FontFaceIndex), "A", textParams.z, Spacing).y;
+				size.y = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
 				if (size.y == 0) size.y = textParams.z;
 			}
 
@@ -5132,7 +5143,7 @@ public:
 			if (currentLine > 0) {
 				std::string newlinesStr(currentLine, '\n');
 				float totalH = MeasureTextEx(getFont(FontFaceIndex), newlinesStr.c_str(), textParams.z, Spacing).y;
-				float singleH = MeasureTextEx(getFont(FontFaceIndex), "A", textParams.z, Spacing).y;
+				float singleH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
 				yOffset = totalH - singleH;
 			}
 
@@ -5636,10 +5647,7 @@ public:
 		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
 
 		if (SIMPLEUI_GLOBAL::FocusedTextBox != this) { CursorIndex = -1; CursorVisible = false; deleteText = true; }
-
-		EventHandler();
-		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
-
+		
 		if (lastVisible != Visible) {
 			SIMPLEUI_GLOBAL::sceneDirty = true;
 			lastVisible = Visible;
@@ -5648,6 +5656,9 @@ public:
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; deleteText = true; if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true; return; }
 
 		inputHandler();
+
+		EventHandler();
+		if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			lastRotation = Rotation;
@@ -6035,6 +6046,7 @@ public:
 inline void Object2D::PosOrSizeChanged() {
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 	posOrSizeChangedResult = true;
+
 	Instance* scrollChild = (Parent and Parent->Class == SCROLLFRAME ? this : getAncestorWhichParentIsScrollFrame(this));
 
 	if (scrollChild) {
@@ -6062,6 +6074,7 @@ inline void Instance::SetParent(Instance* ptr) {
 		if (p == this) return;
 	}
 
+	SIMPLEUI_GLOBAL::changedParentThisFrame = true;
 	SIMPLEUI_GLOBAL::sceneDirty = true;
 
 	if (Parent and !DontSeekParent) {
@@ -6164,7 +6177,6 @@ inline void Instance::DeleteAllChildren() {
 		static_cast<ScrollFrame*>(this)->isTick.clear();
 		static_cast<ScrollFrame*>(this)->sectorsOnView.clear();
 		static_cast<ScrollFrame*>(this)->toUpdateSectors.clear();
-		static_cast<ScrollFrame*>(this)->toUpdateSectorsC.clear();
 	}
 }
 
@@ -6202,120 +6214,120 @@ inline void Object2D::EventHandler() {
 
 	for (const auto& [id, type, func, mouse] : events) {
 		switch (type) {
-		case TICK: {
-			func(this);
-			break;
-		} case MOUSE_ENTER: {
-			bool entered = false;
-			if (!mouseCalculated) {
-				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
+			case TICK: {
+				func(this);
+				break;
+			} case MOUSE_ENTER: {
+				bool entered = false;
+				if (!mouseCalculated) {
+					mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
 
-			if (mouseOnObject) {
+				if (mouseOnObject) {
+					bool enterAllowed = (
+						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
+						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
+						);
+
+					if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
+						entered = true;
+					}
+				}
+
+				if (entered and !MouseEntered) {
+					MouseEntered = true;
+					func(this);
+				}
+				break;
+			} case MOUSE_LEAVE: {
+				if (!mouseCalculated) {
+					mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
 				bool enterAllowed = (
 					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
 					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
+						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
 					);
 
-				if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
-					entered = true;
-				}
-			}
-
-			if (entered and !MouseEntered) {
-				MouseEntered = true;
-				func(this);
-			}
-			break;
-		} case MOUSE_LEAVE: {
-			if (!mouseCalculated) {
-				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			bool enterAllowed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
-				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
-				);
-
-			if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
-				MouseEntered = false;
-				func(this);
-			}
-			break;
-		} case MOUSE_CLICK: {
-			if (!mouseCalculated) {
-				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-				func(this);
-			}
-			break;
-		} case MOUSE_HOLD_START: {
-			if (!mouseCalculated) {
-				mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
-				mouseCalculated = true;
-			}
-
-			if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
-				if (mouse == MOUSE_LEFT) {
-					startedOnObject1 = true;
-				} else if (mouse == MOUSE_RIGHT) {
-					startedOnObject2 = true;
-				} else if (mouse == MOUSE_MIDDLE) {
-					startedOnObject3 = true;
-				}
-				func(this);
-			}
-
-			if (mouse == MOUSE_LEFT) {
-				hasStartHold1 = true;
-			} else if (mouse == MOUSE_RIGHT) {
-				hasStartHold2 = true;
-			} else if (mouse == MOUSE_MIDDLE) {
-				hasStartHold3 = true;
-			}
-
-			break;
-		} case MOUSE_HOLD_END: {
-			if (IsMouseButtonReleased(mouse)) {
-				if (mouse == MOUSE_LEFT) {
-					mouseReleased1 = func;
-				} else if (mouse == MOUSE_RIGHT) {
-					mouseReleased2 = func;
-				} else if (mouse == MOUSE_MIDDLE) {
-					mouseReleased3 = func;
-				}
-			}
-			break;
-		} case CHILD_ADDED: {
-			for (auto& [id, ptr] : childsAddedInFrame) {
-				func(this, ptr);
-			}
-			
-			break;
-		} case CHILD_REMOVED: {
-			for (auto& [id, ptr] : childsRemovedInFrame) {
-				func(this, ptr);
-			}
-			break;
-		} case TEXT_CHANGED: {
-			if (Class == TEXTLABEL) {
-				if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+				if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
+					MouseEntered = false;
 					func(this);
 				}
-			} else if (Class == TEXTBOX) {
-				if (static_cast<TextBox*>(this)->Text.isChanged()) {
+				break;
+			} case MOUSE_CLICK: {
+				if (!mouseCalculated) {
+					mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
 					func(this);
 				}
+				break;
+			} case MOUSE_HOLD_START: {
+				if (!mouseCalculated) {
+					mouseOnObject = PointInObject(SIMPLEUI_GLOBAL::mousePosition);
+					mouseCalculated = true;
+				}
+
+				if (IsMouseButtonPressed(mouse) and mouseOnObject and higherObject == this) {
+					if (mouse == MOUSE_LEFT) {
+						startedOnObject1 = true;
+					} else if (mouse == MOUSE_RIGHT) {
+						startedOnObject2 = true;
+					} else if (mouse == MOUSE_MIDDLE) {
+						startedOnObject3 = true;
+					}
+					func(this);
+				}
+
+				if (mouse == MOUSE_LEFT) {
+					hasStartHold1 = true;
+				} else if (mouse == MOUSE_RIGHT) {
+					hasStartHold2 = true;
+				} else if (mouse == MOUSE_MIDDLE) {
+					hasStartHold3 = true;
+				}
+
+				break;
+			} case MOUSE_HOLD_END: {
+				if (IsMouseButtonReleased(mouse)) {
+					if (mouse == MOUSE_LEFT) {
+						mouseReleased1 = func;
+					} else if (mouse == MOUSE_RIGHT) {
+						mouseReleased2 = func;
+					} else if (mouse == MOUSE_MIDDLE) {
+						mouseReleased3 = func;
+					}
+				}
+				break;
+			} case CHILD_ADDED: {
+				for (auto& [id, ptr] : childsAddedInFrame) {
+					func(this, ptr);
+				}
+				
+				break;
+			} case CHILD_REMOVED: {
+				for (auto& [id, ptr] : childsRemovedInFrame) {
+					func(this, ptr);
+				}
+				break;
+			} case TEXT_CHANGED: {
+				if (Class == TEXTLABEL) {
+					if (static_cast<TextLabel*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				} else if (Class == TEXTBOX) {
+					if (static_cast<TextBox*>(this)->Text.isChanged()) {
+						func(this);
+					}
+				}
+				break;
 			}
-			break;
-		}
 		}
 	}
 

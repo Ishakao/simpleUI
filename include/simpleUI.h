@@ -4884,11 +4884,7 @@ class TextBox : public Object2D {
 			textParams.x = 0;
 			textParams.z = getTextCFrame("|", getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing).z;
 		} else {
-			if (Text != "") {
-				textParams = getTextCFrame(Text.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-			} else {
-				textParams = getTextCFrame(PlaceholderText.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
-			}
+			textParams = getTextCFrame(visibleText.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 		}
 	}
 
@@ -4909,6 +4905,7 @@ class TextBox : public Object2D {
 				if (c == '\n') lines++;
 			}
 		} else {
+			visibleText = PlaceholderText;
 			lines = 0;
 		}
 	}
@@ -5027,6 +5024,7 @@ public:
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged() or Text.isChanged();
 		bool updateCondition2 = lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_GLOBAL::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_GLOBAL::FocusedTextBox != this));
+		lastFocused = SIMPLEUI_GLOBAL::FocusedTextBox;
 
 		if (FontFace.isChanged()) {
 			FontFaceIndex = getFontIndex(FontFace);
@@ -5352,6 +5350,8 @@ public:
 								}
 							}
 						}
+
+						updateCharOffsets();
 
 						Text = Text.substr(0, charOffsets[start]) + Text.substr(charOffsets[CursorIndex]);
 						CursorIndex = start;

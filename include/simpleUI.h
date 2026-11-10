@@ -5058,7 +5058,7 @@ public:
 		float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
 
 		if (textParams.z > 1) {
-			if (cachedText.id != 0) {
+			if (cachedText.id != 0 and !(Text.empty() and SIMPLEUI_GLOBAL::FocusedTextBox == this)) {
 				Vector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
 
 				Rectangle sourceRec = {

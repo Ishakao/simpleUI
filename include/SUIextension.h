@@ -515,7 +515,7 @@ public:
 			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), RealSize.x - leftSizeFull.x - 2 - BorderThickness * 2, RealSize.y - 2 - BorderThickness * 2 };
 
 			Rectangle sourceRecMin = { 0.0f, 0.0f, textureSizeMin.x, textureSizeMin.y };
-			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
+			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75f + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
 
 			Rectangle sourceRecMax = { 0.0f, 0.0f, textureSizeMax.x, textureSizeMax.y };
 			Rectangle destRecMax = { RealPos.x + textParamsMax.x, RealPos.y + textParamsMax.y, textureSizeMax.x, textureSizeMax.y };

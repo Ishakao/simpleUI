@@ -6176,6 +6176,7 @@ inline void Instance::DeleteAllChildren() {
 		static_cast<ScrollFrame*>(this)->isTick.clear();
 		static_cast<ScrollFrame*>(this)->sectorsOnView.clear();
 		static_cast<ScrollFrame*>(this)->toUpdateSectors.clear();
+		static_cast<ScrollFrame*>(this)->SectorRectOnObject.clear();
 	}
 }
 

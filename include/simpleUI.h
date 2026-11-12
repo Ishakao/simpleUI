@@ -193,7 +193,9 @@ using RAYLIB_FUNCTIONAL::KEY_ENTER;
 #define SCROLLFRAME_GRID_SIZE 256
 #define MAX_TEXTURE_LIMIT 16384
 #define DEFAULT_ATLAS_SIZE 2048
-#define FLT_MAX          3.402823466e+38F        // max value  (from float.h)
+#ifndef FLT_MAX
+	#define FLT_MAX          3.402823466e+38F        // max value  (from float.h)
+#endif
 
 template<typename T, typename = void>
 struct is_streamable : std::false_type {};
@@ -4773,7 +4775,6 @@ public:
 					lastAnchor = TextAnchor;
 					
 					updateLayout();
-
 				}
 
 				rasterFont = rasterTarget();
@@ -4784,7 +4785,7 @@ public:
 				data.Roundness = Roundness;
 
 				Rectangle destRec = { std::floorf(RealPos.x + whereDrawText.x), std::floorf(RealPos.y + whereDrawText.y), whereDrawText.width, whereDrawText.height };
-				if (rasterFont > 1) {
+				if (targetSize > 1) {
 					SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { destRec.x, destRec.y }, targetSize, Spacing, TextColor, (GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor), &data);
 				}
 			}
@@ -4875,6 +4876,7 @@ class TextBox : public Object2D {
 	std::vector<Color> GlyphsColor;
 	bool lastPerSymbol = false;
 	bool changedGlyphs = false;
+	bool texturePushed = false;
 
 	std::string visibleText = "";
 
@@ -4918,6 +4920,7 @@ class TextBox : public Object2D {
 		lastType = Type;
 		changedGlyphs = false;
 		lastPerSymbol = UsePerSymbolColor;
+		texturePushed = false;
 
 		if (Text != "") {
 			newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
@@ -5046,7 +5049,12 @@ public:
 
 		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs or lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
 			updateTextParams();
-			SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
+
+			if (!texturePushed) {
+				texturePushed = true;
+				SIMPLEUI_GLOBAL::TextBoxesToUpdateTexture.push_back(this);
+			} 
+		
 			if (Text == "") {
 				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
 			} else {
@@ -5387,20 +5395,18 @@ public:
 					while (CursorIndex > 0) {
 						unsigned char c = Text[charOffsets[CursorIndex - 1]];
 
-						if (c != ' ')
+						if (c == ' ' or c == '.' or c == ',' or
+							c == ':' or c == ';' or c == '?' or
+							c == '!' or c == '/' or c == '\\' or
+							c == '\'' or c == '\"' or c == '\n')
+						{
 							break;
+						}
 
 						CursorIndex--;
 					}
 
-					while (CursorIndex > 0) {
-						unsigned char c = Text[charOffsets[CursorIndex - 1]];
-
-						if (c == ' ')
-							break;
-
-						CursorIndex--;
-					}
+					CursorIndex--;
 				} else {
 					CursorIndex--;
 				}
@@ -5416,20 +5422,18 @@ public:
 				int maxIndex = (int)charOffsets.size() - 1;
 
 				if (IsKeyDown(KEY_LEFT_CONTROL)) {
-					while (CursorIndex < maxIndex) {
-						unsigned char c = Text[charOffsets[CursorIndex]];
-
-						if (c == ' ')
-							break;
-
-						CursorIndex++;
-					}
+					CursorIndex++;
 
 					while (CursorIndex < maxIndex) {
 						unsigned char c = Text[charOffsets[CursorIndex]];
 
-						if (c != ' ')
+						if (c == ' ' or c == '.' or c == ',' or
+							c == ':' or c == ';' or c == '?' or
+							c == '!' or c == '/' or c == '\\' or
+							c == '\'' or c == '\"' or c == '\n')
+						{
 							break;
+						}
 
 						CursorIndex++;
 					}
@@ -5445,22 +5449,33 @@ public:
 			}
 
 			if (IsKeyDown(KEY_LEFT_CONTROL) and IsKeyPressed(KEY_V) and ClipboardPasteAllowed) {
-				std::string clipboardText = GetClipboardText();
-				int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
+				std::string clipboardText;
 
-				if (symbolsLeft > 0 or MaxSymbols < 0) {
-					std::string toPaste = clipboardText.substr(0, std::min<int>(symbolsLeft, clipboardText.size()));
+				try {
+					clipboardText = GetClipboardText();
+				} catch (const std::logic_error& e) {
+					clipboardText = "";
+				}
 
-					bool allowed = true;
-					if (ClipboardPasteCondition and !ClipboardPasteCondition(toPaste)) allowed = false;
+				if (!clipboardText.empty()) {
+					std::vector<int> offsets = getCharOffsets(clipboardText);
+					int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
 
-					if (allowed) {
-						updateCharOffsets();
-						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
-						Text = Text.substr(0, bytePos) + toPaste + Text.substr(bytePos);
-						updateCharOffsets();
-						CursorIndex = cursorFromByte(bytePos + (int)toPaste.size());
-						CursorVisible = true; CursorTime = 0.0f;
+					if (symbolsLeft > 0 or MaxSymbols < 0) {
+						int b = (MaxSymbols < 0 or symbolsLeft >= (int)offsets.size()) ? (int)clipboardText.size() : offsets[symbolsLeft];
+						std::string toPaste = clipboardText.substr(0, b);
+						
+						bool allowed = true;
+						if (ClipboardPasteCondition and !ClipboardPasteCondition(toPaste)) allowed = false;
+
+						if (allowed) {
+							updateCharOffsets();
+							int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
+							Text = Text.substr(0, bytePos) + toPaste + Text.substr(bytePos);
+							updateCharOffsets();
+							CursorIndex = cursorFromByte(bytePos + (int)toPaste.size());
+							CursorVisible = true; CursorTime = 0.0f;
+						}
 					}
 				}
 			}
@@ -6176,7 +6191,6 @@ inline void Instance::DeleteAllChildren() {
 		static_cast<ScrollFrame*>(this)->isTick.clear();
 		static_cast<ScrollFrame*>(this)->sectorsOnView.clear();
 		static_cast<ScrollFrame*>(this)->toUpdateSectors.clear();
-		static_cast<ScrollFrame*>(this)->SectorRectOnObject.clear();
 	}
 }
 

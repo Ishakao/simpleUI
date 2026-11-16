@@ -177,6 +177,7 @@ using RAYLIB_FUNCTIONAL::KEY_ENTER;
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <thread>
 #include <type_traits>
 #include <atomic>
 #include <cstddef>
@@ -1236,11 +1237,11 @@ public:
 		};
 	}
 
-	void remove(AtlasTexture& tex) {
+	void remove(AtlasTexture& t) {
 		for (int i = 0; i < textures.size(); i++) {
-			if (textures[i].id == tex.id) {
+			if (textures[i].id == t.id) {
 				textures.erase(textures.begin() + i);
-				tex.currentAtlas = nullptr;
+				t.currentAtlas = nullptr;
 				break;
 			}
 		}
@@ -1248,6 +1249,23 @@ public:
 		if (textures.size() == 0) {
 			delete this;
 		}
+	}
+
+	void update(AtlasTexture& t, Image img) {
+		if (t.currentAtlas != this) return;
+		if (img.width > t.size.x or img.height > t.size.y) return;
+		Texture2D src = RAYLIB_FUNCTIONAL::LoadTextureFromImage(img);
+
+		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(tex);
+		RAYLIB_FUNCTIONAL::rlSetBlendFactorsSeparate(RL_ONE, RL_ZERO, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(RAYLIB_FUNCTIONAL::BLEND_CUSTOM_SEPARATE);
+		SIMPLEUI_GRAPHICS_WRAPS::DrawTexture(src, t.position.x, t.position.y, WHITE);
+		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
+		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
+
+		pleaseGenerateMipmaps = true;
+
+		RAYLIB_FUNCTIONAL::UnloadTexture(src);
 	}
 
 	AtlasTexture add(Image img) {
@@ -1803,7 +1821,7 @@ public:
 	}
 
 	static ChangedSignal* New(T& p, std::function<void(void)> func) {
-		return new ChangedSignal(std::forward<T&>(p), func);
+		return new ChangedSignal(p, func);
 	}
 };
 
@@ -1854,7 +1872,7 @@ public:
 	}
 
 	static SafeChangedSignal* New(Instance* linked, T& p, std::function<void(void)> func) {
-		return new SafeChangedSignal(linked, std::forward<T&>(p), func);
+		return new SafeChangedSignal(linked, p, func);
 	}
 };
 
@@ -1862,26 +1880,22 @@ template <typename T>
 class AtomicChangedSignal : public IChangedSignal {
 public:
 	void Update() {
-		if (SignalPTR.load() != *LastValue.load()) {
+		if (SignalPTR.load() != LastValue.load()) {
 			Callback();
-			delete LastValue.load();
-			LastValue.store(new T(SignalPTR.load()));
+			LastValue.store(SignalPTR.load());
 		}
 	}
 private:
-	std::atomic<T>& SignalPTR = nullptr;
-	std::atomic<T*> LastValue;
+	std::atomic<T>& SignalPTR;
+	std::atomic<T> LastValue;
 	std::function<void(void)> Callback;
 
 	AtomicChangedSignal() = delete;
 	AtomicChangedSignal(std::atomic<T>& p, std::function<void(void)> func) : SignalPTR(p), Callback(func) {
 		SIMPLEUI_GLOBAL::ActiveSignals.push_back(this);
-		LastValue.store(new T(p.load()));
+		LastValue.store(p.load());
 	}
-	~AtomicChangedSignal() {
-		if (!LastValue.load()) return;
-		delete LastValue.load();
-	}
+	~AtomicChangedSignal() { }
 public:
 	void Disconnect() {
 		auto z = find(SIMPLEUI_GLOBAL::ActiveSignals.begin(), SIMPLEUI_GLOBAL::ActiveSignals.end(), this);
@@ -1889,8 +1903,8 @@ public:
 		delete this;
 	}
 
-	static AtomicChangedSignal* New(T& p, std::function<void(void)> func) {
-		return new AtomicChangedSignal(std::forward<T&>(p), func);
+	static AtomicChangedSignal* New(std::atomic<T>& p, std::function<void(void)> func) {
+		return new AtomicChangedSignal(p, func);
 	}
 };
 
@@ -4196,7 +4210,7 @@ public:
 	Vector2 CanvasSizeOffset = { 0,0 };
 	Vector2 CanvasPositionOffset = { 0,0 };
 	float ScrollSpeed = 0.25;
-	float ScrollSpeedOFFSET = 0;
+	float ScrollSpeedOffset = 0;
 	Color SliderColor = { 15,15,15,255 };
 	float SliderTransparency = 0.5;
 	float SliderRoundness = 1;
@@ -4400,7 +4414,7 @@ public:
 
 					if (isY) {
 						float currentY = (RealSize.y * CanvasPosition.y) + CanvasPositionOffset.y;
-						float totalStep = (RealSize.y * ScrollSpeed) + ScrollSpeedOFFSET;
+						float totalStep = (RealSize.y * ScrollSpeed) + ScrollSpeedOffset;
 						float newTotalY = currentY - (WheelMove * totalStep);
 
 						newTotalY = std::clamp(newTotalY, 0.0f, maxScrollY);
@@ -4417,7 +4431,7 @@ public:
 						}
 					} else if (isX) {
 						float currentX = (RealSize.x * CanvasPosition.x) + CanvasPositionOffset.x;
-						float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOFFSET;
+						float totalStep = (RealSize.x * ScrollSpeed) + ScrollSpeedOffset;
 						float newTotalX = currentX - (WheelMove * totalStep);
 
 						newTotalX = std::clamp(newTotalX, 0.0f, maxScrollX);
@@ -5797,6 +5811,14 @@ enum ImageOverlayFormat {
 	IMAGE_CROP, // CUT EXCESS
 };
 
+struct ImageLabelLoadWorker {
+	std::mutex pendingMutex;
+	Image pending{};
+	std::atomic<bool> decoding{false};
+	std::thread worker;
+	std::atomic<unsigned> generation{0};
+};
+
 class ImageLabel : public Object2D {
 	constexpr static const char* DefaultName = "ImageLabel";
 	constexpr static InstanceType DefaultClass = IMAGELABEL;
@@ -5804,10 +5826,72 @@ class ImageLabel : public Object2D {
 	AtlasTexture tex{};
 	Image imageIfMemory{};
 	std::string currentPair;
+	Vector2 sizeOnAtlas{};
+	Texture2D notAtlasTexture{};
 
-	void updateTexture() {
-		if (tex.id == 0 and imageIfMemory.data and currentPair.empty()) {
-			tex = LoadTextureOnAtlas(imageIfMemory);
+	bool cleared = false;
+	bool lastA = true;
+
+	ImageLabelLoadWorker* loader = nullptr;
+
+	void createLoader() {
+		if (loader) delete loader;
+		loader = new ImageLabelLoadWorker();
+	}
+
+	void takePending() {
+		if (!loader) createLoader();
+		if (cleared) return;
+		Image img{};
+		{
+			std::lock_guard<std::mutex> lk(loader->pendingMutex);
+			img = loader->pending;
+			loader->pending = Image{};
+		}
+		if (!img.data) return;
+
+		if (imageIfMemory.data) RAYLIB_FUNCTIONAL::UnloadImage(imageIfMemory);
+		imageIfMemory = img;
+		currentPair = "";
+
+		if (!UseAtlas and notAtlasTexture.id
+			and notAtlasTexture.width == img.width
+			and notAtlasTexture.height == img.height
+			and notAtlasTexture.format == img.format) {
+			RAYLIB_FUNCTIONAL::UpdateTexture(notAtlasTexture, img.data);
+		} else {
+			updImg();
+		}
+	}
+
+	void updImg() {
+		if (UseAtlas and lastA != UseAtlas) {
+			if (notAtlasTexture.id) RAYLIB_FUNCTIONAL::UnloadTexture(notAtlasTexture);
+			notAtlasTexture.id = 0;
+		} else if (!UseAtlas and lastA != UseAtlas) {
+			if (tex.id and tex.currentAtlas) tex.currentAtlas->remove(tex);
+		}
+
+		if (UseAtlas) {
+			if (tex.id == 0 and imageIfMemory.data and currentPair.empty()) {
+				tex = LoadTextureOnAtlas(imageIfMemory);
+				sizeOnAtlas = tex.size;
+			} else if (tex.id != 0 and imageIfMemory.data and currentPair.empty()) {
+				if ((sizeOnAtlas.x < imageIfMemory.width or sizeOnAtlas.y < imageIfMemory.height)) {
+					UnloadTextureFromAtlas(tex);
+
+					tex = LoadTextureOnAtlas(imageIfMemory);
+					sizeOnAtlas = tex.size;
+				} else {
+					if (tex.currentAtlas) {
+						tex.currentAtlas->update(tex, imageIfMemory);
+						sizeOnAtlas = {(float)(imageIfMemory.width), (float)(imageIfMemory.height)};
+					}
+				}
+			}
+		} else {
+			if (notAtlasTexture.id) RAYLIB_FUNCTIONAL::UnloadTexture(notAtlasTexture);
+			if (imageIfMemory.data) notAtlasTexture = RAYLIB_FUNCTIONAL::LoadTextureFromImage(imageIfMemory);
 		}
 	}
 protected:
@@ -5817,6 +5901,12 @@ protected:
 	ImageLabel() = delete;
 
 	~ImageLabel() override {
+		if (loader) {
+			if (loader->worker.joinable()) loader->worker.join();
+			if (loader->pending.data) RAYLIB_FUNCTIONAL::UnloadImage(loader->pending);
+			delete loader;
+		}
+		if (notAtlasTexture.id) RAYLIB_FUNCTIONAL::UnloadTexture(notAtlasTexture);
 		if (tex.id != 0 and imageIfMemory.data) UnloadTextureFromAtlas(tex);
 		if (imageIfMemory.data) RAYLIB_FUNCTIONAL::UnloadImage(imageIfMemory);
 	}
@@ -5825,6 +5915,7 @@ public:
 	float ImageTransparency = 0.0f;
 	Color ImageColor = { 255,255,255,255 };
 	bool RoundImage = false;
+	bool UseAtlas = true; // Using own Texture for Images which loaded from memory
 
 	void SetImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
@@ -5835,13 +5926,49 @@ public:
 
 		auto pair = getImage(name);
 		tex = pair.second;
+		sizeOnAtlas = tex.size;
 		currentPair = name;
+
+		if (loader) {
+			std::lock_guard<std::mutex> lk(loader->pendingMutex);
+			++loader->generation;
+			if (loader->pending.data) RAYLIB_FUNCTIONAL::UnloadImage(loader->pending);
+			loader->pending = Image{};
+		}
+
+		cleared = false;
+	}
+
+	void GenMipmaps() {
+		if (!UseAtlas and notAtlasTexture.id) {
+			RAYLIB_FUNCTIONAL::GenTextureMipmaps(&notAtlasTexture);
+		} 
+	}
+
+	void ClearImage() {
+		if (currentPair.empty() and imageIfMemory.data) {
+			if (UseAtlas) {
+				if (tex.id and tex.currentAtlas) tex.currentAtlas->remove(tex);
+			} else {
+				if (notAtlasTexture.id) RAYLIB_FUNCTIONAL::UnloadTexture(notAtlasTexture);
+				notAtlasTexture.id = 0;
+			}
+
+			if (imageIfMemory.data) UnloadImage(imageIfMemory);
+			imageIfMemory.data = nullptr;
+			imageIfMemory.width = 0;
+			imageIfMemory.height = 0;
+
+			cleared = true;
+		}
 	}
 
 	void Draw() override {
 		if (!Visible) return;
 
 		Object2D::Draw();
+
+		takePending();
 
 		Rectangle b = GetRotatedBounds();
 		if (b.x + b.width + BorderThickness < 0
@@ -5851,14 +5978,22 @@ public:
 			return;
 		}
 
-		updateTexture();
+		if (UseAtlas != lastA) {
+			updImg();
+			lastA = UseAtlas;
+		}
 
-		if (tex.id) {
+		if ((UseAtlas ? tex.id : notAtlasTexture.id)) {
+			Vector2 s = {sizeOnAtlas.x, sizeOnAtlas.y};
+			if (!UseAtlas) {
+				s = {(float)notAtlasTexture.width, (float)notAtlasTexture.height};
+			}
+
 			Rectangle destRec = { RealPos.x, RealPos.y, RealSize.x, RealSize.y };
-			Rectangle srcRec = { 0, 0, tex.size.x, tex.size.y };
+			Rectangle srcRec = { 0, 0, s.x, s.y };
 
 			if (Overlay == ImageOverlayFormat::IMAGE_FIT) {
-				float imageAspect = (float)tex.size.x / tex.size.y;
+				float imageAspect = (float)s.x / s.y;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
@@ -5871,16 +6006,16 @@ public:
 					destRec.width = scaledWidth;
 				}
 			} else if (Overlay == ImageOverlayFormat::IMAGE_CROP) {
-				float imageAspect = (float)tex.size.x / tex.size.y;
+				float imageAspect = (float)s.x / s.y;
 				float rectAspect = RealSize.x / RealSize.y;
 
 				if (imageAspect > rectAspect) {
-					float cropWidth = tex.size.y * rectAspect;
-					srcRec.x = (tex.size.x - cropWidth) / 2.0f;
+					float cropWidth = s.y * rectAspect;
+					srcRec.x = (s.x - cropWidth) / 2.0f;
 					srcRec.width = cropWidth;
 				} else {
-					float cropHeight = tex.size.x / rectAspect;
-					srcRec.y = (tex.size.y - cropHeight) / 2.0f;
+					float cropHeight = s.x / rectAspect;
+					srcRec.y = (s.y - cropHeight) / 2.0f;
 					srcRec.height = cropHeight;
 				}
 			}
@@ -5895,42 +6030,56 @@ public:
 			destRec.width = std::ceilf(destRec.width);
 			destRec.height = std::ceilf(destRec.height);
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+			if (UseAtlas) {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+			} else {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(notAtlasTexture, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+			}
 		} else {
 			if (currentPair == "" or imageIfMemory.data) return;
 			SetImage(currentPair);
 		}
 	}
 
-	void UpdateImageFromMemory(const std::string& type, const std::vector<unsigned char>& data) {
-		if (imageIfMemory.data) {
-			RAYLIB_FUNCTIONAL::UnloadImage(imageIfMemory);
-		}
+	void UpdateImageFromMemory(const std::string& type, std::vector<unsigned char> data) {
+		if (!loader) createLoader();
 
-		imageIfMemory = RAYLIB_FUNCTIONAL::LoadImageFromMemory(type.c_str(), data.data(), data.size());
+		if (loader->decoding.exchange(true)) return;
+		if (loader->worker.joinable()) loader->worker.join();
 
-		if (!imageIfMemory.data) {
-			std::cout << RED_ANSI << "UpdateFromMemory FAILED" << DEFAULT_ANSI << std::endl;
-			return;
-		}
+		loader->worker = std::thread([this, type, data = std::move(data), g = ++loader->generation] {
+			Image img = RAYLIB_FUNCTIONAL::LoadImageFromMemory(type.c_str(), data.data(), (int)data.size());
 
-		if (tex.id != 0 and tex.currentAtlas) UnloadTextureFromAtlas(tex);
+			if (img.data) {
+				std::lock_guard<std::mutex> lk(loader->pendingMutex);
+				if (loader->generation != g) {
+					RAYLIB_FUNCTIONAL::UnloadImage(img);
+				} else {
+					if (loader->pending.data) RAYLIB_FUNCTIONAL::UnloadImage(loader->pending);
+					loader->pending = img;
+				}
+			}
 
-		tex.id = 0;
-		currentPair = "";
+			loader->decoding = false;
+		});
+
+		cleared = false;
 	}
 
 	ImageLabel* Clone() const override {
 		ImageLabel* i = new ImageLabel(*this);
 		i->UpdateAllVectorPointers();
 		i->posOrSizeChangedResult = true;
+		i->loader = nullptr;
+		i->notAtlasTexture = Texture2D{};
+		i->cleared = false;
 
 		i->basicCloneOperation(const_cast<ImageLabel*>(this));
 
 		if (imageIfMemory.data) {
-			Image im{};
-			i->imageIfMemory = im;
+			i->imageIfMemory = RAYLIB_FUNCTIONAL::ImageCopy(imageIfMemory);
 			i->tex.id = 0;
+			i->updImg();
 		}
 
 		return i;

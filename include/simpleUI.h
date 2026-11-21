@@ -3101,7 +3101,7 @@ inline void DrawRoundRectBatch(const RoundRectData& r) {
 		cur = r.Texture.id;
 	}
 
-	RectGPU::QuadTex qt;
+	RectGPU::QuadTex qt{};
 	if (r.Texture.id) {
 		Rectangle s = r.Source;
 		if (s.width < 0) s.x -= s.width;

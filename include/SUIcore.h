@@ -616,7 +616,7 @@ inline void BeginTextureMode(const RenderTexture& rt) {
 
 inline void EndTextureMode() {
 	g.flush();
-	glBindFramebuffer(g.ownsWindow ? 0 : g.stateBackup.fbo, 0);
+	glBindFramebuffer(GL_FRAMEBUFFER, g.ownsWindow ? 0 : g.stateBackup.fbo);
 	glViewport(0, 0, g.fbW, g.fbH);
 	OrthoYDown(g.mvp, (float)g.winW, (float)g.winH);
 }
@@ -1126,7 +1126,37 @@ inline Color ColorLerp(Color a, Color b, float t) {
     return color;
 }
 
+Color ColorFromHSV(float hue, float saturation, float value) {
+    float h = std::fmod(hue, 360.0f);
+    if (h < 0.0f) h += 360.0f;
 
+    float c = value * saturation;
+    float x = c * (1.0f - std::fabs(std::fmod(h / 60.0f, 2.0f) - 1.0f));
+    float m = value - c;
+
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+
+    if (h < 60.0f) {
+        r = c; g = x; b = 0.0f;
+    } else if (h < 120.0f) {
+        r = x; g = c; b = 0.0f;
+    } else if (h < 180.0f) {
+        r = 0.0f; g = c; b = x;
+    } else if (h < 240.0f) {
+        r = 0.0f; g = x; b = c;
+    } else if (h < 300.0f) {
+        r = x; g = 0.0f; b = c;
+    } else {
+        r = c; g = 0.0f; b = x;
+    }
+
+    return {
+        static_cast<uint8_t>(std::round((r + m) * 255.0f)),
+        static_cast<uint8_t>(std::round((g + m) * 255.0f)),
+        static_cast<uint8_t>(std::round((b + m) * 255.0f)),
+        255
+    };
+}
 
 inline bool IsMouseButtonPressed(MouseButton t) {
 	if (t < 0 or t >= MOUSE_BUTTON_COUNT) return false;

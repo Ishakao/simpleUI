@@ -6,7 +6,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
 </p>
 
-<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of Raylib for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, runtime texture atlasses, an advanced event system, and great batcher.</p>
+<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of OpenGL and glad for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, runtime texture atlasses, an advanced event system, and great batcher.</p>
 
 <div align="center">
     <h6><i>These two scenes are done on simpleUI</i></h6>

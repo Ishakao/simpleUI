@@ -252,7 +252,7 @@ protected:
 	}
 	GraphBuilder() = delete;
 public:
-	void setSequenceColor(size_t id, Color c) {
+	void SetSequenceColor(size_t id, Color c) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			if (it->second->color.r != c.r or it->second->color.g != c.g or it->second->color.b != c.b or it->second->color.a != c.a) GraphDirty = true;
@@ -260,7 +260,7 @@ public:
 		}
 	}
 
-	void setSequenceThickness(size_t id, int t) {
+	void SetSequenceThickness(size_t id, int t) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			if (t != it->second->thickness) GraphDirty = true;
@@ -268,13 +268,13 @@ public:
 		}
 	}
 
-	size_t createSequence(const std::string& name = "") {
+	size_t CreateSequence(const std::string& name = "") {
 		GraphSequence* s = new GraphSequence(seqID++, name);
 		sequences.insert({ s->id, s });
 		return s->id;
 	}
 
-	void removeSequence(size_t id) {
+	void RemoveSequence(size_t id) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			if (it->second->sequence.size() > 2) GraphDirty = true;
@@ -283,7 +283,7 @@ public:
 		}
 	}
 
-	void addValueToSequence(size_t id, long double value) {
+	void AddValueToSequence(size_t id, long double value) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			auto seq = it->second;
@@ -300,7 +300,7 @@ public:
 		}
 	}
 
-	void removeValueFromSequence(size_t id, long double value) {
+	void RemoveValueFromSequence(size_t id, long double value) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			auto seq = it->second;
@@ -327,7 +327,7 @@ public:
 		}
 	}
 
-	void removeIndexFromSequence(size_t id, size_t index) {
+	void RemoveIndexFromSequence(size_t id, size_t index) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			auto seq = it->second;
@@ -353,7 +353,7 @@ public:
 		}
 	}
 
-	long double getMaxValue(size_t seqID) {
+	long double GetMaxValue(size_t seqID) {
 		auto it = sequences.find(seqID);
 		if (it != sequences.end()) {
 			return it->second->biggest;
@@ -362,7 +362,7 @@ public:
 		return 0;
 	}
 
-	long double getMinValue(size_t seqID) {
+	long double GetMinValue(size_t seqID) {
 		auto it = sequences.find(seqID);
 		if (it != sequences.end()) {
 			return it->second->smallest;
@@ -371,7 +371,7 @@ public:
 		return 0;
 	}
 
-	Color getColor(size_t seqID) {
+	Color GetColor(size_t seqID) {
 		auto it = sequences.find(seqID);
 		if (it != sequences.end()) {
 			return it->second->color;
@@ -380,7 +380,7 @@ public:
 		return { 255,255,255,255 };
 	}
 
-	int getThickness(size_t seqID) {
+	int GetThickness(size_t seqID) {
 		auto it = sequences.find(seqID);
 		if (it != sequences.end()) {
 			return it->second->thickness;
@@ -389,7 +389,7 @@ public:
 		return 0;
 	}
 
-	const std::vector<long double>& getSequenceValues(size_t id) const {
+	const std::vector<long double>& GetSequenceValues(size_t id) const {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
 			return it->second->sequence;
@@ -398,12 +398,12 @@ public:
 		SIMPLEUI_THROW(std::string("Sequence with id ") + std::to_string(id) + " was not found");
 	}
 
-	void minimalValueToTextFunction(std::function<std::string(long double)> f) {
+	void MinimalValueToTextFunction(std::function<std::string(long double)> f) {
 		textFilterMin = f;
 		FilterChanged = true;
 	}
 
-	void maximalValueToTextFunction(std::function<std::string(long double)> f) {
+	void MaximalValueToTextFunction(std::function<std::string(long double)> f) {
 		textFilterMax = f;
 		FilterChanged = true;
 	}
@@ -583,7 +583,7 @@ class ToggleSwitcher : public Object2D {
 		Value = v;
 		func(this, Value);
 		if (AnimationSpeed) {
-			Animate::Animation::Create(&currentSliderPos, AnimationSpeed, (Value ? 1.0f : 0.0f), AnimationFunction, AnimationEase);
+			Animate::SafeAnimation::Create(this, &currentSliderPos, AnimationSpeed, (Value ? 1.0f : 0.0f), AnimationFunction, AnimationEase);
 		} else {
 			currentSliderPos = (Value ? 1 : 0);
 		}
@@ -656,15 +656,15 @@ public:
 	float SliderTransparency = 0;
 	int SliderBorderThickness = 0;
 
-	bool getValue() const {
+	bool GetValue() const {
 		return Value;
 	}
 
-	void setValue(bool v) {
+	void SetValue(bool v) {
 		_setValue(v);
 	}
 
-	void onToggle(std::function<void(Instance*, bool)> f) {
+	void OnToggle(std::function<void(Instance*, bool)> f) {
 		func = f;
 	}
 
@@ -728,8 +728,8 @@ public:
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
-			getRealObject2Dsize();
-			getRealObject2Dposition();
+			updateRealObject2Dsize();
+			updateRealObject2Dposition();
 			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 
@@ -801,7 +801,7 @@ class CheckBox : public Object2D {
 	struct button {
 		int id = -1;
 		bool Value = false;
-		Animate::Animation* anim = nullptr;
+		Animate::SafeAnimation* anim = nullptr;
 		std::string Text = "Item";
 		std::string FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;
 		Color TextColor = { 255,255,255,255 };
@@ -816,11 +816,11 @@ class CheckBox : public Object2D {
 		float ButtonTransparency = 0;
 		int ButtonBorderThickness = 4;
 
-		Animate::Animation* anim1 = nullptr;
-		Animate::Animation* anim2 = nullptr;
-		Animate::Animation* anim3 = nullptr;
-		Animate::Animation* anim4 = nullptr;
-		Animate::Animation* anim5 = nullptr;
+		Animate::SafeAnimation* anim1 = nullptr;
+		Animate::SafeAnimation* anim2 = nullptr;
+		Animate::SafeAnimation* anim3 = nullptr;
+		Animate::SafeAnimation* anim4 = nullptr;
+		Animate::SafeAnimation* anim5 = nullptr;
 	};
 
 	std::vector<button> buttons;
@@ -846,17 +846,17 @@ class CheckBox : public Object2D {
 
 	void AnimateButton(button& b, bool value) {
 		if (value) {
-			b.anim1 = Animate::Animation::Create(&b.ButtonColor, AnimationSpeed, b.Visual.TrueButtonColor, AnimationFunction, AnimationEase);
-			b.anim2 = Animate::Animation::Create(&b.ButtonBorderColor, AnimationSpeed, b.Visual.TrueButtonBorderColor, AnimationFunction, AnimationEase);
-			b.anim3 = Animate::Animation::Create(&b.ButtonBorderTransparency, AnimationSpeed, b.Visual.TrueButtonBorderTransparency, AnimationFunction, AnimationEase);
-			b.anim4 = Animate::Animation::Create(&b.ButtonTransparency, AnimationSpeed, b.Visual.TrueButtonTransparency, AnimationFunction, AnimationEase);
-			b.anim5 = Animate::Animation::Create(&b.ButtonBorderThickness, AnimationSpeed, b.Visual.TrueButtonBorderThickness, AnimationFunction, AnimationEase);
+			b.anim1 = Animate::SafeAnimation::Create(this, &b.ButtonColor, AnimationSpeed, b.Visual.TrueButtonColor, AnimationFunction, AnimationEase);
+			b.anim2 = Animate::SafeAnimation::Create(this, &b.ButtonBorderColor, AnimationSpeed, b.Visual.TrueButtonBorderColor, AnimationFunction, AnimationEase);
+			b.anim3 = Animate::SafeAnimation::Create(this, &b.ButtonBorderTransparency, AnimationSpeed, b.Visual.TrueButtonBorderTransparency, AnimationFunction, AnimationEase);
+			b.anim4 = Animate::SafeAnimation::Create(this, &b.ButtonTransparency, AnimationSpeed, b.Visual.TrueButtonTransparency, AnimationFunction, AnimationEase);
+			b.anim5 = Animate::SafeAnimation::Create(this, &b.ButtonBorderThickness, AnimationSpeed, b.Visual.TrueButtonBorderThickness, AnimationFunction, AnimationEase);
 		} else {
-			b.anim1 = Animate::Animation::Create(&b.ButtonColor, AnimationSpeed, b.Visual.FalseButtonColor, AnimationFunction, AnimationEase);
-			b.anim2 = Animate::Animation::Create(&b.ButtonBorderColor, AnimationSpeed, b.Visual.FalseButtonBorderColor, AnimationFunction, AnimationEase);
-			b.anim3 = Animate::Animation::Create(&b.ButtonBorderTransparency, AnimationSpeed, b.Visual.FalseButtonBorderTransparency, AnimationFunction, AnimationEase);
-			b.anim4 = Animate::Animation::Create(&b.ButtonTransparency, AnimationSpeed, b.Visual.FalseButtonTransparency, AnimationFunction, AnimationEase);
-			b.anim5 = Animate::Animation::Create(&b.ButtonBorderThickness, AnimationSpeed, b.Visual.FalseButtonBorderThickness, AnimationFunction, AnimationEase);
+			b.anim1 = Animate::SafeAnimation::Create(this, &b.ButtonColor, AnimationSpeed, b.Visual.FalseButtonColor, AnimationFunction, AnimationEase);
+			b.anim2 = Animate::SafeAnimation::Create(this, &b.ButtonBorderColor, AnimationSpeed, b.Visual.FalseButtonBorderColor, AnimationFunction, AnimationEase);
+			b.anim3 = Animate::SafeAnimation::Create(this, &b.ButtonBorderTransparency, AnimationSpeed, b.Visual.FalseButtonBorderTransparency, AnimationFunction, AnimationEase);
+			b.anim4 = Animate::SafeAnimation::Create(this, &b.ButtonTransparency, AnimationSpeed, b.Visual.FalseButtonTransparency, AnimationFunction, AnimationEase);
+			b.anim5 = Animate::SafeAnimation::Create(this, &b.ButtonBorderThickness, AnimationSpeed, b.Visual.FalseButtonBorderThickness, AnimationFunction, AnimationEase);
 		}
 	}
 
@@ -1177,8 +1177,8 @@ public:
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
-			getRealObject2Dsize();
-			getRealObject2Dposition();
+			updateRealObject2Dsize();
+			updateRealObject2Dposition();
 			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 

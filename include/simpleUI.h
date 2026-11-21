@@ -51,6 +51,7 @@
 // use #define SIMPLEUI_IMPLEMENTATION before including simpleUI.h for stb implementation
 #ifdef SIMPLEUI_IMPLEMENTATION
 	#define STB_IMAGE_WRITE_IMPLEMENTATION
+	#define STB_IMAGE_IMPLEMENTATION
 	#define STB_RECT_PACK_IMPLEMENTATION
 #endif
 
@@ -156,7 +157,8 @@ void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	} else {
 		std::cerr << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	}
-	abort();
+	
+	throw std::runtime_error("SIMPLEUI_THROW");
 }
 
 #define SIMPLEUI_THROW(x) SIMPLEUI_THROW_WITH_INFO(x, __LINE__, __FILE__);
@@ -215,7 +217,7 @@ struct SpecialVector2 {
 		explicit num(float v) : n(v) {}
 		num(const num&) = delete;
 
-		SpecialVector2* getOwner() {
+		SpecialVector2* getOwner() { // conditionally supported function. Using offsetof on non-standard-layout type and may lead to UB
 			size_t offset = (Index == 0) ? offsetof(SpecialVector2, x) : offsetof(SpecialVector2, y);
 			return reinterpret_cast<SpecialVector2*>(reinterpret_cast<char*>(this) - offset);
 		}
@@ -560,7 +562,7 @@ namespace SIMPLEUI_CONTEXT {
 
 	inline void PopClip() { clipStack.pop_back(); }
 
-	bool changedParentThisFrame = false;
+	inline bool changedParentThisFrame = false;
 
 	inline void UpdateSignals() {
 		for (auto sig : SIMPLEUI_CONTEXT::ActiveSignals) {
@@ -580,7 +582,7 @@ namespace SIMPLEUI_CONTEXT {
 	}
 
 	inline void SetWindowPosition(int newX, int newY) {
-		SetWindowPosition(newX, newY);
+		SIMPLEUI_CORE::SetWindowPosition(newX, newY);
 	}
 
 	inline void SetMinimalWindowSize(int newX, int newY) {
@@ -1462,7 +1464,7 @@ inline Shader GetShader(int id) {
 	auto it = SIMPLEUI_CONTEXT::Shaders.find(id);
 	if (it == SIMPLEUI_CONTEXT::Shaders.end()) {
 		std::cout << YELLOW_ANSI << "Shader: " << id << " was not found" << DEFAULT_ANSI << std::endl;
-		abort();
+		throw std::runtime_error("GetShader runtime error");
 	}
 	return it->second;
 }
@@ -1481,11 +1483,11 @@ inline Color mulColor(Color other, float t) {
 	};
 }
 
-inline float sui_lerp(float a, float b, float t) {
+inline float FloatLerp(float a, float b, float t) {
 	return a + (b - a) * t;
 }
 
-inline void addFontToQueqe(const char* name, std::string path, int size) {
+inline void AddFontToQueue(const char* name, std::string path, int size) {
 	SIMPLEUI_CONTEXT::queuedFonts.emplace_back(name, path, size);
 }
 
@@ -1708,7 +1710,7 @@ namespace Tasks {
 }
 
 namespace SIMPLEUI_CONTEXT {
-	inline std::vector<IChangedSignal*> SignalsToDetele;
+	inline std::vector<IChangedSignal*> SignalsToDelete;
 }
 
 template <typename T>
@@ -1716,8 +1718,7 @@ class ChangedSignal : public IChangedSignal {
 public:
 	void Update() {
 		if (*SignalPTR != *LastValue) {
-			delete LastValue;
-			LastValue = new T(*SignalPTR);
+			*LastValue = *SignalPTR;
 
 			Callback();
 		}
@@ -1740,7 +1741,7 @@ public:
 	void Disconnect() {
 		if (deleted) return;
 		deleted = true;
-		SIMPLEUI_CONTEXT::SignalsToDetele.push_back(this);
+		SIMPLEUI_CONTEXT::SignalsToDelete.push_back(this);
 	}
 
 	static ChangedSignal* New(T& p, std::function<void(void)> func) {
@@ -1753,8 +1754,7 @@ class SafeChangedSignal : public IChangedSignal {
 public:
 	void Update() {
 		if (*SignalPTR != *LastValue) {
-			delete LastValue;
-			LastValue = new T(*SignalPTR);
+			*LastValue = *SignalPTR;
 
 			Callback();
 		}
@@ -2002,12 +2002,12 @@ namespace Animate {
 				else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
-			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::FLOAT) { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
+			if (type == AnimationType::INT) { *(int*)ptr = FloatLerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::FLOAT) { *(float*)ptr = FloatLerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
 			else if (type == AnimationType::COLOR) { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
-			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ FloatLerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), FloatLerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = FloatLerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = FloatLerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
 			return false;
 		}
 
@@ -2073,12 +2073,12 @@ namespace Animate {
 				else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = endValueNY; }
 				return true;
 			}
-			if (type == AnimationType::INT) { *(int*)ptr = sui_lerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::FLOAT) { *(float*)ptr = sui_lerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
+			if (type == AnimationType::INT) { *(int*)ptr = FloatLerp(startValueI, endValueI, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::FLOAT) { *(float*)ptr = FloatLerp(startValueF, endValueF, getTime(func, ease, currentTime / endTime)); }
 			else if (type == AnimationType::COLOR) { *(Color*)ptr = ColorLerp(startValueC, endValueC, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ sui_lerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), sui_lerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
-			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = sui_lerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
-			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = sui_lerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::VECTOR2) { *(SpecialVector2*)ptr = SpecialVector2{ FloatLerp(startValueV.x, endValueV.x, getTime(func, ease, currentTime / endTime)), FloatLerp(startValueV.y, endValueV.y, getTime(func, ease, currentTime / endTime)) }; }
+			else if (type == AnimationType::NUMX) { *(SpecialVector2::num_x*)ptr = FloatLerp(startValueNX, endValueNX, getTime(func, ease, currentTime / endTime)); }
+			else if (type == AnimationType::NUMY) { *(SpecialVector2::num_y*)ptr = FloatLerp(startValueNY, endValueNY, getTime(func, ease, currentTime / endTime)); }
 			return false;
 		}
 
@@ -3226,99 +3226,7 @@ protected:
 		ClipIndex = SIMPLEUI_CONTEXT::clipStack.empty() ? -1 : SIMPLEUI_CONTEXT::clipStack.back();
 	}
 
-	void EventHandler() override;
-	void PosOrSizeChanged();
-	void updateAncestorWhichParentIsScroll();
-
-	// Updating parent pointer in SpecialVector2 (after cloning)
-	void UpdateAllVectorPointers() {
-		PositionOffset.parentalObj = this;
-		AnchorPositionOffset.parentalObj = this;
-		Position.parentalObj = this;
-		AnchorPosition.parentalObj = this;
-		Size.parentalObj = this;
-		SizeOffset.parentalObj = this;
-
-		lastUpdateFrame = SIMPLEUI_CONTEXT::framesSinceStart - 1;
-	}
-
-	int ClipIndex = -1;
-
-	inline bool PointInClipChain(int idx, Vector2 p) {
-		while (idx >= 0) {
-			const SIMPLEUI_CONTEXT::ClipDesc& d = SIMPLEUI_CONTEXT::clips[idx];
-			float dx = p.x - d.cx;
-			float dy = p.y - d.cy;
-			float lx = fabsf(dx * d.cosA + dy * d.sinA);
-			float ly = fabsf(-dx * d.sinA + dy * d.cosA);
-			if (lx > d.hw or ly > d.hh) return false;
-			if (d.radius > 0.0f) {
-				float qx = lx - (d.hw - d.radius);
-				float qy = ly - (d.hh - d.radius);
-				if (qx > 0.0f and qy > 0.0f and qx * qx + qy * qy > d.radius * d.radius) return false;
-			}
-			idx = (int)d.parent;
-		}
-		return true;
-	}
-
-	Object2D(bool a) : Instance(a) {
-		Name = DefaultName;
-		Class = DefaultClass;
-
-		updateAncestorWhichParentIsScroll();
-	};
-
-	Object2D(Instance* p) : Instance(p) {
-		Name = DefaultName;
-		Class = DefaultClass;
-
-		updateAncestorWhichParentIsScroll();
-	}
-
-	Object2D() = delete;
-	~Object2D() override = default;
-public:
-	void VectorChanged() {
-		PosOrSizeChanged();
-	}
-
-	Vector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
-	Vector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
-	float RealRotation{};
-	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
-
-	SpecialVector2 PositionOffset{ 0, 0, this };
-	SpecialVector2 AnchorPositionOffset{ 0, 0, this };
-	SpecialVector2 Position{ 0, 0, this };
-	SpecialVector2 AnchorPosition{ 0, 0, this };
-
-	SpecialVector2 Size{ 0, 0, this };
-	SpecialVector2 SizeOffset{ 0, 0, this };
-
-	float Rotation = 0;
-	SpecialVector2 Origin = { 0.5,0.5, this };
-	SpecialVector2 OriginOffset = { 0, 0, this };
-
-	float BackgroundTransparency{};
-	Color BackgroundColor = { 255,255,255,255 };
-	bool Visible = true;
-
-	float Roundness = 0.0f;
-
-	short BorderThickness{};
-	float BorderTransparency{};
-	Color BorderColor{};
-	BorderPlacement BorderType = BorderPlacement::BORDER_INNER;
-
-	bool ClipDescendants = false;
-
-	int ZIndex = 0;
-	bool Active = false;
-
-	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe custom shape in SIMPLEUI_CONTEXT::RectangleRoundnessShaderFragmentBytes on ~400 line in simpleUI.h)
-
-	void getRealObject2Dsize() {
+	void updateRealObject2Dsize() {
 		float accScaleX = Size.x;
 		float accScaleY = Size.y;
 		float accOffsetX = std::roundf(SizeOffset.x);
@@ -3364,7 +3272,7 @@ public:
 		};
 	}
 
-	void getRealObject2Dposition() {
+	void updateRealObject2Dposition() {
 		Vector2 mySizePx = {
 			std::roundf(RealSize.x),
 			std::roundf(RealSize.y)
@@ -3506,7 +3414,99 @@ public:
 		RealRotation = totalRot;
 	}
 
-	Vector2 getMousePosition() {
+	void EventHandler() override;
+	void PosOrSizeChanged();
+	void updateAncestorWhichParentIsScroll();
+
+	// Updating parent pointer in SpecialVector2 (after cloning)
+	void UpdateAllVectorPointers() {
+		PositionOffset.parentalObj = this;
+		AnchorPositionOffset.parentalObj = this;
+		Position.parentalObj = this;
+		AnchorPosition.parentalObj = this;
+		Size.parentalObj = this;
+		SizeOffset.parentalObj = this;
+
+		lastUpdateFrame = SIMPLEUI_CONTEXT::framesSinceStart - 1;
+	}
+
+	int ClipIndex = -1;
+
+	inline bool PointInClipChain(int idx, Vector2 p) {
+		while (idx >= 0) {
+			const SIMPLEUI_CONTEXT::ClipDesc& d = SIMPLEUI_CONTEXT::clips[idx];
+			float dx = p.x - d.cx;
+			float dy = p.y - d.cy;
+			float lx = fabsf(dx * d.cosA + dy * d.sinA);
+			float ly = fabsf(-dx * d.sinA + dy * d.cosA);
+			if (lx > d.hw or ly > d.hh) return false;
+			if (d.radius > 0.0f) {
+				float qx = lx - (d.hw - d.radius);
+				float qy = ly - (d.hh - d.radius);
+				if (qx > 0.0f and qy > 0.0f and qx * qx + qy * qy > d.radius * d.radius) return false;
+			}
+			idx = (int)d.parent;
+		}
+		return true;
+	}
+
+	Object2D(bool a) : Instance(a) {
+		Name = DefaultName;
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	};
+
+	Object2D(Instance* p) : Instance(p) {
+		Name = DefaultName;
+		Class = DefaultClass;
+
+		updateAncestorWhichParentIsScroll();
+	}
+
+	Object2D() = delete;
+	~Object2D() override = default;
+public:
+	void VectorChanged() {
+		PosOrSizeChanged();
+	}
+
+	Vector2 RealSize{}; // Absolute size in pixels (not for changing from somewhere)
+	Vector2 RealPos{}; // Absolute position in pixels (not for changing from somewhere)
+	float RealRotation{};
+	SUI_EEC EnterEventCondition = SUI_EEC::EEC_DEFAULT;
+
+	SpecialVector2 PositionOffset{ 0, 0, this };
+	SpecialVector2 AnchorPositionOffset{ 0, 0, this };
+	SpecialVector2 Position{ 0, 0, this };
+	SpecialVector2 AnchorPosition{ 0, 0, this };
+
+	SpecialVector2 Size{ 0, 0, this };
+	SpecialVector2 SizeOffset{ 0, 0, this };
+
+	float Rotation = 0;
+	SpecialVector2 Origin = { 0.5,0.5, this };
+	SpecialVector2 OriginOffset = { 0, 0, this };
+
+	float BackgroundTransparency{};
+	Color BackgroundColor = { 255,255,255,255 };
+	bool Visible = true;
+
+	float Roundness = 0.0f;
+
+	short BorderThickness{};
+	float BorderTransparency{};
+	Color BorderColor{};
+	BorderPlacement BorderType = BorderPlacement::BORDER_INNER;
+
+	bool ClipDescendants = false;
+
+	int ZIndex = 0;
+	bool Active = false;
+
+	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe custom shape in SIMPLEUI_CONTEXT::RectangleRoundnessShaderFragmentBytes on ~400 line in simpleUI.h)
+
+	Vector2 GetMousePosition() {
 		Vector2 mousePos = SIMPLEUI_CONTEXT::mousePosition;
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
 	}
@@ -3620,8 +3620,8 @@ public:
 
 		if (dirty) {
 			lastRotation = Rotation;
-			getRealObject2Dsize();
-			getRealObject2Dposition();
+			updateRealObject2Dsize();
+			updateRealObject2Dposition();
 			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 
@@ -4246,8 +4246,8 @@ public:
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
-			getRealObject2Dsize();
-			getRealObject2Dposition();
+			updateRealObject2Dsize();
+			updateRealObject2Dposition();
 			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 
 			for (Instance* obj : Children) {
@@ -5583,8 +5583,8 @@ public:
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			lastRotation = Rotation;
-			getRealObject2Dsize();
-			getRealObject2Dposition();
+			updateRealObject2Dsize();
+			updateRealObject2Dposition();
 			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 
@@ -6568,16 +6568,16 @@ namespace SIMPLEUI_DEBUG {
 			msGRAPH->Roundness = 0.1;
 			msGRAPH->Name = "Frametime graph";
 			msGRAPH->IndependentValuesX = true;
-			msSEQ = msGRAPH->createSequence("s");
-			msGRAPH->setSequenceThickness(msSEQ, 2);
-			msGRAPH->setSequenceColor(msSEQ, {190, 190, 190, 255});
-			msGRAPH->minimalValueToTextFunction([](long double value) {
+			msSEQ = msGRAPH->CreateSequence("s");
+			msGRAPH->SetSequenceThickness(msSEQ, 2);
+			msGRAPH->SetSequenceColor(msSEQ, {190, 190, 190, 255});
+			msGRAPH->MinimalValueToTextFunction([](long double value) {
 				char buf[32];
 				std::snprintf(buf, sizeof(buf), "%.2Lf", value * 1000);
 				std::string s = buf;
 				return s + " ms ";
 			});
-			msGRAPH->maximalValueToTextFunction([](long double value) { 
+			msGRAPH->MaximalValueToTextFunction([](long double value) { 
 				char buf[32];
 				std::snprintf(buf, sizeof(buf), "%.2Lf", value * 1000);
 				std::string s = buf;
@@ -6586,11 +6586,11 @@ namespace SIMPLEUI_DEBUG {
 			msGRAPH->SizeOfLeftInfo = { 0, 0.3 };
 			msGRAPH->TextColor = { 190, 190, 190, 255 };
 
-			size_t seq = msGRAPH->createSequence("s");
-			msGRAPH->setSequenceThickness(seq, 2);
-			msGRAPH->setSequenceColor(seq, { 170, 0, 0, 255 });
-			msGRAPH->addValueToSequence(seq, 0.017);
-			msGRAPH->addValueToSequence(seq, 0.017);
+			size_t seq = msGRAPH->CreateSequence("s");
+			msGRAPH->SetSequenceThickness(seq, 2);
+			msGRAPH->SetSequenceColor(seq, { 170, 0, 0, 255 });
+			msGRAPH->AddValueToSequence(seq, 0.017);
+			msGRAPH->AddValueToSequence(seq, 0.017);
 		}
 #endif
 
@@ -6621,17 +6621,17 @@ namespace SIMPLEUI_DEBUG {
 
 		if (msAccum < msFlushInterval) return;
 
-		size_t current = msGRAPH->getSequenceValues(msSEQ).size();
+		size_t current = msGRAPH->GetSequenceValues(msSEQ).size();
 		size_t incoming = std::min(msBuffer.size(), msMaxPoints);
 		size_t skip = msBuffer.size() - incoming;
 
 		size_t overflow = (current + incoming > msMaxPoints) ? current + incoming - msMaxPoints : 0;
 		for (size_t i = 0; i < overflow; i++) {
-			msGRAPH->removeIndexFromSequence(msSEQ, 0);
+			msGRAPH->RemoveIndexFromSequence(msSEQ, 0);
 		}
 
 		for (size_t i = skip; i < msBuffer.size(); i++) {
-			msGRAPH->addValueToSequence(msSEQ, msBuffer[i]);
+			msGRAPH->AddValueToSequence(msSEQ, msBuffer[i]);
 		}
 
 		msBuffer.clear();
@@ -7454,12 +7454,12 @@ inline void SUI_RenderFrame(Instance* StartInstance) {
 	}
 	SIMPLEUI_CONTEXT::EventToRemove.clear();
 
-	for (IChangedSignal* s : SIMPLEUI_CONTEXT::SignalsToDetele) {
+	for (IChangedSignal* s : SIMPLEUI_CONTEXT::SignalsToDelete) {
 		auto z = find(SIMPLEUI_CONTEXT::ActiveSignals.begin(), SIMPLEUI_CONTEXT::ActiveSignals.end(), s);
 		if (z != SIMPLEUI_CONTEXT::ActiveSignals.end()) SIMPLEUI_CONTEXT::ActiveSignals.erase(z);
 		delete s;
 	}
-	SIMPLEUI_CONTEXT::SignalsToDetele.clear();
+	SIMPLEUI_CONTEXT::SignalsToDelete.clear();
 
 	SIMPLEUI_CONTEXT::CollectDeadObjects();
 
@@ -7477,10 +7477,9 @@ inline void SUI_CleanUp() {
 	}
 	SIMPLEUI_CONTEXT::loadedImages.clear();
 
-	for (auto atlas : SIMPLEUI_CONTEXT::AtlasArray) {
-		delete atlas;
+	while (!SIMPLEUI_CONTEXT::AtlasArray.empty()) {
+		delete SIMPLEUI_CONTEXT::AtlasArray[0];
 	}
-	SIMPLEUI_CONTEXT::AtlasArray.clear();
 
 	FT_TextManagement::Fonts.clear();
 

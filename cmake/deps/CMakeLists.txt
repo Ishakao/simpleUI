@@ -12,7 +12,6 @@ set(COMMON_ARGS
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     -DBUILD_TESTING=OFF
     -DCMAKE_INSTALL_LIBDIR=lib
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 )
 
 if(DEPS_COMPILER_ID STREQUAL "MSVC")
@@ -32,15 +31,15 @@ ExternalProject_Add(glfw
         -DGLFW_BUILD_DOCS=OFF
 )
 
-ExternalProject_Add(raylib
-    GIT_REPOSITORY https://github.com/raysan5/raylib.git
-    GIT_TAG ${RAYLIB_TAG}
+ExternalProject_Add(sdl3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG ${SDL_TAG}
     GIT_SHALLOW ON
-    DEPENDS glfw
     CMAKE_ARGS ${COMMON_ARGS}
-        -DBUILD_SHARED_LIBS=ON
-        -DBUILD_EXAMPLES=OFF
-        -DUSE_EXTERNAL_GLFW=ON
+        -DSDL_SHARED=ON
+        -DSDL_STATIC=OFF
+        -DSDL_TESTS=OFF
+        -DSDL_EXAMPLES=OFF
 )
 
 ExternalProject_Add(zlib

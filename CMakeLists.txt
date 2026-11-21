@@ -15,7 +15,7 @@ else()
 endif()
 
 set(HB_TAG "11.2.1" CACHE STRING "")
-set(RAYLIB_TAG "5.5" CACHE STRING "")
+set(SDL_TAG "release-3.2.22" CACHE STRING "")
 set(GLFW_TAG "3.4" CACHE STRING "")
 set(FT_TAG "VER-2-13-3" CACHE STRING "")
 set(UTF8PROC_TAG "v2.10.0" CACHE STRING "")
@@ -37,10 +37,10 @@ if(NOT EXISTS "${LIB_DIR}/.deps_ok")
             -DDEPS_C_COMPILER=${CMAKE_C_COMPILER}
             -DDEPS_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DDEPS_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
-            -DRAYLIB_TAG=${RAYLIB_TAG}
             -DGLFW_TAG=${GLFW_TAG}
             -DFT_TAG=${FT_TAG}
             -DHB_TAG=${HB_TAG}
+            -DSDL_TAG=${SDL_TAG}
         RESULT_VARIABLE DEPS_RES
     )
     if(NOT DEPS_RES EQUAL 0)
@@ -75,8 +75,8 @@ function(sui_find var)
     endif()
 endfunction()
 
-sui_find(SUI_RAYLIB raylib libraylib)
 sui_find(SUI_GLFW glfw3dll glfw3 glfw)
+sui_find(SUI_SDL3 SDL3)
 sui_find(SUI_FREETYPE freetype libfreetype)
 sui_find(SUI_HB harfbuzz)
 sui_find(SUI_HB_SUBSET harfbuzz-subset)
@@ -91,7 +91,7 @@ foreach(n harfbuzz-gpu harfbuzz-raster harfbuzz-vector)
 endforeach()
 
 add_executable(SIMPLEUI_TEST
-    src/main.cpp
+    src/test3.cpp
     include/SUIutils.cpp
 )
 
@@ -99,11 +99,16 @@ target_include_directories(SIMPLEUI_TEST PRIVATE
     include
     include/freetype2
     include/harfbuzz
+    third_party/glad/include
 )
 
+add_library(glad STATIC third_party/glad/src/gl.c)
+target_include_directories(glad PUBLIC third_party/glad/include)
+target_link_libraries(SIMPLEUI_TEST PRIVATE glad)
+
 target_link_libraries(SIMPLEUI_TEST PRIVATE
-    ${SUI_RAYLIB}
     ${SUI_GLFW}
+    ${SUI_SDL3}
     ${SUI_HB}
     ${SUI_HB_SUBSET}
     ${SUI_HB_EXTRA}

@@ -67,7 +67,7 @@ class GraphBuilder : public Object2D {
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
 			cachedTexture.currentAtlas->blankArea(cachedTexture);
-			RAYLIB_FUNCTIONAL::BeginScissorMode(xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y);
+			SIMPLEUI_CONTEXT::PushClip({xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y, 0, 0, {0,0}});
 
 			auto norm = [](long double v, long double lo, long double hi) {
 				long double d = hi - lo;
@@ -138,7 +138,7 @@ class GraphBuilder : public Object2D {
 			}
 
 			FlushRectanglesBatch();
-			RAYLIB_FUNCTIONAL::EndScissorMode();
+			SIMPLEUI_CONTEXT::PopClip();
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
 			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
@@ -414,7 +414,7 @@ public:
 	size_t ColumnarDisplayID = 0;									// ID of sequence which will be shown on graph (only on columnar graph)
 
 	OffsetScale SizeOfLeftInfo = { 0, 0 };							// Size by x { offset, scale } of minimal and maximal values on graph. Set {0, 0} or leave it default to not display values
-	SUI_Text FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;			// FontFace of left info values
+	SUI_Text FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;			// FontFace of left info values
 	Color TextColor = { 255,255,255,255 };							// Color of left info values;
 	bool AutoColorForColumnar = true;								// Color of left info will be with current displayed graph (columnar only)
 	bool IndependentValuesX = false;								// true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
@@ -427,9 +427,9 @@ public:
 
 			Rectangle b = GetRotatedBounds();
 			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
 				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
 				return;
 			}
 
@@ -515,7 +515,7 @@ public:
 			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), RealSize.x - leftSizeFull.x - 2 - BorderThickness * 2, RealSize.y - 2 - BorderThickness * 2 };
 
 			Rectangle sourceRecMin = { 0.0f, 0.0f, textureSizeMin.x, textureSizeMin.y };
-			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75f + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
+			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
 
 			Rectangle sourceRecMax = { 0.0f, 0.0f, textureSizeMax.x, textureSizeMax.y };
 			Rectangle destRecMax = { RealPos.x + textParamsMax.x, RealPos.y + textParamsMax.y, textureSizeMax.x, textureSizeMax.y };
@@ -590,11 +590,11 @@ class ToggleSwitcher : public Object2D {
 	}
 
 	void checkClick() {
-		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_CONTEXT::mousePosition)) {
 			bool canBePressed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
+				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->IsDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
 				);
 
 			if (canBePressed) {
@@ -611,8 +611,8 @@ class ToggleSwitcher : public Object2D {
 					float px = RealPos.x + Origin.x * RealSize.x + OriginOffset.x;
 					float py = RealPos.y + Origin.y * RealSize.y + OriginOffset.y;
 
-					float mx = SIMPLEUI_GLOBAL::mousePosition.x;
-					float my = SIMPLEUI_GLOBAL::mousePosition.y;
+					float mx = SIMPLEUI_CONTEXT::mousePosition.x;
+					float my = SIMPLEUI_CONTEXT::mousePosition.y;
 
 					if (RealRotation != 0.0f) {
 						float sn = sinf(-RealRotation * DEG2RAD);
@@ -649,7 +649,7 @@ public:
 	bool ClickOnSlider = false;									// true means click will toggle value only if click on slider | false means any on-object click will toggle value
 	Animate::Function AnimationFunction = Animate::Linear;
 	Animate::Ease AnimationEase = Animate::In;
-	MouseButtonType ButtonType = MouseButtonType::MOUSE_LEFT;	// Which button will toggle switcher
+	MouseButtonType ButtonType = MOUSE_LEFT;	// Which button will toggle switcher
 	Color SliderColor = { 130,130,130,255 };
 	Color SliderBorderColor = { 0,0,0,255 };
 	float SliderBorderTransparency = 0;
@@ -674,9 +674,9 @@ public:
 
 			Rectangle b = GetRotatedBounds();
 			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
 				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
 				return;
 			}
 
@@ -703,11 +703,11 @@ public:
 	}
 
 	void Update(bool posOrSizeChanged) override {
-		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
-		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_CONTEXT::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_CONTEXT::framesSinceStart;
 
 		if (lastVisible != Visible) {
-			SIMPLEUI_GLOBAL::sceneDirty = true;
+			SIMPLEUI_CONTEXT::sceneDirty = true;
 			lastVisible = Visible;
 		}
 
@@ -724,13 +724,13 @@ public:
 
 		if (!events.empty()) {
 			EventHandler();
-			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
+			if (SIMPLEUI_CONTEXT::deletedObjectsByID[UniqueID]) return;
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
-			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
+			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 
 		checkClick();
@@ -744,13 +744,13 @@ public:
 
 		bool c = ClipDescendants;
 		if (c) {
-			SIMPLEUI_GLOBAL::ClipData clip = {
+			SIMPLEUI_CONTEXT::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
 				Roundness, RealRotation, 
 				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
-			SIMPLEUI_GLOBAL::PushClip(clip);
+			SIMPLEUI_CONTEXT::PushClip(clip);
 		}
 
 		for (int i = 0; i < Children.size(); i++) {
@@ -758,7 +758,7 @@ public:
 			child->Update(tempRes);
 		}
 
-		if (c) SIMPLEUI_GLOBAL::PopClip();
+		if (c) SIMPLEUI_CONTEXT::PopClip();
 	}
 
 	ToggleSwitcher* Clone() const override {
@@ -803,7 +803,7 @@ class CheckBox : public Object2D {
 		bool Value = false;
 		Animate::Animation* anim = nullptr;
 		std::string Text = "Item";
-		std::string FontFace = SIMPLEUI_GLOBAL::BASIC_FONT_NAME;
+		std::string FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;
 		Color TextColor = { 255,255,255,255 };
 		CheckBoxItemVisual Visual;
 
@@ -861,11 +861,11 @@ class CheckBox : public Object2D {
 	}
 
 	void checkClick() {
-		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_GLOBAL::mousePosition)) {
+		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_CONTEXT::mousePosition)) {
 			bool canBePressed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_GLOBAL::higherObject :
+				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
 				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_GLOBAL::higherObject == this and SIMPLEUI_GLOBAL::higherObject != nullptr) or (SIMPLEUI_GLOBAL::higherObject and SIMPLEUI_GLOBAL::higherObject != this and SIMPLEUI_GLOBAL::higherObject->IsDescendantOf(this))) : false)
+					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
 				);
 
 			if (!canBePressed) return;
@@ -882,8 +882,8 @@ class CheckBox : public Object2D {
 				RealPos.y + Origin.y * RealSize.y + OriginOffset.y
 			};
 
-			float mx = SIMPLEUI_GLOBAL::mousePosition.x;
-			float my = SIMPLEUI_GLOBAL::mousePosition.y;
+			float mx = SIMPLEUI_CONTEXT::mousePosition.x;
+			float my = SIMPLEUI_CONTEXT::mousePosition.y;
 
 			if (Rotation != 0.0f) {
 				float sn = sinf(-Rotation * DEG2RAD);
@@ -954,7 +954,7 @@ public:
 	bool RoundTexture = false;									// true means crop part of text which falls aside from the background border
 	Animate::Function AnimationFunction = Animate::Linear;
 	Animate::Ease AnimationEase = Animate::In;
-	MouseButtonType ButtonType = MouseButtonType::MOUSE_LEFT;	// Which button will toggle switcher
+	MouseButtonType ButtonType = MOUSE_LEFT;	// Which button will toggle switcher
 
 	int AddItem(const std::string& Text, CheckBoxItemVisual Visual) {
 		button but = {
@@ -962,7 +962,7 @@ public:
 			false,
 			nullptr,
 			Text,
-			SIMPLEUI_GLOBAL::BASIC_FONT_NAME,
+			SIMPLEUI_CONTEXT::BASIC_FONT_NAME,
 			{ 255,255,255,255 },
 			Visual,
 			AtlasTexture{},
@@ -1074,9 +1074,9 @@ public:
 
 			Rectangle b = GetRotatedBounds();
 			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_GLOBAL::winWidth
+				or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
 				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_GLOBAL::winHeight) {
+				or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
 				return;
 			}
 
@@ -1152,11 +1152,11 @@ public:
 	}
 
 	void Update(bool posOrSizeChanged) override {
-		if (lastUpdateFrame == SIMPLEUI_GLOBAL::framesSinceStart) return;
-		lastUpdateFrame = SIMPLEUI_GLOBAL::framesSinceStart;
+		if (lastUpdateFrame == SIMPLEUI_CONTEXT::framesSinceStart) return;
+		lastUpdateFrame = SIMPLEUI_CONTEXT::framesSinceStart;
 
 		if (lastVisible != Visible) {
-			SIMPLEUI_GLOBAL::sceneDirty = true;
+			SIMPLEUI_CONTEXT::sceneDirty = true;
 			lastVisible = Visible;
 		}
 
@@ -1173,13 +1173,13 @@ public:
 
 		if (!events.empty()) {
 			EventHandler();
-			if (SIMPLEUI_GLOBAL::deletedObjectsByID[UniqueID]) return;
+			if (SIMPLEUI_CONTEXT::deletedObjectsByID[UniqueID]) return;
 		}
 
 		if (posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation) {
 			getRealObject2Dsize();
 			getRealObject2Dposition();
-			lastFrameUpdatedRealProps = SIMPLEUI_GLOBAL::framesSinceStart;
+			lastFrameUpdatedRealProps = SIMPLEUI_CONTEXT::framesSinceStart;
 		}
 
 		checkClick();
@@ -1193,13 +1193,13 @@ public:
 
 		bool c = ClipDescendants;
 		if (c) {
-			SIMPLEUI_GLOBAL::ClipData clip = {
+			SIMPLEUI_CONTEXT::ClipData clip = {
 				RealPos.x, RealPos.y, RealSize.x, RealSize.y, 
 				Roundness, RealRotation, 
 				{Origin.x * RealSize.x + OriginOffset.x, Origin.y * RealSize.y + OriginOffset.y}
 			};
 			
-			SIMPLEUI_GLOBAL::PushClip(clip);
+			SIMPLEUI_CONTEXT::PushClip(clip);
 		}
 
 		for (int i = 0; i < Children.size(); i++) {
@@ -1207,7 +1207,7 @@ public:
 			child->Update(tempRes);
 		}
 
-		if (c) SIMPLEUI_GLOBAL::PopClip();
+		if (c) SIMPLEUI_CONTEXT::PopClip();
 	}
 
 	CheckBox* Clone() const override {

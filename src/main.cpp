@@ -88,9 +88,9 @@ int main() {
 	});
 	World->AddEvent(TEXT_CHANGED, [World](Instance* th) { std::cout << !World->Text << std::endl; });
 
-	SIMPLEUI_GLOBAL::ALLOW_FPS = true; // Allows to show FPS label on F1
-	SIMPLEUI_GLOBAL::ALLOW_DEBUG = true; // Allows to show debug menu on F2
+	SIMPLEUI_CONTEXT::ALLOW_FPS = true; // Allows to show FPS label on F1
+	SIMPLEUI_CONTEXT::ALLOW_DEBUG = true; // Allows to show debug menu on F2
 
-	SUI_SetMinimalWindowSize(600, 400);
+	SIMPLEUI_CONTEXT::SetMinimalWindowSize(600, 400);
 	StartNewWindow(Root, { 1200, 800, -1 }, "Test program", "textures/test.jpg", FLAG_WINDOW_RESIZABLE);
 }

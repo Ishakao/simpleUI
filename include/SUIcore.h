@@ -550,8 +550,11 @@ inline RenderTexture LoadRenderTexture(int w, int h) {
 		return {};
 	}
 
+	GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+	if (scissorWasEnabled) glDisable(GL_SCISSOR_TEST);
 	const float zero[4] = { 0, 0, 0, 0 };
 	glClearNamedFramebufferfv(rt.id, GL_COLOR, 0, zero);
+	if (scissorWasEnabled) glEnable(GL_SCISSOR_TEST);
 	return rt;
 }
 

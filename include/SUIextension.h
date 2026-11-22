@@ -9,7 +9,7 @@ enum GraphDisplayType {
 class GraphBuilder : public Object2D {
 	constexpr static const char* DefaultName = "GraphBuilder";
 	constexpr static InstanceType DefaultClass = GRAPHBUILDER;
-	constexpr static float textureAspect = 1.1;
+	constexpr static float textureAspect = 1.1f;
 
 	class GraphSequence {
 	public:
@@ -17,9 +17,9 @@ class GraphBuilder : public Object2D {
 		std::string name;
 
 		std::vector<long double> sequence;
-		long double smallest = 9999999999;
-		long double biggest = -9999999999;
-		Color color = { 255,0,0,255 };
+		long double smallest = 1e300L;
+		long double biggest = -1e300L;
+		Color color = { 255, 0, 0, 255 };
 		int thickness = 3;
 
 		GraphSequence() = delete;
@@ -42,215 +42,242 @@ class GraphBuilder : public Object2D {
 	AtlasTexture cachedMin{};
 	Vector2 textureSizeMin{};
 	std::string strMin;
-	Vector3 textParamsMin;
+	Vector3 textParamsMin{};
 
 	AtlasTexture cachedMax{};
 	Vector2 textureSizeMax{};
 	std::string strMax;
-	Vector3 textParamsMax;
+	Vector3 textParamsMax{};
 
 	int ScaleSizeOfY = 4;
-
 	int FontFaceIndex = 0;
 
 	std::unordered_map<size_t, GraphSequence*> sequences;
 	bool GraphDirty = false;
+	bool hasValidRange = false;
+
+	static void refreshAtlasMipmaps(Atlas* atlas) {
+		if (!atlas) return;
+		Texture atlasTex = atlas->texture();
+		if (atlasTex.id and atlasTex.mipmaps > 1) {
+			glGenerateTextureMipmap(atlasTex.id);
+		}
+	}
 
 	void updateTexture() {
-		Vector2 GraphRealPos = { 0,0 };
-		Vector2 GraphRealSize = cachedTexture.size;
-		if (cachedTexture.id) {
-			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
+		if (!cachedTexture.id or !cachedTexture.currentAtlas) return;
 
-			int xof = cachedTexture.position.x;
-			int yof = cachedTexture.position.y;
+		Vector2 GraphRealSize = {
+			std::min(textureSize.x, cachedTexture.size.x),
+			std::min(textureSize.y, cachedTexture.size.y)
+		};
+		if (GraphRealSize.x <= 0.0f or GraphRealSize.y <= 0.0f) return;
 
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedTexture.currentAtlas->renderTexture());
-			cachedTexture.currentAtlas->blankArea(cachedTexture);
-			SIMPLEUI_CONTEXT::PushClip({xof, yof, (int)GraphRealSize.x, (int)GraphRealSize.y, 0, 0, {0,0}});
+		if (!BeginAtlasDraw(cachedTexture)) return;
 
-			auto norm = [](long double v, long double lo, long double hi) {
-				long double d = hi - lo;
-				if (d <= 0) return 0.5L;
-				long double t = (v - lo) / d;
-				if (t < 0) return 0.0L;
-				if (t > 1) return 1.0L;
-				return t;
-			};
+		glScissor(0, 0, static_cast<GLsizei>(GraphRealSize.x), static_cast<GLsizei>(GraphRealSize.y));
 
-			size_t gsize = 0;
-			for (auto [id, seq] : sequences) {
-				if (gsize < seq->sequence.size()) gsize = seq->sequence.size();
-			}
+		auto norm = [](long double v, long double lo, long double hi) {
+			long double d = hi - lo;
+			if (d <= 0.0L) return 0.5L;
+			long double t = (v - lo) / d;
+			if (t < 0.0L) return 0.0L;
+			if (t > 1.0L) return 1.0L;
+			return t;
+		};
 
-			for (auto [id, seq] : sequences) {
-				if (seq->sequence.size() < 2) continue;
-				if (seq->id != ColumnarDisplayID and GraphType == GraphDisplayType::GRAPH_COLUMNAR) continue;
+		size_t gsize = 0;
+		for (auto& [id, seq] : sequences) {
+			if (gsize < seq->sequence.size()) gsize = seq->sequence.size();
+		}
 
-				long double gmin = minimalGraphValue;
-				long double gmax = maximalGraphValue;
-				long double lmin = seq->smallest;
-				long double lmax = seq->biggest;
+		for (auto& [id, seq] : sequences) {
+			if (seq->sequence.size() < 2) continue;
+			if (seq->id != ColumnarDisplayID and GraphType == GraphDisplayType::GRAPH_COLUMNAR) continue;
 
-				size_t lsize = seq->sequence.size();
-				size_t gsizel = gsize;
+			long double gmin = minimalGraphValue;
+			long double gmax = maximalGraphValue;
+			long double lmin = seq->smallest;
+			long double lmax = seq->biggest;
 
-				if (IndependentValuesY) { gmax = lmax; gmin = lmin; }
-				if (IndependentValuesX) { gsizel = lsize; }
+			size_t lsize = seq->sequence.size();
+			size_t gsizel = gsize;
 
-				float xAspect = (float)lsize / (float)gsizel;
+			if (IndependentValuesY) { gmax = lmax; gmin = lmin; }
+			if (IndependentValuesX) { gsizel = lsize; }
 
-				for (size_t i = (GraphType == GraphDisplayType::GRAPH_COLUMNAR ? 0 : 1); i < seq->sequence.size(); i++) {
-					if (GraphType == GraphDisplayType::GRAPH_LINEAR) {
-						long double current = seq->sequence[i];
-						long double prev = seq->sequence[i - 1];
+			float xAspect = gsizel > 0 ? static_cast<float>(lsize) / static_cast<float>(gsizel) : 1.0f;
 
-						Vector2 start = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)(i - 1) / (lsize - 1))) * xAspect + xof,
-							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(prev, gmin, gmax)) + yof
-						};
-						Vector2 end = {
-							(GraphRealPos.x + GraphRealSize.x * ((float)i / (lsize - 1))) * xAspect + xof,
-							GraphRealPos.y + GraphRealSize.y * (1 - (float)norm(current, gmin, gmax)) + yof
-						};
+			if (GraphType == GraphDisplayType::GRAPH_LINEAR) {
+				float padY = std::min(GraphRealSize.y * 0.25f, static_cast<float>(seq->thickness) * 0.5f);
+				float usableH = std::max(1.0f, GraphRealSize.y - padY * 2.0f);
 
-						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(start, end, seq->thickness, seq->color, RealPos, {0,0}, 0, 0);
-					} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
-						long double current = seq->sequence[i];
-						float height = GraphRealSize.y * ((current - lmin) / (lmax - lmin)); if (height <= 0) height = 1;
-						float sizeAfterSpacingX = (GraphRealSize.x - (seq->sequence.size() - 1) * Spacing) / seq->sequence.size();
+				for (size_t i = 1; i < lsize; i++) {
+					long double current = seq->sequence[i];
+					long double prev = seq->sequence[i - 1];
 
-						if (sizeAfterSpacingX <= 0) continue;
+					Vector2 start = {
+						(GraphRealSize.x * (static_cast<float>(i - 1) / static_cast<float>(lsize - 1))) * xAspect,
+						padY + usableH * (1.0f - static_cast<float>(norm(prev, gmin, gmax)))
+					};
+					Vector2 end = {
+						(GraphRealSize.x * (static_cast<float>(i) / static_cast<float>(lsize - 1))) * xAspect,
+						padY + usableH * (1.0f - static_cast<float>(norm(current, gmin, gmax)))
+					};
 
-						Rectangle rec = { (GraphRealPos.x + i * (sizeAfterSpacingX + Spacing)) + xof, (GraphRealPos.y + (GraphRealSize.y - height)) + yof, sizeAfterSpacingX, height };
-						RoundRectData r = { 
-							{rec.x, rec.y}, {rec.width, rec.height}, 
-							seq->color, seq->color, 
-							0.0f, ColumnsRoundness, 1.0f,
-							0,
-							RealRotation,
-							Origin,
-						};
+					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(start, end, static_cast<float>(seq->thickness), seq->color, { 0.0f, 0.0f }, { 0.0f, 0.0f }, 0.0f, 0.0f);
+				}
+			} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
+				float sizeAfterSpacingX = (GraphRealSize.x - static_cast<float>(lsize - 1) * static_cast<float>(Spacing)) / static_cast<float>(lsize);
+				if (sizeAfterSpacingX <= 0.0f) continue;
 
-						DrawRoundRectBatch(r);
-					}
+				for (size_t i = 0; i < lsize; i++) {
+					long double current = seq->sequence[i];
+					float height = GraphRealSize.y * static_cast<float>(norm(current, lmin, lmax));
+					if (height < 1.0f) height = 1.0f;
+
+					Rectangle rec = {
+						static_cast<float>(i) * (sizeAfterSpacingX + static_cast<float>(Spacing)),
+						GraphRealSize.y - height,
+						sizeAfterSpacingX,
+						height
+					};
+					RoundRectData r = {
+						{ rec.x, rec.y }, { rec.width, rec.height },
+						seq->color, seq->color,
+						0.0f, ColumnsRoundness, 1.0f,
+						0,
+						0.0f,
+						{ 0.0f, 0.0f }
+					};
+
+					DrawRoundRectBatch(r);
 				}
 			}
-
-			FlushRectanglesBatch();
-			SIMPLEUI_CONTEXT::PopClip();
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 		}
+
+		EndAtlasDraw(cachedTexture);
 	}
 
-	void updateMinTexture(bool load = false) {
-		Vector2 leftSize = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / ScaleSizeOfY };
-		strMin = textFilterMin(minimalGraphValue);
-		textParamsMin = getTextCFrame(strMin.c_str(), getFont(FontFaceIndex), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
-		textureSizeMin = { leftSize.x - textParamsMin.x, leftSize.y - textParamsMin.y };
-
-		if (load) {
-			if (cachedMin.id) UnloadTextureFromAtlas(cachedMin);
-			cachedMin = LoadRenderTextureOnAtlas(textureSizeMin.x * textureAspect, textureSizeMin.y * textureAspect);
+	void updateLeftLabelTexture(
+		AtlasTexture& cached,
+		Vector2& texSize,
+		Vector3& textParams,
+		std::string& str,
+		long double value,
+		const std::function<std::string(long double)>& filter,
+		TextAnchorEnum anchor
+	) {
+		Vector2 leftSize = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / static_cast<float>(ScaleSizeOfY) };
+		if (leftSize.x <= 1.0f or leftSize.y <= 1.0f or !hasValidRange) {
+			texSize = { 0.0f, 0.0f };
+			return;
 		}
 
-		if (cachedMin.id) {
-			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
-
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMin.currentAtlas->renderTexture());
-			cachedMin.currentAtlas->blankArea(cachedMin);
-
-			DrawTextEx(getFont(FontFaceIndex), strMin.c_str(), { cachedMin.position.x,cachedMin.position.y }, textParamsMin.z, 0, { 255,255,255,255 });
-
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
-		}
-	}
-
-	void updateMaxTexture(bool load = false) {
-		Vector2 leftSize = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / ScaleSizeOfY };
-		strMax = textFilterMax(maximalGraphValue);
-		textParamsMax = getTextCFrame(strMax.c_str(), getFont(FontFaceIndex), { 0,0, leftSize.x, leftSize.y }, TextAnchorEnum::SE, -1, 0);
-		textureSizeMax = { leftSize.x - textParamsMax.x, leftSize.y - textParamsMax.y };
-
-		if (load) {
-			if (cachedMax.id) UnloadTextureFromAtlas(cachedMax);
-			cachedMax = LoadRenderTextureOnAtlas(textureSizeMax.x * textureAspect, textureSizeMax.y * textureAspect);
+		str = filter(value);
+		if (str.empty()) {
+			texSize = { 0.0f, 0.0f };
+			return;
 		}
 
-		if (cachedMax.id) {
-			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
+		FT_TextManagement::FT_Font& font = getFont(FontFaceIndex);
+		textParams = getTextCFrame(str.c_str(), font, { 0.0f, 0.0f, leftSize.x, leftSize.y }, anchor, -1, 0);
+		Vector2 measured = FT_TextManagement::MeasureTextEx(font, str.c_str(), textParams.z, 0);
+		if (measured.x <= 0.0f or measured.y <= 0.0f) {
+			texSize = { 0.0f, 0.0f };
+			return;
+		}
 
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedMax.currentAtlas->renderTexture());
-			cachedMax.currentAtlas->blankArea(cachedMax);
-			DrawTextEx(getFont(FontFaceIndex), strMax.c_str(), { cachedMax.position.x,cachedMax.position.y }, textParamsMax.z, 0, { 255,255,255,255 });
+		float reqW = std::ceilf(measured.x);
+		float reqH = std::ceilf(measured.y);
 
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
+		bool noTex = !cached.id or !cached.currentAtlas;
+		bool tooSmall = cached.size.x < reqW or cached.size.y < reqH;
+		bool tooBig = !noTex and cached.size.x > reqW * textureAspect * 2.0f and cached.size.y > reqH * textureAspect * 2.0f;
+
+		if (noTex or tooSmall or tooBig) {
+			UnloadTextureFromAtlas(cached);
+			cached = LoadRenderTextureOnAtlas(
+				std::max(1, static_cast<int>(std::ceilf(reqW * textureAspect))),
+				std::max(1, static_cast<int>(std::ceilf(reqH * textureAspect)))
+			);
+		}
+
+		if (!cached.id or !cached.currentAtlas) {
+			texSize = { 0.0f, 0.0f };
+			return;
+		}
+
+		texSize = { std::min(reqW, cached.size.x), std::min(reqH, cached.size.y) };
+
+		if (BeginAtlasDraw(cached)) {
+			FT_TextManagement::DrawTextEx(font, str.c_str(), { 0.0f, 0.0f }, textParams.z, 0, { 255, 255, 255, 255 });
+			EndAtlasDraw(cached);
 		}
 	}
 
 	int lS = 0;
-	float lR = 0;
+	float lR = 0.0f;
 	size_t lC = 0;
 	GraphDisplayType lG = GraphDisplayType::GRAPH_LINEAR;
-	bool lSMM = false;
 	bool lIX = false;
 	bool lIY = false;
 	bool FilterChanged = true;
-	OffsetScale lastLeft = { 0,0 };
-	Vector2 lastLeftFull = { 0,0 };
-	long double lastMin = 999999999;
-	long double lastMax = -999999999;
+	OffsetScale lastLeft = { 0, 0 };
+	Vector2 lastLeftFull = { 0.0f, 0.0f };
+	long double lastMin = 1e300L;
+	long double lastMax = -1e300L;
 
-	long double minimalGraphValue = 999999999;
-	long double maximalGraphValue = -999999999;
+	long double minimalGraphValue = 0.0L;
+	long double maximalGraphValue = 0.0L;
 
-	std::function<std::string(long double)> textFilterMin = [](long double v) { return std::to_string((long)v); };
-	std::function<std::string(long double)> textFilterMax = [](long double v) { return std::to_string((long)v); };
+	std::function<std::string(long double)> textFilterMin = [](long double v) { return std::to_string(static_cast<long>(v)); };
+	std::function<std::string(long double)> textFilterMax = [](long double v) { return std::to_string(static_cast<long>(v)); };
 
 	void updateGlobalMinMax() {
-		long double mi = 999999999;
-		long double ma = -999999999;
+		long double mi = 1e300L;
+		long double ma = -1e300L;
+		hasValidRange = false;
 
 		if (GraphType == GraphDisplayType::GRAPH_LINEAR) {
 			for (auto& sec : sequences) {
+				if (sec.second->sequence.empty()) continue;
+				hasValidRange = true;
 				if (sec.second->biggest > ma) ma = sec.second->biggest;
 				if (sec.second->smallest < mi) mi = sec.second->smallest;
 			}
 		} else if (GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 			auto it = sequences.find(ColumnarDisplayID);
-			if (it != sequences.end()) {
-				if (it->second->biggest > ma) ma = it->second->biggest;
-				if (it->second->smallest < mi) mi = it->second->smallest;
-			} else return;
+			if (it != sequences.end() and !it->second->sequence.empty()) {
+				hasValidRange = true;
+				ma = it->second->biggest;
+				mi = it->second->smallest;
+			}
 		}
 
-		minimalGraphValue = mi;
-		maximalGraphValue = ma;
+		if (hasValidRange) {
+			minimalGraphValue = mi;
+			maximalGraphValue = ma;
+		} else {
+			minimalGraphValue = 0.0L;
+			maximalGraphValue = 0.0L;
+		}
 	}
+
 protected:
-	GraphBuilder(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; };
+	GraphBuilder(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; }
 	GraphBuilder(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; }
 	~GraphBuilder() override {
-		if (cachedTexture.id != 0) {
-			UnloadTextureFromAtlas(cachedTexture);
-		}
-
-		if (cachedMin.id != 0) {
-			UnloadTextureFromAtlas(cachedMin);
-		}
-
-		if (cachedMax.id != 0) {
-			UnloadTextureFromAtlas(cachedMax);
-		}
+		if (cachedTexture.id != 0) UnloadTextureFromAtlas(cachedTexture);
+		if (cachedMin.id != 0) UnloadTextureFromAtlas(cachedMin);
+		if (cachedMax.id != 0) UnloadTextureFromAtlas(cachedMax);
 
 		for (auto& [_, seq] : sequences) {
 			delete seq;
 		}
 	}
 	GraphBuilder() = delete;
+
 public:
 	void SetSequenceColor(size_t id, Color c) {
 		auto it = sequences.find(id);
@@ -277,7 +304,7 @@ public:
 	void RemoveSequence(size_t id) {
 		auto it = sequences.find(id);
 		if (it != sequences.end()) {
-			if (it->second->sequence.size() > 2) GraphDirty = true;
+			if (!it->second->sequence.empty()) GraphDirty = true;
 			delete it->second;
 			sequences.erase(it);
 		}
@@ -293,9 +320,6 @@ public:
 
 				if (value > seq->biggest) seq->biggest = value;
 				if (value < seq->smallest) seq->smallest = value;
-
-				if (value > maximalGraphValue) maximalGraphValue = value;
-				if (value < minimalGraphValue) minimalGraphValue = value;
 			}
 		}
 	}
@@ -311,16 +335,16 @@ public:
 					GraphDirty = true;
 
 					if (value == seq->biggest or value == seq->smallest) {
-						long double min = seq->sequence.size() > 0 ? seq->sequence[0] : 9999999999;
-						long double max = seq->sequence.size() > 0 ? seq->sequence[0] : -9999999999;
+						long double mn = seq->sequence.empty() ? 1e300L : seq->sequence[0];
+						long double mx = seq->sequence.empty() ? -1e300L : seq->sequence[0];
 
 						for (long double obj : seq->sequence) {
-							if (obj < min) min = obj;
-							if (obj > max) max = obj;
+							if (obj < mn) mn = obj;
+							if (obj > mx) mx = obj;
 						}
 
-						seq->biggest = max;
-						seq->smallest = min;
+						seq->biggest = mx;
+						seq->smallest = mn;
 					}
 				}
 			}
@@ -338,16 +362,16 @@ public:
 				GraphDirty = true;
 
 				if (value == seq->biggest or value == seq->smallest) {
-					long double min = seq->sequence.size() > 0 ? seq->sequence[0] : 9999999999;
-					long double max = seq->sequence.size() > 0 ? seq->sequence[0] : -9999999999;
+					long double mn = seq->sequence.empty() ? 1e300L : seq->sequence[0];
+					long double mx = seq->sequence.empty() ? -1e300L : seq->sequence[0];
 
 					for (long double obj : seq->sequence) {
-						if (obj < min) min = obj;
-						if (obj > max) max = obj;
+						if (obj < mn) mn = obj;
+						if (obj > mx) mx = obj;
 					}
 
-					seq->biggest = max;
-					seq->smallest = min;
+					seq->biggest = mx;
+					seq->smallest = mn;
 				}
 			}
 		}
@@ -355,46 +379,31 @@ public:
 
 	long double GetMaxValue(size_t seqID) {
 		auto it = sequences.find(seqID);
-		if (it != sequences.end()) {
-			return it->second->biggest;
-		}
-
+		if (it != sequences.end()) return it->second->biggest;
 		return 0;
 	}
 
 	long double GetMinValue(size_t seqID) {
 		auto it = sequences.find(seqID);
-		if (it != sequences.end()) {
-			return it->second->smallest;
-		}
-
+		if (it != sequences.end()) return it->second->smallest;
 		return 0;
 	}
 
 	Color GetColor(size_t seqID) {
 		auto it = sequences.find(seqID);
-		if (it != sequences.end()) {
-			return it->second->color;
-		}
-
-		return { 255,255,255,255 };
+		if (it != sequences.end()) return it->second->color;
+		return { 255, 255, 255, 255 };
 	}
 
 	int GetThickness(size_t seqID) {
 		auto it = sequences.find(seqID);
-		if (it != sequences.end()) {
-			return it->second->thickness;
-		}
-
+		if (it != sequences.end()) return it->second->thickness;
 		return 0;
 	}
 
 	const std::vector<long double>& GetSequenceValues(size_t id) const {
 		auto it = sequences.find(id);
-		if (it != sequences.end()) {
-			return it->second->sequence;
-		}
-
+		if (it != sequences.end()) return it->second->sequence;
 		SIMPLEUI_THROW(std::string("Sequence with id ") + std::to_string(id) + " was not found");
 	}
 
@@ -409,119 +418,119 @@ public:
 	}
 
 	GraphDisplayType GraphType = GraphDisplayType::GRAPH_LINEAR;
-	int Spacing = 0;												// Spacing between rectangles in GRAPH_COLUMNAR graph
-	float ColumnsRoundness = 0;										// Roundness of rectangles in GRAPH_COLUMNAR graph (0-1)
-	size_t ColumnarDisplayID = 0;									// ID of sequence which will be shown on graph (only on columnar graph)
+	int Spacing = 0;
+	float ColumnsRoundness = 0.0f;
+	size_t ColumnarDisplayID = 0;
 
-	OffsetScale SizeOfLeftInfo = { 0, 0 };							// Size by x { offset, scale } of minimal and maximal values on graph. Set {0, 0} or leave it default to not display values
-	SUI_Text FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;			// FontFace of left info values
-	Color TextColor = { 255,255,255,255 };							// Color of left info values;
-	bool AutoColorForColumnar = true;								// Color of left info will be with current displayed graph (columnar only)
-	bool IndependentValuesX = false;								// true means a same X size for all graphs (even if the max/min values are different) | false means a X size of graph will depend on aspect from maximal values quantities
-	bool IndependentValuesY = false;								// true means a same Y size for all graphs (even if the max/min values are different) | false means a Y size of graph will depend on aspect from maximal global value
-	bool RoundTextures = false;										// true means round textures (text and graph) depends on background roundness
+	OffsetScale SizeOfLeftInfo = { 0, 0 };
+	SUI_Text FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;
+	Color TextColor = { 255, 255, 255, 255 };
+	bool AutoColorForColumnar = true;
+	bool IndependentValuesX = false;
+	bool IndependentValuesY = false;
+	bool RoundTextures = false;
 
 	void Draw() override {
-		if (Visible) {
-			Object2D::Draw();
+		if (!Visible) return;
 
-			Rectangle b = GetRotatedBounds();
-			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
-				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
-				return;
-			}
+		Object2D::Draw();
 
-			bool mm = GraphType != lG;
+		Rectangle b = GetRotatedBounds();
+		if (b.x + b.width + BorderThickness < 0
+			or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
+			or b.y + b.height + BorderThickness < 0
+			or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
+			return;
+		}
 
-			bool conditionToUpdate = (GraphDirty) or (Spacing != lS) or (ColumnsRoundness != lR) or (ColumnarDisplayID != lC) or (GraphType != lG) or (lIX != IndependentValuesX) or (lIY != IndependentValuesY);
-			lS = Spacing;
-			lR = ColumnsRoundness;
-			lC = ColumnarDisplayID;
-			lG = GraphType;
-			lIX = IndependentValuesX;
-			lIY = IndependentValuesY;
-
-			if (mm or GraphDirty) {
-				updateGlobalMinMax();
-			}
-
-			Vector2 leftSizeFull = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / 4 };
-
-			Vector2 wanted = {
-				std::max(1.0f, std::floorf(RealSize.x - leftSizeFull.x - 2 - BorderThickness)),
-				std::max(1.0f, std::floorf(RealSize.y - 2 - BorderThickness))
-			};
-			bool sizeChanged = wanted.x != textureSize.x or wanted.y != textureSize.y;
-
-			if (!cachedTexture.id or cachedTexture.size.x < wanted.x or cachedTexture.size.y < wanted.y) {
-				if (cachedTexture.id) UnloadTextureFromAtlas(cachedTexture);
-				cachedTexture = LoadRenderTextureOnAtlas(wanted.x * textureAspect, wanted.y * textureAspect);
-				textureSize = wanted;
-				updateTexture();
-			} else if (conditionToUpdate or sizeChanged) {
-				textureSize = wanted;
-				updateTexture();
-			}
-
-			bool bothCondition = FilterChanged or (lastLeftFull.x != leftSizeFull.x or lastLeftFull.y != leftSizeFull.y) or FontFace.isChanged() or lastLeft.Offset != SizeOfLeftInfo.Offset or lastLeft.Scale != SizeOfLeftInfo.Scale;
-			bool conditionToUpdateMin = lastMin != minimalGraphValue or bothCondition;
-			bool conditionToUpdateMax = lastMax != maximalGraphValue or bothCondition;
-
-			FilterChanged = false;
-
-			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				if (!cachedMin.id or (cachedMin.size.x < textureSizeMin.x or cachedMin.size.y < textureSizeMin.y)) {
-					updateMinTexture(true);
-				} else if (conditionToUpdateMin) {
-					updateMinTexture();
-				}
-			}
-
-			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				if (!cachedMax.id or (cachedMax.size.x < textureSizeMax.x or cachedMax.size.y < textureSizeMax.y)) {
-					updateMaxTexture(true);
-				} else if (conditionToUpdateMax) {
-					updateMaxTexture();
-				}
-			}
-
-			if (FontFace.isChanged()) {
-				FontFaceIndex = getFontIndex(FontFace);
-			}
-
+		bool fontChanged = FontFace.isChanged();
+		if (fontChanged) {
+			FontFaceIndex = getFontIndex(FontFace);
 			FontFace.restate();
-			GraphDirty = false;
-			lastLeft = SizeOfLeftInfo;
-			lastLeftFull = leftSizeFull;
-			lastMin = minimalGraphValue;
-			lastMax = maximalGraphValue;
+		}
 
-			/* I will add padding in future. Work piece of GraphBuilder
+		bool rangeDirty = GraphDirty or GraphType != lG or ColumnarDisplayID != lC;
+		bool conditionToUpdate = GraphDirty or (Spacing != lS) or (ColumnsRoundness != lR) or (ColumnarDisplayID != lC) or (GraphType != lG) or (lIX != IndependentValuesX) or (lIY != IndependentValuesY);
 
-			Vector2 start = {
-				GraphRealPos.x + GraphPadding.left.Offset + GraphPadding.left.Scale * GraphRealSize.x + (GraphRealSize.x - GraphPadding.right.Offset - GraphPadding.left.Offset - GraphPadding.left.Scale * GraphRealSize.x - GraphPadding.right.Scale * GraphRealSize.x) * ((float)(i - 1) / (seq->sequence.size() - 1)),
-				GraphRealPos.y + GraphPadding.upper.Offset + GraphPadding.upper.Scale * GraphRealSize.y + (GraphRealSize.y - GraphPadding.lower.Offset - GraphPadding.upper.Offset - GraphPadding.upper.Scale * GraphRealSize.y - GraphPadding.lower.Scale * GraphRealSize.y) * (1 - ((prev - min) / (max - min)))
+		lS = Spacing;
+		lR = ColumnsRoundness;
+		lC = ColumnarDisplayID;
+		lG = GraphType;
+		lIX = IndependentValuesX;
+		lIY = IndependentValuesY;
+
+		if (rangeDirty) {
+			updateGlobalMinMax();
+		}
+
+		Vector2 leftSizeFull = { SizeOfLeftInfo.Offset + SizeOfLeftInfo.Scale * RealSize.x, RealSize.y / static_cast<float>(ScaleSizeOfY) };
+
+		Vector2 wanted = {
+			std::max(1.0f, std::floorf(RealSize.x - leftSizeFull.x - 2.0f - static_cast<float>(BorderThickness) * 2.0f)),
+			std::max(1.0f, std::floorf(RealSize.y - 2.0f - static_cast<float>(BorderThickness) * 2.0f))
+		};
+
+		bool sizeChanged = wanted.x != textureSize.x or wanted.y != textureSize.y;
+		bool noGraphTex = !cachedTexture.id or !cachedTexture.currentAtlas;
+		bool graphTooSmall = cachedTexture.size.x < wanted.x or cachedTexture.size.y < wanted.y;
+		bool graphTooBig = !noGraphTex and cachedTexture.size.x > wanted.x * textureAspect * 2.0f and cachedTexture.size.y > wanted.y * textureAspect * 2.0f;
+
+		if (noGraphTex or graphTooSmall or graphTooBig) {
+			UnloadTextureFromAtlas(cachedTexture);
+			cachedTexture = LoadRenderTextureOnAtlas(
+				std::max(1, static_cast<int>(std::ceilf(wanted.x * textureAspect))),
+				std::max(1, static_cast<int>(std::ceilf(wanted.y * textureAspect)))
+			);
+			textureSize = wanted;
+			updateTexture();
+		} else if (conditionToUpdate or sizeChanged) {
+			textureSize = wanted;
+			updateTexture();
+		}
+
+		bool bothCondition = FilterChanged or fontChanged or (lastLeftFull.x != leftSizeFull.x or lastLeftFull.y != leftSizeFull.y) or lastLeft.Offset != SizeOfLeftInfo.Offset or lastLeft.Scale != SizeOfLeftInfo.Scale;
+		bool conditionToUpdateMin = lastMin != minimalGraphValue or bothCondition or !cachedMin.id;
+		bool conditionToUpdateMax = lastMax != maximalGraphValue or bothCondition or !cachedMax.id;
+
+		FilterChanged = false;
+
+		bool showLeftInfo = !(SizeOfLeftInfo.Scale == 0.0f and SizeOfLeftInfo.Offset == 0);
+		if (showLeftInfo) {
+			if (conditionToUpdateMin) {
+				updateLeftLabelTexture(cachedMin, textureSizeMin, textParamsMin, strMin, minimalGraphValue, textFilterMin, TextAnchorEnum::SE);
+			}
+			if (conditionToUpdateMax) {
+				updateLeftLabelTexture(cachedMax, textureSizeMax, textParamsMax, strMax, maximalGraphValue, textFilterMax, TextAnchorEnum::NE);
+			}
+		}
+
+		GraphDirty = false;
+		lastLeft = SizeOfLeftInfo;
+		lastLeftFull = leftSizeFull;
+		lastMin = minimalGraphValue;
+		lastMax = maximalGraphValue;
+
+		Vector2 o = {
+			std::floorf(Origin.x * RealSize.x) + OriginOffset.x,
+			std::floorf(Origin.y * RealSize.y) + OriginOffset.y
+		};
+
+		if (cachedTexture.id) {
+			float srcW = std::min(textureSize.x, cachedTexture.size.x);
+			float srcH = std::min(textureSize.y, cachedTexture.size.y);
+			Rectangle sourceRec = { 0.0f, 0.0f, srcW, srcH };
+			Rectangle destRec = {
+				std::floorf(RealPos.x + leftSizeFull.x + 1.0f + static_cast<float>(BorderThickness)),
+				std::floorf(RealPos.y + 1.0f + static_cast<float>(BorderThickness)),
+				wanted.x,
+				wanted.y
 			};
-			Vector2 end = {
-				GraphRealPos.x + GraphPadding.left.Offset + GraphPadding.left.Scale * GraphRealSize.x + (GraphRealSize.x - GraphPadding.right.Offset - GraphPadding.left.Offset - GraphPadding.left.Scale * GraphRealSize.x - GraphPadding.right.Scale * GraphRealSize.x) * ((float)i / (seq->sequence.size() - 1)),
-				GraphRealPos.y + GraphPadding.upper.Offset + GraphPadding.upper.Scale * GraphRealSize.y + (GraphRealSize.y - GraphPadding.lower.Offset - GraphPadding.upper.Offset - GraphPadding.upper.Scale * GraphRealSize.y - GraphPadding.lower.Scale * GraphRealSize.y) * (1 - ((current - min) / (max - min)))
-			};
 
-			*/
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, RealRotation, { 255, 255, 255, 255 }, (RoundTextures ? Roundness : 0.0f));
+		}
 
-			Rectangle sourceRec = { 0.0f, 0.0f, cachedTexture.size.x, cachedTexture.size.y };
-			Rectangle destRec = { std::floorf(RealPos.x + leftSizeFull.x + 1 + BorderThickness), std::floorf(RealPos.y + 1 + BorderThickness), RealSize.x - leftSizeFull.x - 2 - BorderThickness * 2, RealSize.y - 2 - BorderThickness * 2 };
-
-			Rectangle sourceRecMin = { 0.0f, 0.0f, textureSizeMin.x, textureSizeMin.y };
-			Rectangle destRecMin = { RealPos.x + textParamsMin.x, RealPos.y + RealSize.y * 0.75 + textParamsMin.y, textureSizeMin.x, textureSizeMin.y };
-
-			Rectangle sourceRecMax = { 0.0f, 0.0f, textureSizeMax.x, textureSizeMax.y };
-			Rectangle destRecMax = { RealPos.x + textParamsMax.x, RealPos.y + textParamsMax.y, textureSizeMax.x, textureSizeMax.y };
-
+		if (showLeftInfo and hasValidRange) {
 			Color c = TextColor;
-
 			if (AutoColorForColumnar and GraphType == GraphDisplayType::GRAPH_COLUMNAR) {
 				auto it = sequences.find(ColumnarDisplayID);
 				if (it != sequences.end()) {
@@ -529,15 +538,26 @@ public:
 				}
 			}
 
-			Vector2 o = {
-				std::floorf(Origin.x * RealSize.x) + OriginOffset.x,
-				std::floorf(Origin.y * RealSize.y) + OriginOffset.y
-			};
+			if (cachedMin.id and textureSizeMin.x > 0.0f and textureSizeMin.y > 0.0f) {
+				Rectangle sourceRecMin = { 0.0f, 0.0f, textureSizeMin.x, textureSizeMin.y };
+				Rectangle destRecMin = {
+					std::floorf(RealPos.x + textParamsMin.x),
+					std::floorf(RealPos.y + RealSize.y - leftSizeFull.y + textParamsMin.y),
+					textureSizeMin.x,
+					textureSizeMin.y
+				};
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, RealRotation, c, (RoundTextures ? Roundness : 0.0f));
+			}
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedTexture, RealPos, RealSize, sourceRec, destRec, o, RealRotation, { 255,255,255,255 }, (RoundTextures ? Roundness : 0));
-			if (!(SizeOfLeftInfo.Scale == 0 and SizeOfLeftInfo.Offset == 0)) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMin, RealPos, RealSize, sourceRecMin, destRecMin, o, RealRotation, c, (RoundTextures ? Roundness : 0));
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, RealRotation, c, (RoundTextures ? Roundness : 0));
+			if (cachedMax.id and textureSizeMax.x > 0.0f and textureSizeMax.y > 0.0f) {
+				Rectangle sourceRecMax = { 0.0f, 0.0f, textureSizeMax.x, textureSizeMax.y };
+				Rectangle destRecMax = {
+					std::floorf(RealPos.x + textParamsMax.x),
+					std::floorf(RealPos.y + textParamsMax.y),
+					textureSizeMax.x,
+					textureSizeMax.y
+				};
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedMax, RealPos, RealSize, sourceRecMax, destRecMax, o, RealRotation, c, (RoundTextures ? Roundness : 0.0f));
 			}
 		}
 	}
@@ -546,18 +566,19 @@ public:
 		GraphBuilder* i = new GraphBuilder(*this);
 		i->UpdateAllVectorPointers();
 
-		i->cachedTexture.id = 0;
-		i->cachedMin.id = 0;
-		i->cachedMax.id = 0;
-
-		i->cachedTexture.currentAtlas = nullptr;
-		i->cachedMin.currentAtlas = nullptr;
-		i->cachedMax.currentAtlas = nullptr;
+		i->cachedTexture = {};
+		i->cachedMin = {};
+		i->cachedMax = {};
+		i->textureSize = {};
+		i->textureSizeMin = {};
+		i->textureSizeMax = {};
+		i->GraphDirty = true;
+		i->FilterChanged = true;
 
 		i->sequences.clear();
 
 		for (auto& [_, seq] : sequences) {
-			i->sequences.insert({_, new GraphSequence(*seq)});
+			i->sequences.insert({ _, new GraphSequence(*seq) });
 		}
 
 		i->basicCloneOperation(const_cast<GraphBuilder*>(this));
@@ -806,6 +827,7 @@ class CheckBox : public Object2D {
 		std::string FontFace = SIMPLEUI_CONTEXT::BASIC_FONT_NAME;
 		Color TextColor = { 255,255,255,255 };
 		CheckBoxItemVisual Visual;
+		Vector2 textSize{};
 
 		AtlasTexture tex{};
 		bool textDirty = false;
@@ -833,7 +855,6 @@ class CheckBox : public Object2D {
 
 			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
 			but.tex.currentAtlas->blankArea(but.tex);
-
 			DrawTextEx(getFont(getFontIndex(but.FontFace)), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
 
 			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
@@ -842,6 +863,7 @@ class CheckBox : public Object2D {
 	}
 
 	bool lA = true;
+	Vector2 LastTextAreaSize = { 0.0f, 0.0f };
 	std::function<void(Instance*, int, bool)> func = [](Instance* t, int id, bool value) {};
 
 	void AnimateButton(button& b, bool value) {
@@ -929,6 +951,49 @@ class CheckBox : public Object2D {
 			}
 		}
 	}
+
+	void RedrawText(button& but, Vector2 targetSize) {
+		if (but.Text.empty() or targetSize.x <= 0.0f or targetSize.y <= 0.0f) {
+			but.textSize = { 0.0f, 0.0f };
+			return;
+		}
+
+		FT_TextManagement::FT_Font& font = getFont(getFontIndex(but.FontFace));
+		Vector3 textParams = getTextCFrame(but.Text.c_str(), font, { 0.0f, 0.0f, targetSize.x, targetSize.y }, TextAnchorEnum::W, -1, 0);
+		Vector2 measured = FT_TextManagement::MeasureTextEx(font, but.Text.c_str(), textParams.z, 0);
+
+		if (measured.x <= 0.0f or measured.y <= 0.0f) {
+			but.textSize = { 0.0f, 0.0f };
+			return;
+		}
+
+		float reqW = std::ceilf(measured.x);
+		float reqH = std::ceilf(measured.y);
+
+		bool noTex = but.tex.id == 0 or !but.tex.currentAtlas;
+		bool tooSmall = but.tex.size.x < reqW or but.tex.size.y < reqH;
+		bool tooBig = !noTex and but.tex.size.x > reqW * textureAspect * 2.0f and but.tex.size.y > reqH * textureAspect * 2.0f;
+
+		if (noTex or tooSmall or tooBig) {
+			UnloadTextureFromAtlas(but.tex);
+			but.tex = LoadRenderTextureOnAtlas(
+				std::max(1, static_cast<int>(std::ceilf(reqW * textureAspect))),
+				std::max(1, static_cast<int>(std::ceilf(reqH * textureAspect)))
+			);
+		}
+
+		if (!but.tex.id or !but.tex.currentAtlas) {
+			but.textSize = { 0.0f, 0.0f };
+			return;
+		}
+
+		but.textSize = measured;
+
+		if (BeginAtlasDraw(but.tex)) {
+			FT_TextManagement::DrawTextEx(font, but.Text.c_str(), { 0.0f, 0.0f }, textParams.z, 0, { 255, 255, 255, 255 });
+			EndAtlasDraw(but.tex);
+		}
+	}
 protected:
 	CheckBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; };
 	CheckBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; };
@@ -965,6 +1030,7 @@ public:
 			SIMPLEUI_CONTEXT::BASIC_FONT_NAME,
 			{ 255,255,255,255 },
 			Visual,
+			{0,0},
 			AtlasTexture{},
 			true,
 
@@ -1069,85 +1135,90 @@ public:
 	}
 
 	void Draw() override {
-		if (Visible) {
-			Object2D::Draw();
+		if (!Visible) return;
 
-			Rectangle b = GetRotatedBounds();
-			if (b.x + b.width + BorderThickness < 0
-				or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
-				or b.y + b.height + BorderThickness < 0
-				or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
-				return;
+		Object2D::Draw();
+
+		if (buttons.empty() or RealSize.x <= 0.0f or RealSize.y <= 0.0f) return;
+
+		Rectangle b = GetRotatedBounds();
+		if (b.x + b.width + BorderThickness < 0
+			or b.x - BorderThickness > SIMPLEUI_CONTEXT::winWidth
+			or b.y + b.height + BorderThickness < 0
+			or b.y - BorderThickness > SIMPLEUI_CONTEXT::winHeight) {
+			return;
+		}
+
+		float rowHeight = RealSize.y / static_cast<float>(buttons.size());
+		float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+		Vector2 currentTextureButtonSize = {
+			std::max(0.0f, RealSize.x - buttonSize),
+			buttonSize
+		};
+
+		bool layoutChanged = (
+			LastTextAreaSize.x != currentTextureButtonSize.x
+			or LastTextAreaSize.y != currentTextureButtonSize.y
+		);
+
+		for (button& but : buttons) {
+			if (but.textDirty or layoutChanged or (!but.Text.empty() and !but.tex.id)) {
+				RedrawText(but, currentTextureButtonSize);
+				but.textDirty = false;
 			}
+		}
 
-			for (button& but : buttons) {
-				float rowHeight = RealSize.y / buttons.size();
-				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+		lA = AnchorToLeft;
+		LastTextAreaSize = currentTextureButtonSize;
 
-				Vector2 currentTextureButtonSize = {
-					RealSize.x - buttonSize,
-					buttonSize
-				};
+		Vector2 o = {
+			Origin.x * RealSize.x + OriginOffset.x,
+			Origin.y * RealSize.y + OriginOffset.y
+		};
 
-				if (but.tex.size.x * textureAspect < currentTextureButtonSize.x or but.tex.size.y * textureAspect < currentTextureButtonSize.y) {
-					UnloadTextureFromAtlas(but.tex);
-					but.tex = LoadRenderTextureOnAtlas(currentTextureButtonSize.x * textureAspect, currentTextureButtonSize.y * textureAspect);
-					but.textDirty = true;
-				}
+		Vector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
+		float buttonSizeOffset = (buttonSize - buttonSize * ButtonSizeScale) / 2.0f;
 
-				if (but.textDirty or lA != AnchorToLeft) {
-					RedrawText(but);
-					lA = AnchorToLeft;
-					but.textDirty = false;
-				}
-			}
-
-			Vector2 o = {
-				Origin.x * RealSize.x + OriginOffset.x,
-				Origin.y * RealSize.y + OriginOffset.y
+		int i = 0;
+		for (button& but : buttons) {
+			Vector2 rectPos = {
+				RealPos.x + (AnchorToLeft ? 0.0f : currentTextureButtonSize.x) + buttonSizeOffset,
+				RealPos.y + rowHeight * i + buttonSizeOffset
 			};
 
-			Vector2 pivot = { RealPos.x + o.x, RealPos.y + o.y };
+			const RoundRectData rec = {
+				rectPos, { buttonSize * ButtonSizeScale, buttonSize * ButtonSizeScale },
+				but.ButtonColor, but.ButtonBorderColor,
+				but.ButtonTransparency, (MultiChoice ? MultiChoiceRoundness : 1.0f), but.ButtonBorderTransparency,
+				but.ButtonBorderThickness,
+				RealRotation,
+				{ pivot.x - rectPos.x, pivot.y - rectPos.y }
+			};
 
-			int i = 0;
-			for (button& but : buttons) {
-				float rowHeight = RealSize.y / buttons.size();
-				float buttonSize = std::min<float>(rowHeight, RealSize.x * ButtonsScaleX);
+			DrawRoundRectBatch(rec);
 
-				Vector2 currentTextureButtonSize = {
-					RealSize.x - buttonSize,
-					buttonSize
-				};
+			if (but.tex.id and but.textSize.x > 0.0f and but.textSize.y > 0.0f and currentTextureButtonSize.x > 0.0f and currentTextureButtonSize.y > 0.0f) {
+				float scale = std::min(1.0f, std::min(currentTextureButtonSize.x / but.textSize.x, currentTextureButtonSize.y / but.textSize.y));
+				float drawW = but.textSize.x * scale;
+				float drawH = but.textSize.y * scale;
 
-				float buttonSizeOffset = (buttonSize - buttonSize * ButtonSizeScale) / 2;
+				float areaX = RealPos.x + (AnchorToLeft ? buttonSize : 0.0f);
+				float areaY = RealPos.y + rowHeight * i;
 
-				Vector2 rectPos = {
-					RealPos.x + (AnchorToLeft ? 0 : currentTextureButtonSize.x) + buttonSizeOffset,
-					RealPos.y + rowHeight * i + buttonSizeOffset
-				};
-
-				const RoundRectData rec = {
-					rectPos, {buttonSize * ButtonSizeScale, buttonSize * ButtonSizeScale},
-					but.ButtonColor, but.ButtonBorderColor,
-					but.ButtonTransparency, (MultiChoice ? MultiChoiceRoundness : 1), but.ButtonBorderTransparency,
-					but.ButtonBorderThickness,
-					RealRotation,
-					{ pivot.x - rectPos.x, pivot.y - rectPos.y }
-				};
-
-				DrawRoundRectBatch(rec);
+				float drawX = AnchorToLeft ? areaX : (areaX + currentTextureButtonSize.x - drawW);
+				float drawY = areaY + (currentTextureButtonSize.y - drawH) * 0.5f;
 
 				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(but.tex, RealPos, RealSize,
-					{ 0, 0, but.tex.size.x, but.tex.size.y },
-					{ RealPos.x + (AnchorToLeft ? buttonSize : 0), RealPos.y + rowHeight * i, currentTextureButtonSize.x, currentTextureButtonSize.y },
+					{ 0.0f, 0.0f, but.textSize.x, but.textSize.y },
+					{ std::floorf(drawX), std::floorf(drawY), drawW, drawH },
 					o,
 					RealRotation,
 					but.TextColor,
-					(RoundTexture ? Roundness : 0)
+					(RoundTexture ? Roundness : 0.0f)
 				);
-
-				i++;
 			}
+
+			i++;
 		}
 	}
 
@@ -1218,7 +1289,7 @@ public:
 		i->basicCloneOperation(const_cast<CheckBox*>(this));
 
 		for (button& but : i->buttons) {
-			UnloadTextureFromAtlas(but.tex);
+			but.tex = {}; but.textSize = {};
 			but.textDirty = true;
 			but.anim1 = nullptr;
 			but.anim2 = nullptr;

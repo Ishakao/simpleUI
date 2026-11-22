@@ -30,7 +30,6 @@
 // Added user-made shapes for 2D objects background																//
 // Per-Symbol coloring (UsePerSymbolColor, SetPerSymbolColor, ClearPerSymbolColor) for TextLabel and TextBox	//
 // Upgraded secure objects management (protected Children and Parent fields, UniqueID is const now)				//
-// Basic gradients support (color and transparency gradients by keypoints)										//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -520,6 +519,7 @@ namespace SIMPLEUI_CONTEXT {
 
 	inline std::vector<Atlas*> AtlasArray;
 	inline size_t AtlasTextureId = 1;
+	inline RenderTexture AtlasScratch{};
 	inline unsigned int CurrentBatchTexture = 0;
 
 	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
@@ -805,25 +805,28 @@ public:
 		}
 	}
 
-	void update(AtlasTexture& t, const Image& img) {
-		if (t.currentAtlas != this) return;
-		if (img.width > t.size.x or img.height > t.size.y) return;
-		Texture src = SIMPLEUI_CORE::LoadTextureFromImage(img);
-
-		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(tex);
-		glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
-		glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_CUSTOM_SEPARATE);
-		SIMPLEUI_GRAPHICS_WRAPS::DrawTexture(src, t.position.x, t.position.y, SIMPLEUI_CORE::WHITE);
-		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
-		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
+void copyFrom(const AtlasTexture& t, const Texture& src) {
+		if (t.currentAtlas != this or !t.id or !src.id) return;
+		glCopyImageSubData(
+			src.id, GL_TEXTURE_2D, 0, 0, 0, 0,
+			tex.texture.id, GL_TEXTURE_2D, 0,
+			static_cast<GLint>(t.position.x), static_cast<GLint>(t.position.y), 0,
+			static_cast<GLsizei>(t.size.x), static_cast<GLsizei>(t.size.y), 1
+		);
 		pleaseGenerateMipmaps = true;
+	}
 
-		SIMPLEUI_CORE::UnloadTexture(src);
+	void update(AtlasTexture& t, const Image& img) {
+		if (t.currentAtlas != this or !img.data) return;
+		if (img.width <= 0 or img.height <= 0) return;
+		if (img.width > t.size.x or img.height > t.size.y) return;
+
+		SIMPLEUI_CORE::UpdateTextureRec(tex.texture, { t.position.x, t.position.y, static_cast<float>(img.width), static_cast<float>(img.height) }, img.data);
+		pleaseGenerateMipmaps = true;
 	}
 
 	AtlasTexture add(Image img) {
+		if (!img.data or img.width <= 0 or img.height <= 0) return { 0 };
 		stbrp_rect r{};
 		r.w = img.width + padding * 2;
 		r.h = img.height + padding * 2;
@@ -832,49 +835,37 @@ public:
 		int x = r.x + padding;
 		int y = r.y + padding;
 
-		Texture src = SIMPLEUI_CORE::LoadTextureFromImage(img);
-
-		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(tex);
-		glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
-		glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_CUSTOM_SEPARATE);
-		SIMPLEUI_GRAPHICS_WRAPS::DrawTexture(src, x, y, SIMPLEUI_CORE::WHITE);
-		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
-		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
+		SIMPLEUI_CORE::UpdateTextureRec(tex.texture, { static_cast<float>(x), static_cast<float>(y), static_cast<float>(img.width), static_cast<float>(img.height) }, img.data);
 		pleaseGenerateMipmaps = true;
 
-		SIMPLEUI_CORE::UnloadTexture(src);
-
-		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, {(float)x, (float)y} , {(float)img.width, (float)img.height}, this };
-
+		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, { static_cast<float>(x), static_cast<float>(y) }, { static_cast<float>(img.width), static_cast<float>(img.height) }, this };
 		textures.push_back(att);
-
 		return att;
 	}
 
 	AtlasTexture reserve(int w, int h) {
+		if (w <= 0 or h <= 0) return { 0 };
 		if (w + padding * 2 > tex.texture.width or h + padding * 2 > tex.texture.height) return { 0 };
 		stbrp_rect r{};
 		r.w = w + padding * 2;
 		r.h = h + padding * 2;
 		if (!stbrp_pack_rects(&ctx, &r, 1)) return { 0 };
-		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, { (float)(r.x + padding), (float)(r.y + padding) }, { (float)w, (float)h }, this };
+		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, { static_cast<float>(r.x + padding), static_cast<float>(r.y + padding) }, { static_cast<float>(w), static_cast<float>(h) }, this };
 		textures.push_back(att);
 		return att;
 	}
 
 	void write(const AtlasTexture& t, const unsigned char* rgba) {
-		float glY = (float)tex.texture.height - t.position.y - t.size.y;
-		UpdateTextureRec(tex.texture, { t.position.x, glY, t.size.x, t.size.y }, rgba);
+		SIMPLEUI_CORE::UpdateTextureRec(tex.texture, { t.position.x, t.position.y, t.size.x, t.size.y }, rgba);
 		pleaseGenerateMipmaps = true;
 	}
 
 	Rectangle rawSource(const AtlasTexture& t) const {
-		return { t.position.x, (float)tex.texture.height - t.position.y - t.size.y, t.size.x, t.size.y };
+		return { t.position.x, t.position.y, t.size.x, t.size.y };
 	}
 
 	AtlasTexture add(int width, int height) {
+		if (width <= 0 or height <= 0) return { 0 };
 		stbrp_rect r{};
 		r.w = width + padding * 2;
 		r.h = height + padding * 2;
@@ -883,29 +874,15 @@ public:
 		int x = r.x + padding;
 		int y = r.y + padding;
 
-		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(tex);
-		glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
-		glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_CUSTOM_SEPARATE);
-		SIMPLEUI_CORE::DrawRectangle({x, y, width, height}, SIMPLEUI_CORE::BLANK);
-		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
-		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-		pleaseGenerateMipmaps = true;
-
-		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, {(float)x, (float)y} , {(float)width, (float)height}, this };
-
+		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, { static_cast<float>(x), static_cast<float>(y) }, { static_cast<float>(width), static_cast<float>(height) }, this };
 		textures.push_back(att);
-
 		return att;
 	}
 
 	void blankArea(AtlasTexture t) {
 		if (t.currentAtlas != this) return;
-		glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
-		glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_CUSTOM_SEPARATE);
-		SIMPLEUI_CORE::DrawRectangle({t.position.x-1, t.position.y-1, t.size.x + padding * 2, t.size.y + padding * 2}, SIMPLEUI_CORE::BLANK);
+		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_REPLACE);
+		SIMPLEUI_CORE::DrawRectangle({ t.position.x - padding, t.position.y - padding, t.size.x + padding * 2, t.size.y + padding * 2 }, SIMPLEUI_CORE::BLANK);
 		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
 	}
 
@@ -918,10 +895,6 @@ public:
 			SIMPLEUI_CORE::SetTextureWrap(tex.texture, SIMPLEUI_CORE::WRAP_CLAMP);
 			std::cout << BLUE_ANSI << "Loaded new render texture for atlas (" << size << "x" << size << ")" << DEFAULT_ANSI << std::endl;
 			stbrp_init_target(&ctx, size, size, nodes.data(), (int)nodes.size());
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(tex);
-			SIMPLEUI_CORE::ClearBackground(SIMPLEUI_CORE::BLANK);
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
 			SIMPLEUI_CONTEXT::AtlasArray.push_back(this);
 		} else {
 			std::cout << RED_ANSI << "Cannot load atlas with size " << size << "x" << size << DEFAULT_ANSI << std::endl;
@@ -942,6 +915,41 @@ public:
 		}
 	}
 };
+
+inline bool BeginAtlasDraw(const AtlasTexture& t) {
+	if (!t.id or !t.currentAtlas or t.size.x <= 0.0f or t.size.y <= 0.0f) return false;
+
+	int reqW = static_cast<int>(std::ceilf(t.size.x));
+	int reqH = static_cast<int>(std::ceilf(t.size.y));
+
+	auto& scratch = SIMPLEUI_CONTEXT::AtlasScratch;
+	if (!scratch.id or scratch.texture.width < reqW or scratch.texture.height < reqH) {
+		int newW = std::max(reqW, scratch.texture.width);
+		int newH = std::max(reqH, scratch.texture.height);
+		if (scratch.id) SIMPLEUI_CORE::UnloadRenderTexture(scratch);
+		scratch = SIMPLEUI_CORE::LoadRenderTexture(newW, newH);
+		if (!scratch.id) return false;
+	}
+
+	SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
+	SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(scratch);
+
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(0, 0, reqW, reqH);
+	SIMPLEUI_CORE::ClearBackground(SIMPLEUI_CORE::BLANK);
+	return true;
+}
+
+inline void EndAtlasDraw(const AtlasTexture& t) {
+	FlushRectanglesBatch();
+	glDisable(GL_SCISSOR_TEST);
+	SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
+	SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
+
+	if (t.id and t.currentAtlas and SIMPLEUI_CONTEXT::AtlasScratch.id) {
+		t.currentAtlas->copyFrom(t, SIMPLEUI_CONTEXT::AtlasScratch.texture);
+	}
+}
 
 namespace FT_TextManagement {
 	struct Glyph {
@@ -4764,15 +4772,9 @@ class TextLabel : public Object2D {
 			}
 		}
 
-		if (cachedText.id and cachedText.currentAtlas) {
-			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
-
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
-			cachedText.currentAtlas->blankArea(cachedText);
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { cachedText.position.x, cachedText.position.y }, rasterFont, Spacing, { 255,255,255,255 }, ((GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor)));
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-
-			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
+		if (BeginAtlasDraw(cachedText)) {
+			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { 0.0f, 0.0f }, rasterFont, Spacing, { 255, 255, 255, 255 }, ((GlyphsColor.empty() or !UsePerSymbolColor ? nullptr : &GlyphsColor)));
+			EndAtlasDraw(cachedText);
 		}
 	}
 protected:
@@ -5060,21 +5062,14 @@ class TextBox : public Object2D {
 			return;
 		}
 
-		SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
-
-		SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(cachedText.currentAtlas->renderTexture());
-		cachedText.currentAtlas->blankArea(cachedText);
-
-		if (visibleText != "") {
-			SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
-		} else {
-			if (CursorIndex == -1 or SIMPLEUI_CONTEXT::FocusedTextBox != this) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { cachedText.position.x,cachedText.position.y }, textParams.z, Spacing, { 255,255,255,255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
+		if (BeginAtlasDraw(cachedText)) {
+			if (visibleText != "") {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), { 0.0f, 0.0f }, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
+			} else if (CursorIndex == -1 or SIMPLEUI_CONTEXT::FocusedTextBox != this) {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), { 0.0f, 0.0f }, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr));
 			}
+			EndAtlasDraw(cachedText);
 		}
-
-		SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-		SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
 	}
 protected:
 	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
@@ -7688,6 +7683,9 @@ inline void SUI_CleanUp() {
 
 	while (!SIMPLEUI_CONTEXT::AtlasArray.empty()) {
 		delete SIMPLEUI_CONTEXT::AtlasArray[0];
+	}
+	if (SIMPLEUI_CONTEXT::AtlasScratch.id) {
+		SIMPLEUI_CORE::UnloadRenderTexture(SIMPLEUI_CONTEXT::AtlasScratch);
 	}
 
 	for (auto& [id, grad] : SIMPLEUI_CONTEXT::Gradients) {

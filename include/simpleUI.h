@@ -30,6 +30,7 @@
 // Added user-made shapes for 2D objects background																//
 // Per-Symbol coloring (UsePerSymbolColor, SetPerSymbolColor, ClearPerSymbolColor) for TextLabel and TextBox	//
 // Upgraded secure objects management (protected Children and Parent fields, UniqueID is const now)				//
+// Basic gradients support (color and transparency gradients by keypoints)										//
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

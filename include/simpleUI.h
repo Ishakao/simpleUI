@@ -205,6 +205,8 @@ struct RoundRectData {
 
 	BorderPlacement borderType;
 	int BackgroundShape{};
+	int GradientIndex = -1;
+	int GradientRotation = 0;
 };
 
 struct SpecialVector2 {
@@ -301,6 +303,8 @@ protected:
 	bool deleted = false;
 };
 
+class GradientData;
+
 namespace SIMPLEUI_CONTEXT {
 	inline int winWidth = 0;
 	inline int winHeight = 0;
@@ -329,6 +333,8 @@ namespace SIMPLEUI_CONTEXT {
 		#version 460 core
 
 		layout(location = 0) in vec2 corner;
+		layout(location = 1) in vec4 iGradUV;
+		layout(location = 2) in vec2 iGradParams;
 		layout(location = 6) in vec4 iPosSize;
 		layout(location = 7) in vec4 iOriginRotZ;
 		layout(location = 8) in vec4 iDest;
@@ -353,6 +359,8 @@ namespace SIMPLEUI_CONTEXT {
 		layout(location = 9) flat out float fragInset;
 		layout(location = 10) flat out float fragClip;
 		layout(location = 11) flat out float fragShape;
+		layout(location = 12) flat out vec4 fragGradUV;
+		layout(location = 13) flat out vec2 fragGradParams;
 
 		void main() {
 			vec2 halfSize = iPosSize.zw * 0.5;
@@ -385,6 +393,8 @@ namespace SIMPLEUI_CONTEXT {
 			fragWorld = p;
 			fragClip = iClip;
 			fragShape = iShape;
+			fragGradUV = iGradUV;
+			fragGradParams = iGradParams;
 
 			gl_Position = mvp * vec4(p, 0.0, 1.0);
 		}
@@ -405,6 +415,11 @@ namespace SIMPLEUI_CONTEXT {
 		layout(location = 9) flat in float fragInset;
 		layout(location = 10) flat in float fragClip;
 		layout(location = 11) flat in float fragShape;
+		layout(location = 12) flat in vec4 fragGradUV;
+		layout(location = 13) flat in vec2 fragGradParams;
+
+		layout(binding = 1) uniform sampler2D gradientTex;
+		
 
 		layout(binding = 0) uniform sampler2D texture0;
 
@@ -464,6 +479,14 @@ namespace SIMPLEUI_CONTEXT {
 
 				vec4 fc = fragColor;
 				if (fragUseTex > 0.5) fc *= texture(texture0, fragUV);
+
+				if (fragGradParams.y > 0.5) {
+					vec2 dir = vec2(cos(fragGradParams.x), sin(fragGradParams.x));
+					float extent = abs(dir.x) * outerHalf.x * 2.0 + abs(dir.y) * outerHalf.y * 2.0;
+					float t = clamp(dot(fragLocal, dir) / max(extent, 1e-5) + 0.5, 0.0, 1.0);
+					vec2 guv = vec2(mix(fragGradUV.x, fragGradUV.z, t), (fragGradUV.y + fragGradUV.w) * 0.5);
+					fc *= texture(gradientTex, guv);
+				}
 
 				float fa = fc.a * fillCov;
 				float ba = fragBorderColor.a * ringCov;
@@ -588,10 +611,14 @@ namespace SIMPLEUI_CONTEXT {
 	inline void SetMinimalWindowSize(int newX, int newY) {
 		SIMPLEUI_CONTEXT::windowMinimalSize = Vector2{ (float)newX, (float)newY };
 	}
-}
 
-inline void ChangeWindowColor(Color c) {
-	SIMPLEUI_CONTEXT::WindowColor = c;
+	inline void ChangeWindowColor(Color c) {
+		SIMPLEUI_CONTEXT::WindowColor = c;
+	}
+
+	inline int GradientsCurrentID = 0;
+	inline GLuint CurrentBatchGradientAtlas = 0;
+	inline std::unordered_map<int, GradientData*> Gradients;
 }
 
 inline void DrawRoundRectBatch(const RoundRectData&);
@@ -670,8 +697,8 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		DrawRoundRectBatch(rec);
 	}
 
-	inline void DrawTexturePro(Texture texture, Vector2 position, Vector2 size, Rectangle source, Rectangle destination, Vector2 origin, float rotation, Color color, float roundness) {
-		const RoundRectData rec = {
+	inline void DrawTexturePro(Texture texture, Vector2 position, Vector2 size, Rectangle source, Rectangle destination, Vector2 origin, float rotation, Color color, float roundness, int ImgGradI=-1, int ImgGradR=0) {
+		RoundRectData rec = {
 			position,
 			size,
 			color, {255,255,255,255},
@@ -683,6 +710,9 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 			source,
 			destination
 		};
+
+		rec.GradientIndex = ImgGradI;
+		rec.GradientRotation = ImgGradR;
 
 		DrawRoundRectBatch(rec);
 	}
@@ -705,440 +735,6 @@ struct TexturedTextLabelData {
 	float Rotation{};
 	float Roundness{};
 };
-
-namespace FT_TextManagement {
-	struct Glyph {
-		Rectangle src{};
-		float xoff = 0;
-		float yoff = 0;
-		float advance = 0;
-		float scale = 1;
-		bool color = false;
-	};
-
-	struct Shaped {
-		int face;
-		FT_UInt gid;
-		float x, y, adv;
-	};
-
-	struct Quad {
-		Rectangle src;
-		float ox, oy, w, h;
-		int col;
-		bool color;
-	};
-
-	struct LineSpan {
-		float baseW;
-		int count;
-	};
-
-	struct Layout {
-		std::string text;
-		std::vector<Quad> quads;
-		std::vector<LineSpan> lines;
-		float baseLineH = 0;
-	};
-
-	class FT_Font {
-		struct Atlas {
-			Texture tex{};
-			std::vector<unsigned char> pixels;
-			std::unordered_map<uint64_t, Glyph> map;
-			float baseline = 0;
-			float lineH = 0;
-			int height = 0;
-			int x = 0, y = 0, rowH = 0;
-		};
-
-		FT_Library lib_ = nullptr;
-		hb_buffer_t* buf_ = nullptr;
-		std::vector<hb_font_t*> hb_;
-		std::vector<FT_Face> faces_{};
-		std::vector<int> activeSizes_{};
-		std::vector<float> activeScales_{};
-		Atlas atlas_{};
-		std::vector<unsigned char> scratchRgba_{};
-		int width_{};
-		int maxSide_{};
-		int baseSize_ = 64;
-
-		float ApplySize(int faceIdx, int size) {
-			if (activeSizes_[faceIdx] == size) {
-				return activeScales_[faceIdx];
-			}
-
-			FT_Face face = faces_[faceIdx];
-			float scale = 1.0f;
-
-			if (FT_IS_SCALABLE(face)) {
-				FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
-			} else if (face->num_fixed_sizes > 0) {
-				int best = 0;
-				float bestDiff = 1e9f;
-				for (int i = 0; i < face->num_fixed_sizes; i++) {
-					float d = std::fabs(face->available_sizes[i].y_ppem / 64.0f - size);
-					if (d < bestDiff) { bestDiff = d; best = i; }
-				}
-				FT_Select_Size(face, best);
-				float ppem = (float)face->size->metrics.y_ppem;
-				scale = ppem > 0 ? size / ppem : 1.0f;
-			}
-
-			hb_ft_font_changed(hb_[faceIdx]);
-			activeSizes_[faceIdx] = size;
-			activeScales_[faceIdx] = scale;
-			return scale;
-		}
-
-		static uint64_t Key(int face, FT_UInt gid) {
-			return ((uint64_t)face << 32) | gid;
-		}
-
-		static bool Joins(int cp) {
-			return (cp >= 0x1F3FB and cp <= 0x1F3FF) or cp == 0x200D or cp == 0xFE0F or cp == 0xFE0E or cp == 0x20E3 or (cp >= 0xE0020 and cp <= 0xE007F);
-		}
-
-		static bool IsRI(int cp) { return cp >= 0x1F1E6 and cp <= 0x1F1FF; }
-
-		int PickFace(int cp) {
-			for (size_t i = 0; i < faces_.size(); i++)
-				if (FT_Get_Char_Index(faces_[i], (FT_ULong)cp)) return (int)i;
-			return 0;
-		}
-
-		int NextCluster(const int* cps, int count, int i, int& faceOut) {
-			faceOut = PickFace(cps[i]);
-			int j = i + 1;
-			while (j < count and (Joins(cps[j]) or cps[j - 1] == 0x200D or (IsRI(cps[i]) and j == i + 1 and IsRI(cps[j])))) j++;
-			return j;
-		}
-
-		void Upload(Atlas& a) {
-			Image img = { a.pixels.data(), width_, a.height };
-			Texture t = SIMPLEUI_CORE::LoadTextureFromImage(img);
-			SIMPLEUI_CORE::SetTextureFilter(t, SIMPLEUI_CORE::FILTER_BILINEAR);
-			if (a.tex.id) SIMPLEUI_CORE::UnloadTexture(a.tex);
-			a.tex = t;
-		}
-
-		bool Grow(Atlas& a) {
-			if (a.height >= maxSide_) return false;
-			int nh = std::min(a.height * 2, maxSide_);
-			FlushRectanglesBatch();
-			a.pixels.resize((size_t)width_ * nh * 4, 0);
-			a.height = nh;
-			Upload(a);
-			return true;
-		}
-
-		void InitAtlas() {
-			if (atlas_.tex.id != 0 or faces_.empty()) return;
-			atlas_.height = width_;
-			atlas_.pixels.assign((size_t)width_ * atlas_.height * 4, 0);
-			Upload(atlas_);
-			float s = ApplySize(0, baseSize_);
-			atlas_.baseline = (faces_[0]->size->metrics.ascender / 64.0f) * s;
-			atlas_.lineH = (faces_[0]->size->metrics.height / 64.0f) * s;
-		}
-
-		Glyph Rasterize(Atlas& a, int f, FT_UInt gid) {
-			FT_Face face = faces_[f];
-			float scale = ApplySize(f, baseSize_);
-			int flags = FT_LOAD_RENDER;
-			if (FT_HAS_COLOR(face)) flags |= FT_LOAD_COLOR;
-			if (FT_Load_Glyph(face, gid, flags)) return {};
-
-			FT_GlyphSlot slot = face->glyph;
-			FT_Bitmap& bm = slot->bitmap;
-
-			Glyph g;
-			g.scale = scale;
-			g.advance = (slot->advance.x / 64.0f) * scale;
-			g.xoff = slot->bitmap_left * scale;
-			g.yoff = -slot->bitmap_top * scale;
-
-			int w = (int)bm.width;
-			int h = (int)bm.rows;
-			if (w == 0 or h == 0) return g;
-
-			bool bgra = bm.pixel_mode == FT_PIXEL_MODE_BGRA;
-			if (!bgra and bm.pixel_mode != FT_PIXEL_MODE_GRAY) return g;
-			g.color = bgra;
-
-			if (w + 2 > width_) return g;
-
-			if (a.x + w + 2 > width_) { a.x = 0; a.y += a.rowH + 2; a.rowH = 0; }
-			while (a.y + h + 2 > a.height) {
-				if (!Grow(a)) return g;
-			}
-
-			size_t needed = (size_t)w * h * 4;
-			if (scratchRgba_.size() < needed) scratchRgba_.resize(needed);
-
-			int pitch = std::abs(bm.pitch);
-			for (int y = 0; y < h; y++) {
-				const unsigned char* row = bm.buffer + (size_t)y * pitch;
-				unsigned char* out = scratchRgba_.data() + (size_t)y * w * 4;
-				for (int x = 0; x < w; x++) {
-					if (bgra) {
-						unsigned char alpha = row[x * 4 + 3];
-						out[x * 4 + 0] = alpha ? (unsigned char)std::min(255, row[x * 4 + 2] * 255 / alpha) : 0;
-						out[x * 4 + 1] = alpha ? (unsigned char)std::min(255, row[x * 4 + 1] * 255 / alpha) : 0;
-						out[x * 4 + 2] = alpha ? (unsigned char)std::min(255, row[x * 4 + 0] * 255 / alpha) : 0;
-						out[x * 4 + 3] = alpha;
-					} else {
-						out[x * 4 + 0] = 255;
-						out[x * 4 + 1] = 255;
-						out[x * 4 + 2] = 255;
-						out[x * 4 + 3] = row[x];
-					}
-				}
-				std::memcpy(&a.pixels[((size_t)(a.y + y) * width_ + a.x) * 4], out, (size_t)w * 4);
-			}
-
-			UpdateTextureRec(a.tex, { (float)a.x, (float)a.y, (float)w, (float)h }, scratchRgba_.data());
-			g.src = { (float)a.x, (float)a.y, (float)w, (float)h };
-			a.x += w + 2;
-			if (h > a.rowH) a.rowH = h;
-			return g;
-		}
-
-	public:
-		std::unordered_map<uint64_t, Layout> layouts;
-		std::vector<Shaped> shScratch;
-
-		FT_Font(const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) : baseSize_(size), width_(startSide < 512 ? 512 : startSide), maxSide_(maxSide) {
-			FT_Error ft_err = FT_Init_FreeType(&lib_);
-
-			if (ft_err != FT_Err_Ok) throw std::runtime_error("Failed to initialize FreeType");
-
-			buf_ = hb_buffer_create();
-			layouts.reserve(4096);
-			for (const std::string& p : paths) AddFace(p.c_str());
-			InitAtlas();
-		}
-
-		FT_Font(FT_Font&& o) noexcept : lib_(o.lib_), buf_(o.buf_), hb_(std::move(o.hb_)), faces_(std::move(o.faces_)),
-				activeSizes_(std::move(o.activeSizes_)), activeScales_(std::move(o.activeScales_)),
-				atlas_(std::move(o.atlas_)), scratchRgba_(std::move(o.scratchRgba_)),
-				width_(o.width_), maxSide_(o.maxSide_), baseSize_(o.baseSize_),
-				layouts(std::move(o.layouts)), shScratch(std::move(o.shScratch)) {
-			o.lib_ = nullptr;
-			o.buf_ = nullptr;
-			o.atlas_.tex.id = 0;
-			o.faces_.clear();
-			o.hb_.clear();
-		}
-
-		~FT_Font() {
-			if (atlas_.tex.id) SIMPLEUI_CORE::UnloadTexture(atlas_.tex);
-			for (auto f : hb_) hb_font_destroy(f);
-			if (buf_) hb_buffer_destroy(buf_);
-			for (FT_Face f : faces_) FT_Done_Face(f);
-			if (lib_) FT_Done_FreeType(lib_);
-		}
-
-		FT_Font(const FT_Font&) = delete;
-		FT_Font& operator=(const FT_Font&) = delete;
-
-		bool AddFace(const char* path) {
-			FT_Face face;
-			if (FT_New_Face(lib_, path, 0, &face)) return false;
-			faces_.push_back(face);
-			activeSizes_.push_back(-1);
-			activeScales_.push_back(1.0f);
-			hb_font_t* h = hb_ft_font_create_referenced(face);
-			hb_ft_font_set_load_flags(h, FT_LOAD_DEFAULT | FT_LOAD_COLOR);
-			hb_.push_back(h);
-			return true;
-		}
-
-		void ShapeBase(const int* cps, int count, std::vector<Shaped>& out) {
-			if (count <= 0) return;
-			int i = 0;
-			while (i < count) {
-				int face = 0;
-				int j = NextCluster(cps, count, i, face);
-				while (j < count) {
-					int nextFace = 0;
-					int nextJ = NextCluster(cps, count, j, nextFace);
-					if (nextFace != face) break;
-					j = nextJ;
-				}
-
-				float scale = ApplySize(face, baseSize_);
-
-				hb_buffer_clear_contents(buf_);
-				hb_buffer_add_codepoints(buf_, (const uint32_t*)cps, count, i, j - i);
-				hb_buffer_guess_segment_properties(buf_);
-				hb_shape(hb_[face], buf_, nullptr, 0);
-
-				unsigned n;
-				hb_glyph_info_t* inf = hb_buffer_get_glyph_infos(buf_, &n);
-				hb_glyph_position_t* ps = hb_buffer_get_glyph_positions(buf_, &n);
-				for (unsigned k = 0; k < n; k++) {
-					out.push_back({
-						face,
-						inf[k].codepoint,
-						(ps[k].x_offset / 64.0f) * scale,
-						-(ps[k].y_offset / 64.0f) * scale,
-						(ps[k].x_advance / 64.0f) * scale
-					});
-				}
-				i = j;
-			}
-		}
-
-		bool Valid() const { return !faces_.empty(); }
-
-		const Glyph& GetBase(int face, FT_UInt gid) {
-			InitAtlas();
-			uint64_t k = Key(face, gid);
-			auto it = atlas_.map.find(k);
-			if (it != atlas_.map.end()) return it->second;
-			return atlas_.map.emplace(k, Rasterize(atlas_, face, gid)).first->second;
-		}
-
-		Texture BaseTexture() { InitAtlas(); return atlas_.tex; }
-		float BaseBaseline() { InitAtlas(); return atlas_.baseline; }
-		float BaseLineHeight() { InitAtlas(); return atlas_.lineH; }
-		int BaseSize() const { return baseSize_; }
-	};
-
-	inline std::vector<FT_Font> Fonts;
-	inline std::unordered_map<std::string, int> FontsIndexes;
-
-	inline bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64, int startSide = 1024, int maxSide = 16384) {
-		if (FontsIndexes.find(name) != FontsIndexes.end()) return false;
-
-		Fonts.emplace_back(paths, size, startSide, maxSide);
-		if (!Fonts.back().Valid()) {
-			Fonts.pop_back();
-			std::cout << RED_ANSI << "Font \"" << name << "\" failed to load" << DEFAULT_ANSI << std::endl;
-			return false;
-		}
-
-		FontsIndexes.insert({ name, (int)Fonts.size() - 1 });
-		return true;
-	}
-
-	inline void UnloadFonts() { Fonts.clear(); }
-
-	inline const Layout& GetLayout(FT_Font& font, const char* text) {
-		std::string_view sv(text ? text : "");
-		uint64_t h = std::hash<std::string_view>{}(sv);
-
-		auto& m = font.layouts;
-		auto it = m.find(h);
-		if (it != m.end() and it->second.text == sv)
-			return it->second;
-
-		if (m.size() > 32768) m.clear();
-
-		Layout& L = m[h];
-		L.text.assign(sv.data(), sv.size());
-		L.quads.clear();
-		L.lines.clear();
-		L.baseLineH = font.BaseLineHeight();
-
-		int count = 0;
-		int* cps = SIMPLEUI_CORE::LoadCodepoints(text ? text : "", &count);
-		float base = font.BaseBaseline();
-		std::vector<Shaped>& sh = font.shScratch;
-
-		L.quads.reserve(count);
-
-		float y = 0;
-		int start = 0;
-		while (start <= count) {
-			int end = start;
-			while (end < count and cps[end] != '\n') end++;
-
-			sh.clear();
-			if (end > start) {
-				font.ShapeBase(cps + start, end - start, sh);
-			}
-
-			float x = 0;
-			int col = 0;
-			for (const Shaped& s : sh) {
-				const Glyph& g = font.GetBase(s.face, s.gid);
-				if (g.src.width > 0) {
-					L.quads.push_back({
-						g.src,
-						x + s.x + g.xoff,
-						y + base + s.y + g.yoff,
-						g.src.width * g.scale,
-						g.src.height * g.scale,
-						col,
-						g.color
-					});
-				}
-				x += s.adv;
-				col++;
-			}
-
-			L.lines.push_back({ x, (int)sh.size() });
-			y += L.baseLineH;
-			start = end + 1;
-		}
-
-		SIMPLEUI_CORE::UnloadCodepoints(cps);
-		return L;
-	}
-
-	inline Vector2 MeasureTextEx(FT_Font& font, const char* text, float size, int spacing) {
-		const Layout& L = GetLayout(font, text);
-		float s = (float)size / (float)font.BaseSize();
-		float maxW = 0.0f;
-		for (const LineSpan& line : L.lines) {
-			float w = line.count > 0 ? (line.baseW * s + (float)(line.count - 1) * spacing) : 0.0f;
-			if (w > maxW) maxW = w;
-		}
-		return { maxW, (float)L.lines.size() * L.baseLineH * s };
-	}
-
-	inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* textlabeldata=nullptr) {
-		const Layout& L = GetLayout(font, text);
-		Texture tex = font.BaseTexture();
-		Color colorTint = { 255, 255, 255, tint.a };
-		float s = fontSize / (float)font.BaseSize();
-
-		int i = 0;
-
-		for (const Quad& q : L.quads) {
-			Rectangle dst = {
-				pos.x + q.ox * s + (float)q.col * spacing,
-				pos.y + q.oy * s,
-				q.w * s,
-				q.h * s
-			};
-
-			Color symbolColor = tint;
-
-			if (c) {
-				if (i < c->size()) {
-					symbolColor = (*c)[i];
-					i++;
-				} else if (q.color) symbolColor = colorTint;
-			} else if (q.color) symbolColor = colorTint;
-
-			if (textlabeldata) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, symbolColor, textlabeldata->Roundness);
-			} else {
-				SIMPLEUI_CORE::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, symbolColor);
-			}
-		}
-	}
-}
-
-namespace SIMPLEUI_GRAPHICS_WRAPS {
-	inline void DrawTextEx(FT_TextManagement::FT_Font& font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* data=nullptr) {
-		FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint, c, data);
-	}
-}
 
 struct OffsetScale {
 	int Offset = 0; // value in pixels
@@ -1208,7 +804,7 @@ public:
 		}
 	}
 
-	void update(AtlasTexture& t, Image img) {
+	void update(AtlasTexture& t, const Image& img) {
 		if (t.currentAtlas != this) return;
 		if (img.width > t.size.x or img.height > t.size.y) return;
 		Texture src = SIMPLEUI_CORE::LoadTextureFromImage(img);
@@ -1254,6 +850,27 @@ public:
 		textures.push_back(att);
 
 		return att;
+	}
+
+	AtlasTexture reserve(int w, int h) {
+		if (w + padding * 2 > tex.texture.width or h + padding * 2 > tex.texture.height) return { 0 };
+		stbrp_rect r{};
+		r.w = w + padding * 2;
+		r.h = h + padding * 2;
+		if (!stbrp_pack_rects(&ctx, &r, 1)) return { 0 };
+		AtlasTexture att{ SIMPLEUI_CONTEXT::AtlasTextureId++, { (float)(r.x + padding), (float)(r.y + padding) }, { (float)w, (float)h }, this };
+		textures.push_back(att);
+		return att;
+	}
+
+	void write(const AtlasTexture& t, const unsigned char* rgba) {
+		float glY = (float)tex.texture.height - t.position.y - t.size.y;
+		UpdateTextureRec(tex.texture, { t.position.x, glY, t.size.x, t.size.y }, rgba);
+		pleaseGenerateMipmaps = true;
+	}
+
+	Rectangle rawSource(const AtlasTexture& t) const {
+		return { t.position.x, (float)tex.texture.height - t.position.y - t.size.y, t.size.x, t.size.y };
 	}
 
 	AtlasTexture add(int width, int height) {
@@ -1325,15 +942,439 @@ public:
 	}
 };
 
+namespace FT_TextManagement {
+	struct Glyph {
+		Rectangle src{};
+		float xoff = 0;
+		float yoff = 0;
+		float advance = 0;
+		float scale = 1;
+		bool color = false;
+		Atlas* atlas = nullptr;
+		AtlasTexture tex{};
+	};
+
+	inline Atlas* GlyphAtlas = nullptr;
+
+	inline AtlasTexture AllocGlyph(int w, int h) {
+		if (GlyphAtlas) {
+			AtlasTexture t = GlyphAtlas->reserve(w, h);
+			if (t.id) return t;
+		}
+		for (Atlas* a : SIMPLEUI_CONTEXT::AtlasArray) {
+			AtlasTexture t = a->reserve(w, h);
+			if (t.id) { GlyphAtlas = a; return t; }
+		}
+		Atlas* a = new Atlas();
+		if (!a->loaded) { delete a; return { 0 }; }
+		GlyphAtlas = a;
+		return a->reserve(w, h);
+	}
+
+	struct Shaped {
+		int face;
+		FT_UInt gid;
+		float x, y, adv;
+	};
+
+	struct Quad {
+		Rectangle src;
+		float ox, oy, w, h;
+		int col;
+		bool color;
+		Atlas* atlas = nullptr;
+	};
+
+	struct LineSpan {
+		float baseW;
+		int count;
+	};
+
+	struct Layout {
+		std::string text;
+		std::vector<Quad> quads;
+		std::vector<LineSpan> lines;
+		float baseLineH = 0;
+	};
+
+	class FT_Font {
+		FT_Library lib_ = nullptr;
+		hb_buffer_t* buf_ = nullptr;
+		std::vector<hb_font_t*> hb_;
+		std::vector<FT_Face> faces_{};
+		std::vector<int> activeSizes_{};
+		std::vector<float> activeScales_{};
+		std::vector<unsigned char> scratchRgba_{};
+		int baseSize_ = 64;
+
+		std::unordered_map<uint64_t, Glyph> glyphs_;
+		float baseline_ = 0;
+		float lineH_ = 0;
+		bool metricsReady_ = false;
+
+		float ApplySize(int faceIdx, int size) {
+			if (activeSizes_[faceIdx] == size) {
+				return activeScales_[faceIdx];
+			}
+
+			FT_Face face = faces_[faceIdx];
+			float scale = 1.0f;
+
+			if (FT_IS_SCALABLE(face)) {
+				FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
+			} else if (face->num_fixed_sizes > 0) {
+				int best = 0;
+				float bestDiff = 1e9f;
+				for (int i = 0; i < face->num_fixed_sizes; i++) {
+					float d = std::fabs(face->available_sizes[i].y_ppem / 64.0f - size);
+					if (d < bestDiff) { bestDiff = d; best = i; }
+				}
+				FT_Select_Size(face, best);
+				float ppem = (float)face->size->metrics.y_ppem;
+				scale = ppem > 0 ? size / ppem : 1.0f;
+			}
+
+			hb_ft_font_changed(hb_[faceIdx]);
+			activeSizes_[faceIdx] = size;
+			activeScales_[faceIdx] = scale;
+			return scale;
+		}
+
+		static uint64_t Key(int face, FT_UInt gid) {
+			return ((uint64_t)face << 32) | gid;
+		}
+
+		static bool Joins(int cp) {
+			return (cp >= 0x1F3FB and cp <= 0x1F3FF) or cp == 0x200D or cp == 0xFE0F or cp == 0xFE0E or cp == 0x20E3 or (cp >= 0xE0020 and cp <= 0xE007F);
+		}
+
+		static bool IsRI(int cp) { return cp >= 0x1F1E6 and cp <= 0x1F1FF; }
+
+		int PickFace(int cp) {
+			for (size_t i = 0; i < faces_.size(); i++)
+				if (FT_Get_Char_Index(faces_[i], (FT_ULong)cp)) return (int)i;
+			return 0;
+		}
+
+		int NextCluster(const int* cps, int count, int i, int& faceOut) {
+			faceOut = PickFace(cps[i]);
+			int j = i + 1;
+			while (j < count and (Joins(cps[j]) or cps[j - 1] == 0x200D or (IsRI(cps[i]) and j == i + 1 and IsRI(cps[j])))) j++;
+			return j;
+		}
+
+		Glyph Rasterize(int f, FT_UInt gid) {
+			FT_Face face = faces_[f];
+			float scale = ApplySize(f, baseSize_);
+			int flags = FT_LOAD_RENDER;
+			if (FT_HAS_COLOR(face)) flags |= FT_LOAD_COLOR;
+			if (FT_Load_Glyph(face, gid, flags)) return {};
+
+			FT_GlyphSlot slot = face->glyph;
+			FT_Bitmap& bm = slot->bitmap;
+
+			Glyph g;
+			g.scale = scale;
+			g.advance = (slot->advance.x / 64.0f) * scale;
+			g.xoff = slot->bitmap_left * scale;
+			g.yoff = -slot->bitmap_top * scale;
+
+			int w = (int)bm.width;
+			int h = (int)bm.rows;
+			if (w == 0 or h == 0) return g;
+
+			bool bgra = bm.pixel_mode == FT_PIXEL_MODE_BGRA;
+			if (!bgra and bm.pixel_mode != FT_PIXEL_MODE_GRAY) return g;
+			g.color = bgra;
+
+			AtlasTexture at = AllocGlyph(w, h);
+			if (!at.id) return g;
+
+			size_t needed = (size_t)w * h * 4;
+			if (scratchRgba_.size() < needed) scratchRgba_.resize(needed);
+
+			int pitch = std::abs(bm.pitch);
+			for (int y = 0; y < h; y++) {
+				const unsigned char* row = bm.buffer + (size_t)y * pitch;
+				unsigned char* out = scratchRgba_.data() + (size_t)y * w * 4;
+				for (int x = 0; x < w; x++) {
+					if (bgra) {
+						unsigned char alpha = row[x * 4 + 3];
+						out[x * 4 + 0] = alpha ? (unsigned char)std::min(255, row[x * 4 + 2] * 255 / alpha) : 0;
+						out[x * 4 + 1] = alpha ? (unsigned char)std::min(255, row[x * 4 + 1] * 255 / alpha) : 0;
+						out[x * 4 + 2] = alpha ? (unsigned char)std::min(255, row[x * 4 + 0] * 255 / alpha) : 0;
+						out[x * 4 + 3] = alpha;
+					} else {
+						out[x * 4 + 0] = 255;
+						out[x * 4 + 1] = 255;
+						out[x * 4 + 2] = 255;
+						out[x * 4 + 3] = row[x];
+					}
+				}
+			}
+
+			Atlas* atlas = at.currentAtlas;
+			atlas->write(at, scratchRgba_.data());
+
+			g.atlas = atlas;
+			g.tex = at;
+			g.src = atlas->rawSource(at);
+			return g;
+		}
+
+	public:
+		std::unordered_map<uint64_t, Layout> layouts;
+		std::vector<Shaped> shScratch;
+
+		FT_Font(const std::vector<std::string>& paths, int size = 64) : baseSize_(size) {
+			FT_Error ft_err = FT_Init_FreeType(&lib_);
+			if (ft_err != FT_Err_Ok) throw std::runtime_error("Failed to initialize FreeType");
+
+			buf_ = hb_buffer_create();
+			layouts.reserve(4096);
+			for (const std::string& p : paths) AddFace(p.c_str());
+		}
+
+		FT_Font(FT_Font&& o) noexcept : lib_(o.lib_), buf_(o.buf_), hb_(std::move(o.hb_)), faces_(std::move(o.faces_)),
+				activeSizes_(std::move(o.activeSizes_)), activeScales_(std::move(o.activeScales_)),
+				scratchRgba_(std::move(o.scratchRgba_)),
+				baseSize_(o.baseSize_),
+				glyphs_(std::move(o.glyphs_)),
+				baseline_(o.baseline_), lineH_(o.lineH_), metricsReady_(o.metricsReady_),
+				layouts(std::move(o.layouts)), shScratch(std::move(o.shScratch)) {
+			o.lib_ = nullptr;
+			o.buf_ = nullptr;
+			o.faces_.clear();
+			o.hb_.clear();
+		}
+
+		~FT_Font() {
+			for (auto f : hb_) hb_font_destroy(f);
+			if (buf_) hb_buffer_destroy(buf_);
+			for (FT_Face f : faces_) FT_Done_Face(f);
+			if (lib_) FT_Done_FreeType(lib_);
+		}
+
+		FT_Font(const FT_Font&) = delete;
+		FT_Font& operator=(const FT_Font&) = delete;
+
+		bool AddFace(const char* path) {
+			FT_Face face;
+			if (FT_New_Face(lib_, path, 0, &face)) return false;
+			faces_.push_back(face);
+			activeSizes_.push_back(-1);
+			activeScales_.push_back(1.0f);
+			hb_font_t* h = hb_ft_font_create_referenced(face);
+			hb_ft_font_set_load_flags(h, FT_LOAD_DEFAULT | FT_LOAD_COLOR);
+			hb_.push_back(h);
+			return true;
+		}
+
+		void ShapeBase(const int* cps, int count, std::vector<Shaped>& out) {
+			if (count <= 0) return;
+			int i = 0;
+			while (i < count) {
+				int face = 0;
+				int j = NextCluster(cps, count, i, face);
+				while (j < count) {
+					int nextFace = 0;
+					int nextJ = NextCluster(cps, count, j, nextFace);
+					if (nextFace != face) break;
+					j = nextJ;
+				}
+
+				float scale = ApplySize(face, baseSize_);
+
+				hb_buffer_clear_contents(buf_);
+				hb_buffer_add_codepoints(buf_, (const uint32_t*)cps, count, i, j - i);
+				hb_buffer_guess_segment_properties(buf_);
+				hb_shape(hb_[face], buf_, nullptr, 0);
+
+				unsigned n;
+				hb_glyph_info_t* inf = hb_buffer_get_glyph_infos(buf_, &n);
+				hb_glyph_position_t* ps = hb_buffer_get_glyph_positions(buf_, &n);
+				for (unsigned k = 0; k < n; k++) {
+					out.push_back({
+						face,
+						inf[k].codepoint,
+						(ps[k].x_offset / 64.0f) * scale,
+						-(ps[k].y_offset / 64.0f) * scale,
+						(ps[k].x_advance / 64.0f) * scale
+					});
+				}
+				i = j;
+			}
+		}
+
+		bool Valid() const { return !faces_.empty(); }
+		float BaseBaseline() { InitMetrics(); return baseline_; }
+		float BaseLineHeight() { InitMetrics(); return lineH_; }
+
+		void InitMetrics() {
+			if (metricsReady_ or faces_.empty()) return;
+			float s = ApplySize(0, baseSize_);
+			baseline_ = (faces_[0]->size->metrics.ascender / 64.0f) * s;
+			lineH_ = (faces_[0]->size->metrics.height / 64.0f) * s;
+			metricsReady_ = true;
+		}
+
+		const Glyph& GetBase(int face, FT_UInt gid) {
+			uint64_t k = Key(face, gid);
+			auto it = glyphs_.find(k);
+			if (it != glyphs_.end()) return it->second;
+			return glyphs_.emplace(k, Rasterize(face, gid)).first->second;
+		}
+
+		int BaseSize() const { return baseSize_; }
+	};
+
+	inline std::vector<FT_Font> Fonts;
+	inline std::unordered_map<std::string, int> FontsIndexes;
+
+	inline bool CreateFont(const std::string& name, const std::vector<std::string>& paths, int size = 64) {
+		if (FontsIndexes.find(name) != FontsIndexes.end()) return false;
+
+		Fonts.emplace_back(paths, size);
+		if (!Fonts.back().Valid()) {
+			Fonts.pop_back();
+			std::cout << RED_ANSI << "Font \"" << name << "\" failed to load" << DEFAULT_ANSI << std::endl;
+			return false;
+		}
+
+		FontsIndexes.insert({ name, (int)Fonts.size() - 1 });
+		return true;
+	}
+
+	inline void UnloadFonts() { Fonts.clear(); }
+
+	inline const Layout& GetLayout(FT_Font& font, const char* text) {
+		std::string_view sv(text ? text : "");
+		uint64_t h = std::hash<std::string_view>{}(sv);
+
+		auto& m = font.layouts;
+		auto it = m.find(h);
+		if (it != m.end() and it->second.text == sv)
+			return it->second;
+
+		if (m.size() > 32768) m.clear();
+
+		Layout& L = m[h];
+		L.text.assign(sv.data(), sv.size());
+		L.quads.clear();
+		L.lines.clear();
+		L.baseLineH = font.BaseLineHeight();
+
+		int count = 0;
+		int* cps = SIMPLEUI_CORE::LoadCodepoints(text ? text : "", &count);
+		float base = font.BaseBaseline();
+		std::vector<Shaped>& sh = font.shScratch;
+
+		L.quads.reserve(count);
+
+		float y = 0;
+		int start = 0;
+		while (start <= count) {
+			int end = start;
+			while (end < count and cps[end] != '\n') end++;
+
+			sh.clear();
+			if (end > start) {
+				font.ShapeBase(cps + start, end - start, sh);
+			}
+
+			float x = 0;
+			int col = 0;
+			for (const Shaped& s : sh) {
+				const Glyph& g = font.GetBase(s.face, s.gid);
+				if (g.src.width > 0) {
+					if (g.atlas and g.src.width > 0) {
+						L.quads.push_back({
+							g.src,
+							x + s.x + g.xoff,
+							y + base + s.y + g.yoff,
+							g.src.width * g.scale,
+							g.src.height * g.scale,
+							col,
+							g.color,
+							g.atlas
+						});
+					}
+				}
+				x += s.adv;
+				col++;
+			}
+
+			L.lines.push_back({ x, (int)sh.size() });
+			y += L.baseLineH;
+			start = end + 1;
+		}
+
+		SIMPLEUI_CORE::UnloadCodepoints(cps);
+		return L;
+	}
+
+	inline Vector2 MeasureTextEx(FT_Font& font, const char* text, float size, int spacing) {
+		const Layout& L = GetLayout(font, text);
+		float s = (float)size / (float)font.BaseSize();
+		float maxW = 0.0f;
+		for (const LineSpan& line : L.lines) {
+			float w = line.count > 0 ? (line.baseW * s + (float)(line.count - 1) * spacing) : 0.0f;
+			if (w > maxW) maxW = w;
+		}
+		return { maxW, (float)L.lines.size() * L.baseLineH * s };
+	}
+
+	inline void DrawTextEx(FT_Font& font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* textlabeldata=nullptr) {
+		const Layout& L = GetLayout(font, text);
+		Color colorTint = { 255, 255, 255, tint.a };
+		float s = fontSize / (float)font.BaseSize();
+
+		int i = 0;
+
+		Atlas* last = nullptr;
+		Texture tex{};
+		for (const Quad& q : L.quads) {
+			if (q.atlas != last) { last = q.atlas; tex = last->texture(); }
+
+			Rectangle dst = {
+				pos.x + q.ox * s + (float)q.col * spacing,
+				pos.y + q.oy * s,
+				q.w * s,
+				q.h * s
+			};
+
+			Color symbolColor = tint;
+
+			if (c) {
+				if (i < c->size()) {
+					symbolColor = (*c)[i];
+					i++;
+				} else if (q.color) symbolColor = colorTint;
+			} else if (q.color) symbolColor = colorTint;
+
+			if (textlabeldata) {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, symbolColor, textlabeldata->Roundness);
+			} else {
+				SIMPLEUI_CORE::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, symbolColor);
+			}
+		}
+	}
+}
+
 namespace SIMPLEUI_GRAPHICS_WRAPS {
-	inline void DrawTexturePro(AtlasTexture t, Vector2 pos, Vector2 size, Rectangle s, Rectangle d, Vector2 o, float r, Color c, float rou) {
+	inline void DrawTextEx(FT_TextManagement::FT_Font& font, const char* text, Vector2 pos, float fontSize, int spacing, Color tint, std::vector<Color>* c=nullptr, TexturedTextLabelData* data=nullptr) {
+		FT_TextManagement::DrawTextEx(font, text, pos, fontSize, spacing, tint, c, data);
+	}
+}
+
+namespace SIMPLEUI_GRAPHICS_WRAPS {
+	inline void DrawTexturePro(AtlasTexture t, Vector2 pos, Vector2 size, Rectangle s, Rectangle d, Vector2 o, float r, Color c, float rou, int ImgGradI=-1, int ImgGradR=0) {
 		if (!t.currentAtlas) return;
 
 		Texture tex = t.currentAtlas->texture();
-
 		Rectangle src = { t.position.x + s.x, t.position.y + s.y, s.width, s.height };
 
-		SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, pos, size, src, d, o, r, c, rou);
+		SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, pos, size, src, d, o, r, c, rou, ImgGradI, ImgGradR);
 	}
 }
 
@@ -1472,6 +1513,144 @@ inline Shader GetShader(int id) {
 inline void UnloadShader(int id) {
 	Shader sh = GetShader(id);
 	SIMPLEUI_CORE::UnloadShader(sh);
+}
+
+class GradientData {
+	friend inline int CreateGradient(
+		const std::vector<std::pair<float, Color>>&, 
+		const std::vector<std::pair<float, float>>&
+	);
+	friend inline void ChangeGradientColors(int, const std::vector<std::pair<float, Color>>&);
+	friend inline void ChangeGradientTransparencies(int, const std::vector<std::pair<float, float>>&);
+	friend inline void DestroyGradient(int);
+	friend inline void SUI_CleanUp();
+
+	AtlasTexture tex{};
+	std::vector<std::pair<float, Color>> colors = {{0, {255,255,255,255}}, {1, {255,255,255,255}}};
+	std::vector<std::pair<float, float>> transparencies = {{0, 0}, {1, 0}};
+	bool needUpdate = true;
+
+	GradientData() = delete;
+	GradientData(const GradientData& other) = delete;
+	GradientData(GradientData&& other) = delete;
+
+	~GradientData() {
+		if (tex.id and tex.currentAtlas) {
+			UnloadTextureFromAtlas(tex);
+		}
+	}
+
+	GradientData(const std::vector<std::pair<float, Color>>& keysC) : colors(keysC) {}
+	GradientData(const std::vector<std::pair<float, float>>& keysT) : transparencies(keysT) {}
+	GradientData(const std::vector<std::pair<float, Color>>& keysC, const std::vector<std::pair<float, float>>& keysT) : colors(keysC), transparencies(keysT) {}
+
+	static Color lerpColor(const std::vector<std::pair<float, Color>>& k, float t) {
+		if (k.empty()) return Color{255, 255, 255, 255};
+		if (t <= k.front().first) return k.front().second;
+		if (t >= k.back().first) return k.back().second;
+		size_t i = 1;
+		while (k[i].first < t) i++;
+		const auto& [t0, c0] = k[i - 1];
+		const auto& [t1, c1] = k[i];
+		float f = (t - t0) / (t1 - t0);
+		auto mix = [f](uint8_t a, uint8_t b) {
+			return static_cast<uint8_t>(a + (b - a) * f + 0.5f);
+		};
+		return Color{mix(c0.r, c1.r), mix(c0.g, c1.g), mix(c0.b, c1.b), mix(c0.a, c1.a)};
+	}
+
+	static float lerpAlpha(const std::vector<std::pair<float, float>>& k, float t) {
+		if (k.empty()) return 0.0f;
+		if (t <= k.front().first) return k.front().second;
+		if (t >= k.back().first) return k.back().second;
+		size_t i = 1;
+		while (k[i].first < t) i++;
+		const auto& [t0, a0] = k[i - 1];
+		const auto& [t1, a1] = k[i];
+		return a0 + (a1 - a0) * (t - t0) / (t1 - t0);
+	}
+
+	std::vector<Color> buildPixels() const {
+		const size_t n = std::max(colors.size(), transparencies.size());
+		std::vector<Color> px(n);
+		for (size_t i = 0; i < n; i++) {
+			float t = n > 1 ? static_cast<float>(i) / (n - 1) : 0.0f;
+			Color c = lerpColor(colors, t);
+			float tr = std::clamp(lerpAlpha(transparencies, t), 0.0f, 1.0f);
+			c.a = static_cast<uint8_t>(c.a * (1.0f - tr) + 0.5f);
+			px[i] = c;
+		}
+		return px;
+	}
+
+	void updateTexture() {
+		needUpdate = false;
+		std::vector<Color> px = buildPixels();
+		Image img{};
+		img.data = px.data();
+		img.width = (int)px.size();
+		img.height = 1;
+
+		if (tex.id and tex.currentAtlas) {
+			if (tex.size.x < img.width or tex.size.y < img.height) {
+				UnloadTextureFromAtlas(tex);
+				tex = LoadTextureOnAtlas(img);
+			} else {
+				tex.currentAtlas->update(tex, img);
+			}
+		} else {
+			tex = LoadTextureOnAtlas(img);
+		}
+	}
+public:
+	const AtlasTexture& texture() {
+		if (needUpdate) updateTexture();
+		return tex;
+	}
+};
+
+inline void ChangeGradientColors(int id, const std::vector<std::pair<float, Color>>& keysC) {
+	auto it = SIMPLEUI_CONTEXT::Gradients.find(id);
+	if (it != SIMPLEUI_CONTEXT::Gradients.end()) {
+		it->second->colors = keysC;
+		it->second->needUpdate = true;
+	}
+}
+
+inline void ChangeGradientTransparencies(int id, const std::vector<std::pair<float, float>>& keysT) {
+	auto it = SIMPLEUI_CONTEXT::Gradients.find(id);
+	if (it != SIMPLEUI_CONTEXT::Gradients.end()) {
+		it->second->transparencies = keysT;
+		it->second->needUpdate = true;
+	}
+}
+
+inline int CreateGradient(
+	const std::vector<std::pair<float, Color>>& keysC={{0, {255,255,255,255}}, {1, {255,255,255,255}}}, 
+	const std::vector<std::pair<float, float>>& keysT={{0, 0}, {1, 0}}
+) {
+	
+	GradientData* gr = nullptr;
+	while (true) {
+		auto it = SIMPLEUI_CONTEXT::Gradients.find(SIMPLEUI_CONTEXT::GradientsCurrentID);
+		if (it != SIMPLEUI_CONTEXT::Gradients.end()) {
+			SIMPLEUI_CONTEXT::GradientsCurrentID++;
+		} else {
+			gr = new GradientData(keysC, keysT);
+			SIMPLEUI_CONTEXT::Gradients.insert({SIMPLEUI_CONTEXT::GradientsCurrentID, gr});
+			break;
+		}
+	}
+
+	return SIMPLEUI_CONTEXT::GradientsCurrentID++;
+}
+
+inline void DestroyGradient(int id) {
+	auto it = SIMPLEUI_CONTEXT::Gradients.find(id);
+	if (it != SIMPLEUI_CONTEXT::Gradients.end()) {
+		delete it->second;
+		SIMPLEUI_CONTEXT::Gradients.erase(it);
+	}
 }
 
 inline Color mulColor(Color other, float t) {
@@ -2971,6 +3150,9 @@ struct RectInstance {
 	float inset;
 	float clip;
 	float shape;
+	float gu0, gv0, gu1, gv1;
+	float gradRot;
+	float gradUse;
 };
 
 namespace RectGPU {
@@ -2986,6 +3168,7 @@ namespace RectGPU {
 	inline size_t clipSsboCapacity = 0;
 	inline int vboCursor = 0;
 	inline std::vector<RectInstance> insts;
+	inline GLuint gradientAtlasId = 0;
 
 	inline void Init() {
 		float corners[8] = { 0, 0, 0, 1, 1, 1, 1, 0 };
@@ -3023,6 +3206,8 @@ namespace RectGPU {
 			{ 12, 1, GL_FLOAT, GL_FALSE, (GLuint)offsetof(RectInstance, inset) },
 			{ 13, 1, GL_FLOAT, GL_FALSE, (GLuint)offsetof(RectInstance, clip) },
 			{ 14, 1, GL_FLOAT, GL_FALSE, (GLuint)offsetof(RectInstance, shape) },
+			{ 1, 4, GL_FLOAT, GL_FALSE, (GLuint)offsetof(RectInstance, gu0) },
+			{ 2, 2, GL_FLOAT, GL_FALSE, (GLuint)offsetof(RectInstance, gradRot) },
 		};
 		for (const Attr& a : attrs) {
 			glEnableVertexArrayAttrib(vao, a.loc);
@@ -3040,21 +3225,6 @@ namespace RectGPU {
 		}
 		glNamedBufferSubData(clipSsbo, 0, (GLsizeiptr)bytes, data);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, clipSsbo);
-	}
-
-	inline void Submit() {
-		int n = (int)insts.size();
-		if (n == 0) return;
-		if (n > MaxQuads) n = MaxQuads;
-		if (vboCursor + n > RingCapacity) vboCursor = 0;
-
-		glNamedBufferSubData(vbo, (GLintptr)vboCursor * sizeof(RectInstance), (GLsizeiptr)n * sizeof(RectInstance), insts.data());
-
-		glBindVertexArray(vao);
-		glDrawElementsInstancedBaseInstance(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, n, (GLuint)vboCursor);
-
-		vboCursor += n;
-		insts.clear();
 	}
 
 	inline SIMPLEUI_CORE::Matrix Mul(const SIMPLEUI_CORE::Matrix& l, const SIMPLEUI_CORE::Matrix& r) {
@@ -3076,7 +3246,7 @@ namespace RectGPU {
 		float use = 0;
 	};
 
-	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t, float clip, float shape = 0) {
+	inline void PushInstance(Vector2 pos, Vector2 size, float roundness, float thickness, float inset, Color fill, Color border, float rotation, Vector2 origin, const QuadTex& t, float clip, float shape = 0, const QuadTex& grad = {}, float gradRotation = 0) {
 		float z = floorf(thickness) + std::clamp(roundness, 0.0f, 1.0f) * 0.99f;
 		float dw = t.use > 0.5f ? t.dest.width : 0.0f;
 		insts.emplace_back(
@@ -3088,55 +3258,83 @@ namespace RectGPU {
 			border.r, border.g, border.b, border.a,
 			inset,
 			clip,
-			shape
+			shape,
+			grad.u0, grad.v0, grad.u1, grad.v1,
+			gradRotation * DEG2RAD,
+			grad.use > 0.5f ? 1.0f : 0.0f
 		);
 	}
 }
 
 inline void DrawRoundRectBatch(const RoundRectData& r) {
-	SIMPLEUI_CONTEXT::CurrentCustomShader = SIMPLEUI_CONTEXT::RectangleRoundnessShader;
-	if (r.Texture.id) {
-		auto& cur = SIMPLEUI_CONTEXT::CurrentBatchTexture;
-		if (cur and cur != r.Texture.id) FlushRectanglesBatch();
-		cur = r.Texture.id;
-	}
+    SIMPLEUI_CONTEXT::CurrentCustomShader = SIMPLEUI_CONTEXT::RectangleRoundnessShader;
+    if (r.Texture.id) {
+        auto& cur = SIMPLEUI_CONTEXT::CurrentBatchTexture;
+        if (cur and cur != r.Texture.id) FlushRectanglesBatch();
+        cur = r.Texture.id;
+    }
 
-	RectGPU::QuadTex qt{};
-	if (r.Texture.id) {
-		Rectangle s = r.Source;
-		if (s.width < 0) s.x -= s.width;
-		if (s.height < 0) s.y -= s.height;
-		float tw = (float)r.Texture.width;
-		float th = (float)r.Texture.height;
-		qt.dest = r.Destination;
-		qt.u0 = s.x / tw;
-		qt.v0 = s.y / th;
-		qt.u1 = (s.x + s.width) / tw;
-		qt.v1 = (s.y + s.height) / th;
-		qt.use = 1.0f;
-	}
+    RectGPU::QuadTex qt{};
+    if (r.Texture.id) {
+        Rectangle s = r.Source;
+        if (s.width < 0) s.x -= s.width;
+        if (s.height < 0) s.y -= s.height;
+        float tw = (float)r.Texture.width;
+        float th = (float)r.Texture.height;
+        qt.dest = r.Destination;
+        qt.u0 = s.x / tw;
+        qt.v0 = s.y / th;
+        qt.u1 = (s.x + s.width) / tw;
+        qt.v1 = (s.y + s.height) / th;
+        qt.use = 1.0f;
+    }
 
-	unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
-	unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
-	bool hasBorder = r.BorderThickness > 0 and borderA;
-	if (!fillA and !hasBorder) return;
+    unsigned char fillA = (unsigned char)(r.Color.a * (1 - r.Transparency));
+    unsigned char borderA = (unsigned char)(r.BorderColor.a * (1 - r.BorderTransparency));
+    bool hasBorder = r.BorderThickness > 0 and borderA;
+    if (!fillA and !hasBorder) return;
 
-	float off = 0.0f;
-	if (hasBorder) {
-		float k = (r.borderType == BorderPlacement::BORDER_INNER) ? 0.0f : ((r.borderType == BorderPlacement::BORDER_MIDDLE) ? 0.5f : 1.0f);
-		off = std::roundf(r.BorderThickness * k);
-	}
+    float off = 0.0f;
+    if (hasBorder) {
+        float k = (r.borderType == BorderPlacement::BORDER_INNER) ? 0.0f : ((r.borderType == BorderPlacement::BORDER_MIDDLE) ? 0.5f : 1.0f);
+        off = std::roundf(r.BorderThickness * k);
+    }
 
-	RectGPU::PushInstance(
-		{ r.Pos.x - off, r.Pos.y - off },
-		{ r.Size.x + off * 2, r.Size.y + off * 2 },
-		r.Roundness, hasBorder ? (float)r.BorderThickness : 0.0f, off,
-		{ r.Color.r, r.Color.g, r.Color.b, fillA },
-		{ r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA },
-		r.Rotation, { r.Origin.x + off, r.Origin.y + off }, qt, 
-		((SIMPLEUI_CONTEXT::clipping and !SIMPLEUI_CONTEXT::clipStack.empty()) ? SIMPLEUI_CONTEXT::clipStack.back() : -1),
-		r.BackgroundShape
-	);
+    RectGPU::QuadTex gq{};
+    if (r.GradientIndex != -1) {
+        auto it = SIMPLEUI_CONTEXT::Gradients.find(r.GradientIndex);
+        if (it != SIMPLEUI_CONTEXT::Gradients.end()) {
+            const AtlasTexture& g = it->second->texture();
+            if (g.id) {
+				GLuint atlasId = g.currentAtlas->texture().id;
+				auto& curG = SIMPLEUI_CONTEXT::CurrentBatchGradientAtlas;
+				if (curG and curG != atlasId) FlushRectanglesBatch();
+				curG = atlasId;
+				RectGPU::gradientAtlasId = atlasId;
+
+                float aw = (float)g.currentAtlas->texture().width;
+                float ah = (float)g.currentAtlas->texture().height;
+                gq.u0 = (g.position.x + 0.5f) / aw;
+                gq.u1 = (g.position.x + g.size.x - 0.5f) / aw;
+                gq.v0 = (g.position.y + 0.5f) / ah;
+                gq.v1 = (g.position.y + g.size.y - 0.5f) / ah;
+                gq.use = 1.0f;
+            }
+        }
+    }
+
+    RectGPU::PushInstance(
+        { r.Pos.x - off, r.Pos.y - off },
+        { r.Size.x + off * 2, r.Size.y + off * 2 },
+        r.Roundness, hasBorder ? (float)r.BorderThickness : 0.0f, off,
+        { r.Color.r, r.Color.g, r.Color.b, fillA },
+        { r.BorderColor.r, r.BorderColor.g, r.BorderColor.b, borderA },
+        r.Rotation, { r.Origin.x + off, r.Origin.y + off }, qt,
+        ((SIMPLEUI_CONTEXT::clipping and !SIMPLEUI_CONTEXT::clipStack.empty()) ? SIMPLEUI_CONTEXT::clipStack.back() : -1),
+        r.BackgroundShape,
+        gq,
+        r.GradientRotation
+    );
 }
 
 inline void FlushRectanglesBatch() {
@@ -3173,6 +3371,7 @@ inline void FlushRectanglesBatch() {
 
 	GLuint texId = SIMPLEUI_CONTEXT::CurrentBatchTexture ? SIMPLEUI_CONTEXT::CurrentBatchTexture : SIMPLEUI_CORE::g.white.id;
 	glBindTextureUnit(0, texId);
+	glBindTextureUnit(1, RectGPU::gradientAtlasId ? RectGPU::gradientAtlasId : SIMPLEUI_CORE::g.white.id);
 
 	glBindVertexArray(RectGPU::vao);
 
@@ -3192,6 +3391,8 @@ inline void FlushRectanglesBatch() {
 
 	v.clear();
 	SIMPLEUI_CONTEXT::CurrentBatchTexture = 0;
+	SIMPLEUI_CONTEXT::CurrentBatchGradientAtlas = 0;
+	RectGPU::gradientAtlasId = 0;
 }
 
 class Object2D : public Instance {
@@ -3506,6 +3707,9 @@ public:
 
 	int BackgroundShape = 0; // 0 default builtin shape. change it to use your shapes (describe custom shape in SIMPLEUI_CONTEXT::RectangleRoundnessShaderFragmentBytes on ~400 line in simpleUI.h)
 
+	int BackgroundGradientIndex = -1; // Index of GradientData which contains color and transparency sequences
+	int BackgroundGradientRotation = 0;
+
 	Vector2 GetMousePosition() {
 		Vector2 mousePos = SIMPLEUI_CONTEXT::mousePosition;
 		return { (mousePos.x - RealPos.x) / RealSize.x, (mousePos.y - RealPos.y) / RealSize.y };
@@ -3564,6 +3768,8 @@ public:
 
 		rec.borderType = BorderType;
 		rec.BackgroundShape = BackgroundShape;
+		rec.GradientIndex = BackgroundGradientIndex;
+		rec.GradientRotation = BackgroundGradientRotation;
 
 		DrawRoundRectBatch(rec);
 	}
@@ -5810,6 +6016,8 @@ public:
 	Color ImageColor = { 255,255,255,255 };
 	bool RoundImage = false;
 	bool UseAtlas = true; // Using own Texture for Images which loaded from memory
+	int ImageGradientIndex = -1;
+	int ImageGradientRotation = 0;
 
 	void SetImage(const std::string& name = "") {
 		if (imageIfMemory.data) {
@@ -5934,9 +6142,9 @@ public:
 			destRec.height = std::ceilf(destRec.height);
 
 			if (UseAtlas) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0), ImageGradientIndex, ImageGradientRotation);
 			} else {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(notAtlasTexture, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0));
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(notAtlasTexture, RealPos, RealSize, srcRec, destRec, { OriginOffset.x + Origin.x * RealSize.x, OriginOffset.y + Origin.y * RealSize.y }, RealRotation, { ImageColor.r, ImageColor.g, ImageColor.b, (unsigned char)(ImageColor.a * (1 - ImageTransparency)) }, (RoundImage ? Roundness : 0), ImageGradientIndex, ImageGradientRotation);
 			}
 		} else {
 			if (currentPair.empty() or imageIfMemory.data) return;
@@ -7480,6 +7688,11 @@ inline void SUI_CleanUp() {
 	while (!SIMPLEUI_CONTEXT::AtlasArray.empty()) {
 		delete SIMPLEUI_CONTEXT::AtlasArray[0];
 	}
+
+	for (auto& [id, grad] : SIMPLEUI_CONTEXT::Gradients) {
+		delete grad;
+	}
+	SIMPLEUI_CONTEXT::Gradients.clear();
 
 	FT_TextManagement::Fonts.clear();
 

@@ -39,6 +39,7 @@
 
 <h2>Quick Start</h2>
 <p><code>simpleUI</code> is very simple to use. Include the "simpleUI.h" header file in your project to start using it.</p>
+<p>Check examples/ folder to run and test common UI scenes<p>
 <p>Example of Hello World with bounce animations and TextBox:</p>
 
 ```

@@ -91,7 +91,7 @@ foreach(n harfbuzz-gpu harfbuzz-raster harfbuzz-vector)
 endforeach()
 
 add_executable(SIMPLEUI_TEST
-    src/main.cpp
+    src/simpleUI_examples/01_basics_and_animations.cpp
     include/SUIutils.cpp
 )
 

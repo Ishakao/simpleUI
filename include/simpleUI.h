@@ -497,7 +497,7 @@ namespace SIMPLEUI_CONTEXT {
 		void main() {
 			int shape = int(fragShape + 0.5);
 
-			if (shape == 0) {
+			if (shape == 0) { // default shape for rectangles
 				vec2 outerHalf = fragSDBounds + vec2(fragRadius);
 				float outerMin = min(outerHalf.x, outerHalf.y);
 				float roundness = outerMin > 0.0 ? fragRadius / outerMin : 0.0;
@@ -537,7 +537,7 @@ namespace SIMPLEUI_CONTEXT {
 				oa *= clipCoverage(fragWorld, fragClip);
 				if (oa <= 0.0) discard;
 				finalColor = vec4(rgb, oa);
-			}
+			} // add here your shapes
 		}
 	)";
 
@@ -5198,6 +5198,33 @@ class TextBox : public Object2D {
 		b = nb;
 		return true;
 	}
+
+	inline std::string NormalizeLineBreaks(const std::string& s) {
+		std::string out;
+		out.reserve(s.size());
+		for (size_t i = 0; i < s.size(); ) {
+			unsigned char c = static_cast<unsigned char>(s[i]);
+			if (c == '\r') {
+				if (i + 1 < s.size() and s[i + 1] == '\n') i++;
+				out.push_back('\n');
+				i++;
+			} else if (c == 0x0B or c == 0x0C) {
+				out.push_back('\n');
+				i++;
+			} else if (c == 0xC2 and i + 1 < s.size() and static_cast<unsigned char>(s[i + 1]) == 0x85) {
+				out.push_back('\n');
+				i += 2;
+			} else if (c == 0xE2 and i + 2 < s.size() and static_cast<unsigned char>(s[i + 1]) == 0x80 and
+					(static_cast<unsigned char>(s[i + 2]) == 0xA8 or static_cast<unsigned char>(s[i + 2]) == 0xA9)) {
+				out.push_back('\n');
+				i += 3;
+			} else {
+				out.push_back(s[i]);
+				i++;
+			}
+		}
+		return out;
+	}
 protected:
 	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
 	TextBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; }
@@ -5375,8 +5402,8 @@ public:
 				if (textParams.z > 1) {
 					float sizeY = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
 
-					Vector2 a = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).x : 0) * RealSize.x - viewX, RealPos.y + textParams.y - viewY };
-					Vector2 b = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).y : 0) * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY };
+					Vector2 a = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).x : 0) * RealSize.x - viewX + 1, RealPos.y + textParams.y - viewY };
+					Vector2 b = { a.x, a.y + sizeY };
 
 					if (ClipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
 						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(a, b, CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness);
@@ -5796,7 +5823,7 @@ public:
 				std::string clipboardText;
 
 				try {
-					clipboardText = GetClipboardText();
+					clipboardText = NormalizeLineBreaks(GetClipboardText());
 				} catch (const std::logic_error& e) {
 					clipboardText = "";
 				}

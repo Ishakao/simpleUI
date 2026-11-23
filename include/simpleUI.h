@@ -43,6 +43,20 @@
 #define INCLUDE_SIMPLEUI_EXTENSION // Extension for simpleUI. Contains additional unnecesary 2D objects (GraphBuilder, ToggleSwitcher, CheckBox, !ProgressBar, !DropdownBox)
 // IF YOU DON'T NEED SIMPLEUI EXTENSION THEN USE "#define EXCLUDE_SIMPLEUI_EXTENSION" BEFORE INCLUDING simpleUI.h
 
+#ifndef SIMPLEUI_SAFE_OBJECTS_MANAGEMENT
+/* !!!Will be added soon!!!
+Define "SIMPLEUI_SAFE_OBJECTS_MANAGEMENT" to use objects handlers instead of raw pointers
+
+Description: 
+Instead of pointers to objects you will recieve InstanceHandler, AnimationHandler, SignalHandler and TaskHandler.
+Handler contains ID of objects and to get linked object you must use .get() method, which returns pointer to object if it still alive.
+Otherwise (if object already deleted) .get() will return nullptr. It allows avoid use-after-free in callback functions.
+Also handlers has bool operator to check object alive state [ like if (handler) {...} ]
+
+*/ 
+
+#endif
+
 #include <freetype2/ft2build.h>
 #include FT_FREETYPE_H
 #include <harfbuzz/hb.h>
@@ -55,8 +69,8 @@
 	#define STB_RECT_PACK_IMPLEMENTATION
 #endif
 
-#include "stb_image_write.h"
-#include "stb_rect_pack.h"
+#include <stb_image_write.h>
+#include <stb_rect_pack.h>
 
 #include <SUIcore.h>
 
@@ -129,14 +143,38 @@ using enum SIMPLEUI_CORE::KeyboardKey;
 #include <stdexcept>
 #include <utf8proc.h>
 
-#define RED_ANSI "\033[31m"
-#define GREEN_ANSI "\033[32m"
-#define YELLOW_ANSI "\033[33m"
-#define BLUE_ANSI "\033[36m"
-#define DEFAULT_ANSI "\033[0m"
-#define SCROLLFRAME_GRID_SIZE 256
-#define MAX_TEXTURE_LIMIT 16384
-#define DEFAULT_ATLAS_SIZE 2048
+#ifndef RED_ANSI
+	#define RED_ANSI "\033[31m"
+#endif
+
+#ifndef GREEN_ANSI
+	#define GREEN_ANSI "\033[32m"
+#endif
+
+#ifndef YELLOW_ANSI
+	#define YELLOW_ANSI "\033[33m"
+#endif
+
+#ifndef BLUE_ANSI
+	#define BLUE_ANSI "\033[36m"
+#endif
+
+#ifndef DEFAULT_ANSI
+	#define DEFAULT_ANSI "\033[0m"
+#endif
+
+#ifndef SCROLLFRAME_GRID_SIZE
+	#define SCROLLFRAME_GRID_SIZE 256
+#endif
+
+#ifndef MAX_TEXTURE_LIMIT
+	#define MAX_TEXTURE_LIMIT 16384
+#endif
+
+#ifndef DEFAULT_ATLAS_SIZE
+	#define DEFAULT_ATLAS_SIZE 2048
+#endif
+
 #ifndef FLT_MAX
 	#define FLT_MAX          3.402823466e+38F        // max value  (from float.h)
 #endif
@@ -153,9 +191,9 @@ inline constexpr bool is_streamable_v = is_streamable<T>::value;
 template<typename T>
 void SIMPLEUI_THROW_WITH_INFO(const T v, long line, const char* file) {
 	if constexpr (is_streamable_v<T>) {
-		std::cerr << RED_ANSI << "Throw: _" << v << "_ on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
+		std::cout << RED_ANSI << "Throw: _" << v << "_ on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	} else {
-		std::cerr << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
+		std::cout << RED_ANSI << "Throw (unstreamable | " << &v << " | size: " << sizeof(T) << ") on line " << line << " (" << file << ")" << DEFAULT_ANSI << std::endl;
 	}
 	
 	throw std::runtime_error("SIMPLEUI_THROW");
@@ -219,7 +257,7 @@ struct SpecialVector2 {
 		explicit num(float v) : n(v) {}
 		num(const num&) = delete;
 
-		SpecialVector2* getOwner() { // conditionally supported function. Using offsetof on non-standard-layout type and may lead to UB
+		SpecialVector2* getOwner() {
 			size_t offset = (Index == 0) ? offsetof(SpecialVector2, x) : offsetof(SpecialVector2, y);
 			return reinterpret_cast<SpecialVector2*>(reinterpret_cast<char*>(this) - offset);
 		}
@@ -252,10 +290,10 @@ struct SpecialVector2 {
 	using num_x = num<0>;
 	using num_y = num<1>;
 
-private:
+// These two fields not for user change, These are public for compliance standard-layout rule to use offsetof in getOwner(). Please do not touch these fields
 	Object2D* parentalObj = nullptr;
+// These two fields not for user change, These are public for compliance standard-layout rule to use offsetof in getOwner(). Please do not touch these fields
 	bool alarmWhenChanged = true;
-public:
 
 	num_x x;
 	num_y y;
@@ -291,6 +329,8 @@ public:
 		return other.x.n == x.n and other.y.n == y.n;
 	}
 };
+
+static_assert(std::is_standard_layout_v<SpecialVector2>);
 
 struct AtlasTexture;
 
@@ -522,7 +562,6 @@ namespace SIMPLEUI_CONTEXT {
 	inline RenderTexture AtlasScratch{};
 	inline unsigned int CurrentBatchTexture = 0;
 
-	inline std::vector<TextBox*> TextBoxesToUpdateTexture;
 	inline std::vector<TextLabel*> TextLabelsToUpdateTexture;
 
 	inline Color WindowColor = { 255,255,255,255 };
@@ -1416,7 +1455,7 @@ inline AtlasTexture LoadRenderTextureOnAtlas(int width, int height, int sizeOfAt
 	for (int size = sizeOfAtlas; size <= MAX_TEXTURE_LIMIT; size *= 2) {
 		Atlas* atlas = new Atlas(size);
 		if (!atlas->loaded) {
-			std::cout << RED_ANSI << "Atlas cannot be created with size " << sizeOfAtlas << "x" << sizeOfAtlas << "." << DEFAULT_ANSI << std::endl;
+			std::cout << RED_ANSI << "Atlas cannot be created with size " << size << "x" << size << "." << DEFAULT_ANSI << std::endl;
 			delete atlas;
 			return {};
 		}
@@ -4801,7 +4840,7 @@ public:
 	bool Textured = false; // Text will bake into texture and texture will be drawn on FB. Textured better in static scenes (uses more VRAM).
 	bool UsePerSymbolColor = false;
 
-	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol. Requires FreeType
+	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol.
 		GlyphsColor = c;
 		if (Textured) {
 			rebuildVisible = true;
@@ -4962,7 +5001,7 @@ class TextBox : public Object2D {
 	bool deleteText = false;
 
 	void updateCharOffsets() {
-		charOffsets = SUI_ClusterOffsets(!Text);
+		charOffsets = SUI_ClusterOffsets(Text);
 	}
 
 	std::vector<int> getCharOffsets(const std::string& text) {
@@ -4987,12 +5026,19 @@ class TextBox : public Object2D {
 	Vector2 lastNewSize{};
 	TextBoxType lastType = TextBoxType::TEXTBOX_RESIZING;
 	int lastCursorIndex = -1;
+	int lastViewCursor = -2;
+	int lastViewFont = 0;
+	Vector2 lastViewSize{};
 	int FontFaceIndex = 0;
+	
 
 	std::vector<Color> GlyphsColor;
 	bool lastPerSymbol = false;
 	bool changedGlyphs = false;
 	bool texturePushed = false;
+	bool lastTextured = false;
+
+	TexturedTextLabelData data{};
 
 	std::string visibleText = "";
 
@@ -5024,20 +5070,11 @@ class TextBox : public Object2D {
 			}
 		} else {
 			visibleText = PlaceholderText;
-			lines = 0;
+			lines = 1;
 		}
 	}
 
 	void updateTexture() {
-		updateVisible();
-		lastParams = textParams;
-		lastRealSize = RealSize;
-		lastHideText = HideText;
-		lastType = Type;
-		changedGlyphs = false;
-		lastPerSymbol = UsePerSymbolColor;
-		texturePushed = false;
-
 		if (Text != "") {
 			newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
 		} else {
@@ -5071,6 +5108,96 @@ class TextBox : public Object2D {
 			EndAtlasDraw(cachedText);
 		}
 	}
+
+	void updateViewportPosition() {
+		bool changed = lastViewCursor != CursorIndex
+			or lastViewFont != textParams.z
+			or lastViewSize.x != RealSize.x
+			or lastViewSize.y != RealSize.y
+			or Text.isChanged()
+			or FontFace.isChanged();
+		if (!changed) return;
+
+		if (lastViewFont > 0.0f and textParams.z > 0.0f and lastViewFont != textParams.z) {
+			float k = textParams.z / lastViewFont;
+			ViewportPosition.x *= k;
+			ViewportPosition.y *= k;
+		}
+
+		lastViewCursor = CursorIndex;
+		lastViewFont = textParams.z;
+		lastViewSize = RealSize;
+
+		bool calcX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY);
+		bool calcY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY);
+
+		if (Text.empty() or charOffsets.empty()) {
+			ViewportPosition = { 0.0f, 0.0f };
+			return;
+		}
+
+		if (CursorIndex >= 0) {
+			int idx = std::min(CursorIndex, (int)charOffsets.size() - 1);
+			int s = 0;
+			for (int i = idx - 1; i >= 0; i--) {
+				if (Text[charOffsets[i]] == '\n') {
+					s = charOffsets[i + 1];
+					break;
+				}
+			}
+
+			std::string beforeOnLine = Text.substr(s, charOffsets[idx] - s);
+			float cx = MeasureTextEx(getFont(FontFaceIndex), beforeOnLine.c_str(), textParams.z, Spacing).x;
+			float lineH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
+			int line = 0;
+			for (int i = 0; i < idx; i++) {
+				if (Text[charOffsets[i]] == '\n') line++;
+			}
+			float cy = line * lineH;
+
+			if (calcX) {
+				if (cx - ViewportPosition.x > RealSize.x) ViewportPosition.x = cx - RealSize.x;
+				else if (cx < ViewportPosition.x) ViewportPosition.x = cx;
+			}
+
+			if (calcY) {
+				if (cy + lineH - ViewportPosition.y > RealSize.y) ViewportPosition.y = cy + lineH - RealSize.y;
+				else if (cy < ViewportPosition.y) ViewportPosition.y = cy;
+			}
+		}
+
+		Vector2 full = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
+		ViewportPosition.x = calcX ? std::clamp(ViewportPosition.x, 0.0f, std::max(0.0f, full.x - RealSize.x)) : 0.0f;
+		ViewportPosition.y = calcY ? std::clamp(ViewportPosition.y, 0.0f, std::max(0.0f, full.y - RealSize.y)) : 0.0f;
+	}
+
+	static bool ClipSegmentToRect(Vector2& a, Vector2& b, float minX, float minY, float maxX, float maxY) {
+		float dx = b.x - a.x;
+		float dy = b.y - a.y;
+		float t0 = 0.0f;
+		float t1 = 1.0f;
+
+		auto clip = [&](float p, float q) {
+			if (p == 0.0f) return q >= 0.0f;
+			float r = q / p;
+			if (p < 0.0f) {
+				if (r > t1) return false;
+				if (r > t0) t0 = r;
+			} else {
+				if (r < t0) return false;
+				if (r < t1) t1 = r;
+			}
+			return true;
+		};
+
+		if (!clip(-dx, a.x - minX) or !clip(dx, maxX - a.x) or !clip(-dy, a.y - minY) or !clip(dy, maxY - a.y)) return false;
+
+		Vector2 na = { a.x + t0 * dx, a.y + t0 * dy };
+		Vector2 nb = { a.x + t1 * dx, a.y + t1 * dy };
+		a = na;
+		b = nb;
+		return true;
+	}
 protected:
 	TextBox(bool a) : Object2D(a) { Name = DefaultName; Class = DefaultClass; Active = true; }
 	TextBox(Instance* p) : Object2D(p) { Name = DefaultName; Class = DefaultClass; Active = true; }
@@ -5103,12 +5230,22 @@ public:
 	bool ClipboardCopyAllowed = true;
 	std::function<bool(const std::string&)> ClipboardPasteCondition;
 	bool TextHighlightAllowed = true;
-	Vector2 viewportPosition{};
+	Vector2 ViewportPosition{}; // Position of camera viewport in pixels for VIEWPORTED_** type TextBox
 	bool CanType = true;
 	bool CanClick = true;
 	bool UsePerSymbolColor = false;
+	bool Textured = false;
 
-	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol. Requires FreeType
+	int VPScrollSpeed = -1; // Scroll speed of camera viewport in pixels for VIEWPORTED_** type TextBox. Basic speed -1 (-1 means speed will be same as TextSize)
+	Color VPSliderColor = { 15,15,15,255 };
+	float VPSliderTransparency = 0.5;
+	float VPSliderRoundness = 1;
+	unsigned int VPSliderSize = 5;
+	char VPDirection = 'B'; // Allows to scroll camera viewport by 'Y': Y asix, 'X': X asix and 'B': both axis
+	bool VPScrollEnabled = true;
+	bool VPAnimated = false;
+
+	void SetPerSymbolColor(const std::vector<Color>& c) { // Set different color for every symbol.
 		GlyphsColor = c;
 		changedGlyphs = true;
 	}
@@ -5118,7 +5255,7 @@ public:
 		changedGlyphs = true;
 	}
 
-	int CursorSize = 3;
+	int CursorSize = 2;
 	TextBoxType Type = TextBoxType::TEXTBOX_RESIZING;
 
 	void Draw() override {
@@ -5135,7 +5272,7 @@ public:
 		}
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged() or Text.isChanged();
-		bool updateCondition2 = lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_CONTEXT::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_CONTEXT::FocusedTextBox != this));
+		bool updateCondition2 = lastTextured != Textured or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_CONTEXT::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_CONTEXT::FocusedTextBox != this));
 		lastFocused = SIMPLEUI_CONTEXT::FocusedTextBox;
 
 		if (FontFace.isChanged()) {
@@ -5151,19 +5288,19 @@ public:
 		Text.restate();
 		FontFace.restate();
 		PlaceholderText.restate();
-
-		if (updateCondition1) {
-			updateVisible();
-		}
+		lastTextured = Textured;
 
 		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs or lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
+			updateVisible();
 			updateTextParams();
+			if (Textured) {
+				updateTexture();
+			} else {
+				if (cachedText.id and cachedText.currentAtlas) {
+					UnloadTextureFromAtlas(cachedText);
+				}
+			}
 
-			if (!texturePushed) {
-				texturePushed = true;
-				SIMPLEUI_CONTEXT::TextBoxesToUpdateTexture.push_back(this);
-			} 
-		
 			if (Text == "") {
 				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
 			} else {
@@ -5171,10 +5308,24 @@ public:
 			}
 		}
 
-		float viewX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.x : 0.0f;
-		float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
+		updateViewportPosition();
 
-		if (textParams.z > 1) {
+		lastParams = textParams;
+		lastRealSize = RealSize;
+		lastHideText = HideText;
+		lastType = Type;
+		changedGlyphs = false;
+		lastPerSymbol = UsePerSymbolColor;
+
+		float viewX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? ViewportPosition.x : 0.0f;
+		float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? ViewportPosition.y : 0.0f;
+
+		Vector2 o = {
+			Origin.x * RealSize.x + OriginOffset.x,
+			Origin.y * RealSize.y + OriginOffset.y
+		};
+
+		if (Textured) {
 			if (cachedText.id != 0 and !(Text.empty() and SIMPLEUI_CONTEXT::FocusedTextBox == this)) {
 				Vector2 sizeToDraw = (Type != TextBoxType::TEXTBOX_RESIZING) ? RealSize : newSize;
 
@@ -5194,30 +5345,42 @@ public:
 					clr = { TextColor.r, TextColor.g, TextColor.b, (unsigned char)(TextColor.a * (1 - TextTransparency)) };
 				}
 
-				Vector2 o = {
-						Origin.x * RealSize.x + OriginOffset.x,
-						Origin.y * RealSize.y + OriginOffset.y
-				};
-
 				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(cachedText, RealPos, RealSize, sourceRec, destRec, o, RealRotation, clr, 0);
 			}
+		} else if (textParams.z > 1 and !(Text.empty() and SIMPLEUI_CONTEXT::FocusedTextBox == this)) {
+			data.Origin = o;
+			data.Rotation = RealRotation;
+			data.RealPos = RealPos;
+			data.RealSize = RealSize;
+			data.Roundness = Roundness;
+
+			Vector2 destPos = RealPos;
+			destPos.x += textParams.x; destPos.y += textParams.y;
+			destPos.x -= viewX; destPos.y -= viewY;
+
+			if (visibleText != "") {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), destPos, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
+			} else if (CursorIndex == -1 or SIMPLEUI_CONTEXT::FocusedTextBox != this) {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), destPos, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
+			}
 		}
+
+		float clipMinX = RealPos.x + CursorSize * 0.5f;
+		float clipMaxX = RealPos.x + RealSize.x - CursorSize * 0.5f;
+		float clipMinY = RealPos.y;
+		float clipMaxY = RealPos.y + RealSize.y;
 
 		if (Text.empty()) {
 			if (CursorVisible and SIMPLEUI_CONTEXT::FocusedTextBox == this) {
 				if (textParams.z > 1) {
 					float sizeY = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
 
-					Vector2 o = {
-						Origin.x * RealSize.x + OriginOffset.x,
-						Origin.y * RealSize.y + OriginOffset.y
-					};
+					Vector2 a = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).x : 0) * RealSize.x - viewX, RealPos.y + textParams.y - viewY };
+					Vector2 b = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).y : 0) * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY };
 
-					SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
-						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y - viewY },
-						{ RealPos.x + getTextOffset(TextAnchor).x * RealSize.x - viewX, RealPos.y + textParams.y + sizeY - viewY },
-						CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness
-					);
+					if (ClipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
+						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(a, b, CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness);
+					}
 				}
 			}
 		}
@@ -5261,16 +5424,12 @@ public:
 				yOffset = totalH - singleH;
 			}
 
-			Vector2 o = {
-				Origin.x * RealSize.x + OriginOffset.x,
-				Origin.y * RealSize.y + OriginOffset.y
-			};
+			Vector2 a = { RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY };
+			Vector2 b = { a.x, a.y + size.y };
 
-			SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(
-				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY },
-				{ RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset + size.y - viewY },
-				CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness
-			);
+			if (ClipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
+				SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(a, b, CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness);
+			}
 		}
 	}
 
@@ -5284,6 +5443,8 @@ public:
 
 		CursorTime += SIMPLEUI_CONTEXT::DeltaTime;
 		if (CursorTime >= CursorCooldown) { CursorVisible = !CursorVisible; CursorTime = 0.0f; }
+
+		/* ⬇️ Mouse Inputs ⬇️ */
 
 		if (IsMouseButtonPressed(MOUSE_LEFT) and CanClick) {
 			if (PointInObject(SIMPLEUI_CONTEXT::mousePosition) and SIMPLEUI_CONTEXT::FocusedTextBox != this and SIMPLEUI_CONTEXT::higherObject == this and ClearOnClick) {
@@ -5321,8 +5482,8 @@ public:
 					textBeforeCursor = !Text;
 				}
 
-				float viewX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.x : 0.0f;
-				float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? viewportPosition.y : 0.0f;
+				float viewX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? ViewportPosition.x : 0.0f;
+				float viewY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY) ? ViewportPosition.y : 0.0f;
 
 				Vector2 o = {
 					Origin.x * RealSize.x + OriginOffset.x,
@@ -5343,7 +5504,16 @@ public:
 				float clickX = localMouse.x - textStartX + viewX;
 				float clickY = localMouse.y - textStartY + viewY;
 
-				int currentLine = clickY / textParams.z + 1;
+				float singleH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
+				float lineStep = MeasureTextEx(getFont(FontFaceIndex), "|\n|", textParams.z, Spacing).y - singleH;
+				if (lineStep <= 0.0f) lineStep = textParams.z;
+
+				int totalLines = 1;
+				for (int i = 0; i < (int)charOffsets.size(); i++) {
+					if (Text[charOffsets[i]] == '\n') totalLines++;
+				}
+
+				int currentLine = std::clamp((int)std::floor(clickY / lineStep), 0, totalLines - 1) + 1;
 
 				CursorIndex = 0;
 
@@ -5368,7 +5538,7 @@ public:
 						}
 
 						int byteStart = charOffsets[startIdx];
-						int byteEnd = (endIdx < (int)charOffsets.size()) ? charOffsets[endIdx] : Text.size();
+						//int byteEnd = (endIdx < (int)charOffsets.size()) ? charOffsets[endIdx] : Text.size();
 
 						CursorIndex = endIdx;
 
@@ -5385,11 +5555,68 @@ public:
 							}
 						}
 					} else if (currentLine > currentL) {
-						CursorIndex = charOffsets.size();
+						CursorIndex = charOffsets.size() - 1;
 					}
 				}
 			}
 		}
+
+		if (Type != TextBoxType::TEXTBOX_RESIZING) {
+			if (VPScrollEnabled) {
+				float WheelMove = GetMouseWheelMove();
+				if (WheelMove != 0) {
+					bool entered = false;
+
+					bool enterAllowed = (
+						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
+						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
+						);
+
+					if (Visible and ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::PreviousHigherObject != this) or enterAllowed)) {
+						entered = true;
+					}
+
+					if (entered) {
+						bool isY = (VPDirection == 'Y' or (!IsKeyDown(KEY_LEFT_SHIFT) and VPDirection == 'B'));
+						bool isX = (VPDirection == 'X' or (IsKeyDown(KEY_LEFT_SHIFT) and VPDirection == 'B'));
+
+						Vector2 full = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
+
+						float maxScrollX = std::max(0.0f, full.x - RealSize.x);
+						float maxScrollY = std::max(0.0f, full.y - RealSize.y);
+
+						if (isY) {
+							float currentY = ViewportPosition.y;
+							float totalStep = (VPScrollSpeed >= 0 ? VPScrollSpeed : TextSize);
+							float newTotalY = currentY - (WheelMove * totalStep);
+
+							newTotalY = std::clamp(newTotalY, 0.0f, maxScrollY);
+
+							if (VPAnimated) {
+								Animate::SafeAnimation::Create(this, &ViewportPosition.y, 0.125f, newTotalY);
+							} else {
+								ViewportPosition.y = newTotalY;
+							}
+						} else if (isX) {
+							float currentX = ViewportPosition.x;
+							float totalStep = (VPScrollSpeed >= 0 ? VPScrollSpeed : TextSize);
+							float newTotalX = currentX - (WheelMove * totalStep);
+
+							newTotalX = std::clamp(newTotalX, 0.0f, maxScrollX);
+
+							if (VPAnimated) {
+								Animate::SafeAnimation::Create(this, &ViewportPosition.x, 0.125f, newTotalX);
+							} else {
+								ViewportPosition.x = newTotalX;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		/* ⬇️ Keyboard Inputs ⬇️ (fatest part among all input widgets, fuck it) */
 
 		if (SIMPLEUI_CONTEXT::FocusedTextBox == this and Visible and CanType) {
 			if (MaxSymbols >= charOffsets.size() or MaxSymbols < 0) {
@@ -5470,14 +5697,20 @@ public:
 
 						updateCharOffsets();
 
-						Text = Text.substr(0, charOffsets[start]) + Text.substr(charOffsets[CursorIndex]);
+						std::string other = "";
+						if (CursorIndex < charOffsets.size()) other = Text.substr(charOffsets[CursorIndex]);
+						Text = Text.substr(0, charOffsets[start]) + other;
 						CursorIndex = start;
 
 						updateCharOffsets();
 					}
 				} else {
 					if (CursorIndex > 0) {
-						Text = Text.substr(0, charOffsets[CursorIndex - 1]) + Text.substr(charOffsets[CursorIndex]);
+						updateCharOffsets();
+
+						std::string other = "";
+						if (CursorIndex < charOffsets.size()) other = Text.substr(charOffsets[CursorIndex]);
+						Text = Text.substr(0, charOffsets[CursorIndex - 1]) + other;
 						CursorIndex--;
 
 						updateCharOffsets();
@@ -5490,6 +5723,8 @@ public:
 
 			if (IsKeyPressed(KEY_DELETE)) {
 				if (CursorIndex < (int)charOffsets.size() - 1) {
+					updateCharOffsets();
+
 					Text = Text.substr(0, charOffsets[CursorIndex]) + Text.substr(charOffsets[CursorIndex + 1]);
 
 					updateCharOffsets();
@@ -5796,58 +6031,6 @@ public:
 			UpdateChildren(this);
 		}
 
-		if (lastCursorIndex != CursorIndex) {
-			bool calcX = (Type == TextBoxType::TEXTBOX_VIEWPORTED_X or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY);
-			bool calcY = (Type == TextBoxType::TEXTBOX_VIEWPORTED_Y or Type == TextBoxType::TEXTBOX_VIEWPORTED_XY);
-
-			if (Text.empty() or CursorIndex == -1) {
-				if (calcX) viewportPosition.x = 0.0f;
-				if (calcY) viewportPosition.y = 0.0f;
-			} else {
-				int s = 0;
-				for (int i = CursorIndex - 1; i >= 0; i--) {
-					if (Text[charOffsets[i]] == '\n') {
-						s = charOffsets[i + 1];
-						break;
-					}
-				}
-
-				if (!charOffsets.empty()) {
-					std::string textBeforeCursorOnLine = Text.substr(s, charOffsets[CursorIndex] - s);
-					std::string textBeforeCursor = Text.substr(0, charOffsets[CursorIndex]);
-					Vector2 textSizeY = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursor.c_str(), textParams.z, Spacing);
-					Vector2 textSizeX = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnLine.c_str(), textParams.z, Spacing);
-
-					Vector2 textSize = { textSizeX.x, textSizeY.y };
-
-					if (calcX) {
-						float currentX = textSize.x;
-
-						if (currentX - viewportPosition.x >= RealSize.x) {
-							viewportPosition.x = currentX - RealSize.x;
-						} else if (currentX < viewportPosition.x) {
-							viewportPosition.x = currentX;
-						}
-					}
-
-					if (calcY) {
-						float currentY = textSize.y;
-						if (currentY == 0) {
-							viewportPosition.y = 0;
-						} else {
-							if (currentY - viewportPosition.y >= RealSize.y) {
-								viewportPosition.y = currentY - RealSize.y;
-							} else if (currentY - textParams.z < viewportPosition.y) {
-								viewportPosition.y = currentY - textParams.z;
-							}
-						}
-					}
-				}
-			}
-
-			lastCursorIndex = CursorIndex;
-		}
-
 		Draw();
 
 		bool tempRes = posOrSizeChanged or posOrSizeChangedResult or updateWhenWillBeVisible or Rotation != lastRotation;
@@ -5889,7 +6072,6 @@ public:
 
 		i->cachedText.id = 0;
 		i->cachedText.currentAtlas = nullptr;
-		SIMPLEUI_CONTEXT::TextBoxesToUpdateTexture.push_back(i);
 
 		return i;
 	}
@@ -7615,11 +7797,6 @@ inline void SUI_RenderFrame(Instance* StartInstance) {
 		t->updateTexture();
 	}
 	SIMPLEUI_CONTEXT::TextLabelsToUpdateTexture.clear();
-
-	for (TextBox* t : SIMPLEUI_CONTEXT::TextBoxesToUpdateTexture) {
-		t->updateTexture();
-	}
-	SIMPLEUI_CONTEXT::TextBoxesToUpdateTexture.clear();
 
 	for (auto& [ptr, id, t, f, m] : SIMPLEUI_CONTEXT::EventToAdd) {
 		ptr->events.push_back({ id, t, f, m });

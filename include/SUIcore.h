@@ -1255,6 +1255,7 @@ inline Vector2 GetMousePosition() {
 inline int GetWindowWidth() {
 	int w = 0, h = 0;
 	if (g.window) SDL_GetWindowSize(g.window, &w, &h);
+	else { w = g.winW; h = g.winH; }
 	return w;
 }
 

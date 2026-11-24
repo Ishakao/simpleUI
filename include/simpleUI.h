@@ -5386,9 +5386,9 @@ public:
 			destPos.x -= viewX; destPos.y -= viewY;
 
 			if (visibleText != "") {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), destPos, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), visibleText.c_str(), destPos, textParams.z, Spacing, TextColor, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
 			} else if (CursorIndex == -1 or SIMPLEUI_CONTEXT::FocusedTextBox != this) {
-				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), destPos, textParams.z, Spacing, { 255, 255, 255, 255 }, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), destPos, textParams.z, Spacing, TextColor, (UsePerSymbolColor and !GlyphsColor.empty() ? &GlyphsColor : nullptr), &data);
 			}
 		}
 

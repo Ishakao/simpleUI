@@ -28,9 +28,10 @@
 <h2>Dependencies</h2>
 <ul>
     <li>C++20 compliant compiler or higher</li>
-    <li>Raylib</li>
+    <li>stb_image (included header implementation)</li>
     <li>stb_image_write (included header implementation)</li>
     <li>stb_rect_pack (included header implementation)</li>
+	<li>glad + SDL</li>
     <li>FreeType</li>
     <li>HarfBuzz</li>
     <li>utf8proc</li>

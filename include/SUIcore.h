@@ -1131,7 +1131,7 @@ inline Color ColorLerp(Color a, Color b, float t) {
     return color;
 }
 
-Color ColorFromHSV(float hue, float saturation, float value) {
+inline Color ColorFromHSV(float hue, float saturation, float value) {
     float h = std::fmod(hue, 360.0f);
     if (h < 0.0f) h += 360.0f;
 

@@ -357,8 +357,8 @@ namespace SIMPLEUI_CONTEXT {
 	inline bool programRunning = true;
 	inline Vector2 mousePosition;
 	inline bool mouseOnWindow;
-	inline constexpr const char* BASIC_FONT_NAME = "Arial";
-	inline constexpr const char* DEBUG_MENU_FONT_NAME = "rog";
+	inline constexpr const char* BASIC_FONT_NAME = "InterRegular";
+	inline constexpr const char* DEBUG_MENU_FONT_NAME = "RobotoMono";
 	inline std::unordered_map<int, Shader> Shaders;
 	inline bool UpdateStaticShader = true;
 	inline int ShadersCur = 0;
@@ -7739,11 +7739,15 @@ inline bool SUI_InitNewWindow(Instance* StartInstance = nullptr, WindowData wind
 }
 
 inline void SUI_LoadPendings() {
-	CreateFont(SIMPLEUI_CONTEXT::BASIC_FONT_NAME, SUI_ResolveAsset("Fonts/arial.ttf"), 60); // Basic Font 1
-	CreateFont(SIMPLEUI_CONTEXT::DEBUG_MENU_FONT_NAME, SUI_ResolveAsset("Fonts/rogFont.otf"), 35); // Basic Font 2
+	CreateFont(SIMPLEUI_CONTEXT::BASIC_FONT_NAME, SUI_ResolveAsset("Fonts/InterRegular.ttf"), 60); // Basic Font 1
+	CreateFont(SIMPLEUI_CONTEXT::DEBUG_MENU_FONT_NAME, SUI_ResolveAsset("Fonts/RobotoMono.ttf"), 35); // Basic Font 2
 
 	if (FT_TextManagement::FontsIndexes.find(SIMPLEUI_CONTEXT::BASIC_FONT_NAME) == FT_TextManagement::FontsIndexes.end()) {
-		SIMPLEUI_THROW("default font not found, expected Fonts/arial.ttf beside the executable");
+		SIMPLEUI_THROW("default font not found, expected Fonts/InterRegular.ttf beside the executable");
+	}
+
+	if (FT_TextManagement::FontsIndexes.find(SIMPLEUI_CONTEXT::DEBUG_MENU_FONT_NAME) == FT_TextManagement::FontsIndexes.end()) {
+		SIMPLEUI_THROW("default font not found, expected Fonts/RobotoMono.ttf beside the executable");
 	}
 
 	SIMPLEUI_CONTEXT::RectangleRoundnessShader = LoadNewShaderFromMemory(SIMPLEUI_CONTEXT::RectangleRoundnessShaderVertexBytes, SIMPLEUI_CONTEXT::RectangleRoundnessShaderFragmentBytes); // Basic shader

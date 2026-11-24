@@ -7,10 +7,10 @@
 </p>
 
 
-<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of OpenGL and glad for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, runtime texture atlasses, an advanced event system, and great batcher.</p>
+<p>A lightweight, high-performance, hardware-accelerated C++ user interface library built on top of OpenGL and glad for Windows and Linux systems. It features a complete hierarchical object tree, optimized text rendering, runtime texture atlases, an advanced event system, and a GPU-instanced batcher.</p>
 
 <div align="center">
-    <h6><i>These two scenes are done on simpleUI</i></h6>
+    <h6><i>Both scenes below are rendered natively in simpleUI</i></h6>
     <img src="https://github.com/user-attachments/assets/fc3a2650-113c-4b1c-be79-a1792416dc3d" alt="simpleUI preview" width="750" />
     <br><br>
     <img src="https://github.com/user-attachments/assets/da4fdeb0-603a-421c-8b16-c8b8a68ca5e1" alt="simpleUI preview" width="750">

@@ -330,6 +330,7 @@ struct Context {
 	float mouseWheel = 0.0f;
 
 	bool keyDown[SDL_SCANCODE_COUNT] = {};
+	bool keyRepeated[SDL_SCANCODE_COUNT] = {};
 	bool keyPressed[SDL_SCANCODE_COUNT] = {};
 	std::deque<int> charQueue;
 
@@ -823,6 +824,7 @@ inline int GetCodepoint(const char* text, int* codepointSize) {
 
 inline void ResetFrameInput() {
 	std::memset(g.mousePressed, 0, sizeof(g.mousePressed));
+	std::memset(g.keyRepeated, 0, sizeof(g.keyRepeated));
 	std::memset(g.mouseReleased, 0, sizeof(g.mouseReleased));
 	std::memset(g.keyPressed, 0, sizeof(g.keyPressed));
 	g.mouseWheel = 0.0f;
@@ -873,8 +875,9 @@ inline void ProcessEvent(const SDL_Event& e) {
 		break;
 	case SDL_EVENT_KEY_DOWN: {
 		SDL_Scancode sc = e.key.scancode;
-		if (sc >= 0 and sc < SDL_SCANCODE_COUNT) {
-			if (!e.key.repeat and !g.keyDown[sc]) g.keyPressed[sc] = true;
+		if (sc > 0 and sc < SDL_SCANCODE_COUNT) {
+			if (!e.key.repeat) g.keyPressed[sc] = true;
+			g.keyRepeated[sc] = true;
 			g.keyDown[sc] = true;
 		}
 		break;
@@ -1003,44 +1006,6 @@ inline void ClearBackground(Color c) {
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-inline void DrawTexturePro(const Texture& t, Rectangle src, Rectangle dst, Vector2 origin, float rotation, Color tint) {
-	float u0 = src.x / t.width, u1 = (src.x + src.width) / t.width;
-	float v0 = src.y / t.height, v1 = (src.y + src.height) / t.height;
-
-	float lx0 = -origin.x, lx1 = dst.width - origin.x;
-	float ly0 = -origin.y, ly1 = dst.height - origin.y;
-
-	float c = 1.0f, s = 0.0f;
-	if (rotation != 0.0f) {
-		float rad = rotation * DEG2RAD;
-		c = std::cos(rad);
-		s = std::sin(rad);
-	}
-
-	float ax = dst.x + lx0 * c - ly0 * s, ay = dst.y + lx0 * s + ly0 * c;
-	float bx = dst.x + lx1 * c - ly0 * s, by = dst.y + lx1 * s + ly0 * c;
-	float cx = dst.x + lx1 * c - ly1 * s, cy = dst.y + lx1 * s + ly1 * c;
-	float dx = dst.x + lx0 * c - ly1 * s, dy = dst.y + lx0 * s + ly1 * c;
-
-	Vertex q[6] = {
-		{ ax, ay, u0, v0, tint.r, tint.g, tint.b, tint.a },
-		{ bx, by, u1, v0, tint.r, tint.g, tint.b, tint.a },
-		{ cx, cy, u1, v1, tint.r, tint.g, tint.b, tint.a },
-		{ ax, ay, u0, v0, tint.r, tint.g, tint.b, tint.a },
-		{ cx, cy, u1, v1, tint.r, tint.g, tint.b, tint.a },
-		{ dx, dy, u0, v1, tint.r, tint.g, tint.b, tint.a },
-	};
-	glNamedBufferSubData(g.vbo, 0, sizeof(q), q);
-
-	GLuint prog = g.userProgram ? g.userProgram : g.defaultProgram;
-	glUseProgram(prog);
-	glProgramUniformMatrix4fv(prog, 0, 1, GL_FALSE, g.mvp);
-	glProgramUniform1i(prog, 1, 0);
-	glBindTextureUnit(0, t.id);
-	glBindVertexArray(g.vao);
-	glDrawArrays(GL_TRIANGLES, 0, 6);
-}
-
 inline void UpdateTextureRec(const Texture& t, Rectangle r, const void* rgba) {
 	if (!t.id or !rgba) return;
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -1050,14 +1015,6 @@ inline void UpdateTextureRec(const Texture& t, Rectangle r, const void* rgba) {
 
 inline void UpdateTexture(const Texture& t, const void* rgba) {
 	UpdateTextureRec(t, { 0, 0, (float)t.width, (float)t.height }, rgba);
-}
-
-inline void DrawTexturePro(const Texture& t, Rectangle src, Rectangle dst, Color tint) {
-	DrawTexturePro(t, src, dst, { 0, 0 }, 0.0f, tint);
-}
-
-inline void DrawRectangle(Rectangle r, Color c) {
-	DrawTexturePro(g.white, { 0, 0, 1, 1 }, r, c);
 }
  
 inline int* LoadCodepoints(const char* text, int* count) {
@@ -1191,6 +1148,11 @@ inline bool IsKeyPressed(int key) {
 inline bool IsKeyDown(int key) {
 	if (key < 0 or key >= SDL_SCANCODE_COUNT) return false;
 	return g.keyDown[key];
+}
+
+inline bool IsKeyRepeated(int key) {
+    if (key < 0 or key >= SDL_SCANCODE_COUNT) return false;
+    return g.keyRepeated[key];
 }
 
 inline int GetCharPressed() {

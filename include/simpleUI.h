@@ -33,6 +33,23 @@
 //																												//
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////
+//															//
+// TODO list												//
+//															//
+// 3 Realize basic layout system							//
+// 5 Padding system											//
+// 2 Context state to contain unlimited quantity of windows	//
+// 6 Text Alignment											//
+// 7 Additional keybinds for TextBox (like Ctrl+A)			//
+// 1 Safe object handlers 									//
+// 8 SDL_WaitEvent for static windows					    //
+// 9 Fast interface creating system (like fluent-interface) //
+// 4 Split main header to .h + .cpp							//
+// 10 IME for TextBox									    //
+//															//
+//////////////////////////////////////////////////////////////
+
 #pragma once
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -105,6 +122,7 @@ using SIMPLEUI_CORE::GetCharPressed;
 using SIMPLEUI_CORE::GetClipboardText;
 using SIMPLEUI_CORE::IsKeyDown;
 using SIMPLEUI_CORE::IsKeyPressed;
+using SIMPLEUI_CORE::IsKeyRepeated;
 using SIMPLEUI_CORE::IsMouseButtonPressed;
 using SIMPLEUI_CORE::IsMouseButtonReleased;
 using SIMPLEUI_CORE::IsWindowMaximized;
@@ -757,11 +775,6 @@ namespace SIMPLEUI_GRAPHICS_WRAPS {
 		DrawRoundRectBatch(rec);
 	}
 
-	inline void DrawTexture(Texture t, int x, int y, Color c) {
-		FlushRectanglesBatch();
-		SIMPLEUI_CORE::DrawTexturePro(t, Rectangle{0, 0, t.width, t.height}, Rectangle{x, y, t.width, t.height}, c);
-	}
-
 	inline void SetShaderValue(Shader shader, int a, const void* ptr, SIMPLEUI_CORE::UniformType type) {
 		FlushRectanglesBatch();
 		SIMPLEUI_CORE::SetShaderValue(shader, a, ptr, type);
@@ -918,13 +931,6 @@ void copyFrom(const AtlasTexture& t, const Texture& src) {
 		return att;
 	}
 
-	void blankArea(AtlasTexture t) {
-		if (t.currentAtlas != this) return;
-		SIMPLEUI_GRAPHICS_WRAPS::BeginBlendMode(SIMPLEUI_CORE::BLEND_REPLACE);
-		SIMPLEUI_CORE::DrawRectangle({ t.position.x - padding, t.position.y - padding, t.size.x + padding * 2, t.size.y + padding * 2 }, SIMPLEUI_CORE::BLANK);
-		SIMPLEUI_GRAPHICS_WRAPS::EndBlendMode();
-	}
-
 	Atlas(int size = DEFAULT_ATLAS_SIZE, int pad = 2) : padding(pad) {
 		tex = SIMPLEUI_CORE::LoadRenderTexture(size, size);
 		if (tex.id) {
@@ -1036,6 +1042,14 @@ namespace FT_TextManagement {
 	struct LineSpan {
 		float baseW;
 		int count;
+		int quadStart;
+	};
+
+	struct LineLayout {
+		std::string text;
+		std::vector<Quad> quads;
+		float w = 0;
+		int count = 0;
 	};
 
 	struct Layout {
@@ -1171,6 +1185,8 @@ namespace FT_TextManagement {
 		}
 
 	public:
+		std::unordered_map<uint64_t, LineLayout> lineCache;
+		std::unordered_map<uint64_t, Layout> bigLayouts;
 		std::unordered_map<uint64_t, Layout> layouts;
 		std::vector<Shaped> shScratch;
 
@@ -1295,69 +1311,97 @@ namespace FT_TextManagement {
 
 	inline void UnloadFonts() { Fonts.clear(); }
 
+	inline const LineLayout& GetLine(FT_Font& font, std::string_view sv) {
+		uint64_t h = std::hash<std::string_view>{}(sv);
+		auto& m = font.lineCache;
+		auto it = m.find(h);
+		if (it != m.end() and it->second.text == sv) return it->second;
+
+		if (m.size() > 65536) m.clear();
+
+		LineLayout& ln = m[h];
+		ln.text.assign(sv.data(), sv.size());
+		ln.quads.clear();
+		ln.w = 0;
+		ln.count = 0;
+
+		std::string tmp(sv);
+		int count = 0;
+		int* cps = SIMPLEUI_CORE::LoadCodepoints(tmp.c_str(), &count);
+		float base = font.BaseBaseline();
+		std::vector<Shaped>& sh = font.shScratch;
+
+		sh.clear();
+		if (count > 0) font.ShapeBase(cps, count, sh);
+
+		ln.quads.reserve(sh.size());
+		float x = 0;
+		int col = 0;
+		for (const Shaped& s : sh) {
+			const Glyph& g = font.GetBase(s.face, s.gid);
+			if (g.src.width > 0 and g.atlas) {
+				ln.quads.push_back({
+					g.src,
+					x + s.x + g.xoff,
+					base + s.y + g.yoff,
+					g.src.width * g.scale,
+					g.src.height * g.scale,
+					col,
+					g.color,
+					g.atlas
+				});
+			}
+			x += s.adv;
+			col++;
+		}
+		ln.w = x;
+		ln.count = (int)sh.size();
+
+		SIMPLEUI_CORE::UnloadCodepoints(cps);
+		return ln;
+	}
+
 	inline const Layout& GetLayout(FT_Font& font, const char* text) {
 		std::string_view sv(text ? text : "");
 		uint64_t h = std::hash<std::string_view>{}(sv);
 
-		auto& m = font.layouts;
+		bool big = sv.size() > 4096;
+		auto& m = big ? font.bigLayouts : font.layouts;
 		auto it = m.find(h);
-		if (it != m.end() and it->second.text == sv)
-			return it->second;
+		if (it != m.end() and it->second.text == sv) return it->second;
 
-		if (m.size() > 32768) m.clear();
+		if (big) {
+			if (m.size() >= 8) m.erase(m.begin());
+		} else if (m.size() > 32768) {
+			m.clear();
+		}
 
 		Layout& L = m[h];
 		L.text.assign(sv.data(), sv.size());
 		L.quads.clear();
 		L.lines.clear();
 		L.baseLineH = font.BaseLineHeight();
-
-		int count = 0;
-		int* cps = SIMPLEUI_CORE::LoadCodepoints(text ? text : "", &count);
-		float base = font.BaseBaseline();
-		std::vector<Shaped>& sh = font.shScratch;
-
-		L.quads.reserve(count);
+		L.quads.reserve(sv.size());
 
 		float y = 0;
-		int start = 0;
-		while (start <= count) {
-			int end = start;
-			while (end < count and cps[end] != '\n') end++;
+		size_t start = 0;
+		while (true) {
+			size_t end = sv.find('\n', start);
+			if (end == std::string_view::npos) end = sv.size();
 
-			sh.clear();
-			if (end > start) {
-				font.ShapeBase(cps + start, end - start, sh);
+			const LineLayout& ln = GetLine(font, sv.substr(start, end - start));
+			int quadStart = (int)L.quads.size();
+			for (const Quad& q : ln.quads) {
+				Quad c = q;
+				c.oy += y;
+				L.quads.push_back(c);
 			}
+			L.lines.push_back({ ln.w, ln.count, quadStart });
 
-			float x = 0;
-			int col = 0;
-			for (const Shaped& s : sh) {
-				const Glyph& g = font.GetBase(s.face, s.gid);
-				if (g.src.width > 0) {
-					if (g.atlas and g.src.width > 0) {
-						L.quads.push_back({
-							g.src,
-							x + s.x + g.xoff,
-							y + base + s.y + g.yoff,
-							g.src.width * g.scale,
-							g.src.height * g.scale,
-							col,
-							g.color,
-							g.atlas
-						});
-					}
-				}
-				x += s.adv;
-				col++;
-			}
-
-			L.lines.push_back({ x, (int)sh.size() });
 			y += L.baseLineH;
+			if (end >= sv.size()) break;
 			start = end + 1;
 		}
-
-		SIMPLEUI_CORE::UnloadCodepoints(cps);
 		return L;
 	}
 
@@ -1377,11 +1421,29 @@ namespace FT_TextManagement {
 		Color colorTint = { 255, 255, 255, tint.a };
 		float s = fontSize / (float)font.BaseSize();
 
-		int i = 0;
+		size_t qBegin = 0;
+		size_t qEnd = L.quads.size();
+
+		if (textlabeldata and textlabeldata->Rotation == 0.0f and !L.lines.empty()) {
+			float lh = L.baseLineH * s;
+			if (lh > 0) {
+				float top = textlabeldata->RealPos.y;
+				float bottom = top + textlabeldata->RealSize.y;
+				int n = (int)L.lines.size();
+				int first = std::max(0, (int)std::floor((top - pos.y) / lh) - 1);
+				int last = std::min(n - 1, (int)std::floor((bottom - pos.y) / lh) + 1);
+				if (first > last) return;
+				qBegin = (size_t)L.lines[first].quadStart;
+				qEnd = last + 1 < n ? (size_t)L.lines[last + 1].quadStart : L.quads.size();
+			}
+		}
+
+		size_t i = qBegin;
 
 		Atlas* last = nullptr;
 		Texture tex{};
-		for (const Quad& q : L.quads) {
+		for (size_t qi = qBegin; qi < qEnd; qi++) {
+			const Quad& q = L.quads[qi];
 			if (q.atlas != last) { last = q.atlas; tex = last->texture(); }
 
 			Rectangle dst = {
@@ -1403,7 +1465,7 @@ namespace FT_TextManagement {
 			if (textlabeldata) {
 				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, textlabeldata->RealPos, textlabeldata->RealSize, q.src, dst, textlabeldata->Origin, textlabeldata->Rotation, symbolColor, textlabeldata->Roundness);
 			} else {
-				SIMPLEUI_CORE::DrawTexturePro(tex, q.src, dst, { 0, 0 }, 0, symbolColor);
+				SIMPLEUI_GRAPHICS_WRAPS::DrawTexturePro(tex, { dst.x, dst.y }, { dst.width, dst.height }, q.src, dst, { 0, 0 }, 0, symbolColor, 0);
 			}
 		}
 	}
@@ -3663,6 +3725,17 @@ protected:
 		RealRotation = totalRot;
 	}
 
+	bool EECenterAllowed() {
+		return 
+		(EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
+			(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
+				EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? 
+				(
+					(SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))
+				) : false)
+			);
+	}
+
 	void EventHandler() override;
 	void PosOrSizeChanged();
 	void updateAncestorWhichParentIsScroll();
@@ -4549,11 +4622,7 @@ public:
 			if (WheelMove != 0) {
 				bool entered = false;
 
-				bool enterAllowed = (
-					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
-					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
-					);
+				bool enterAllowed = EECenterAllowed();
 
 				if (Visible and ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::PreviousHigherObject != this) or enterAllowed)) {
 					entered = true;
@@ -4997,11 +5066,78 @@ class TextBox : public Object2D {
 	float CursorCooldown = 0.5f;
 	float CursorTime = 0.0f;
 	bool CursorVisible = false;
-
+	bool offsetsValid = false;
 	bool deleteText = false;
+
+	void rebuildLineStarts() {
+		lineStarts.clear();
+		lineStarts.push_back(0);
+		for (int i = 0; i + 1 < (int)charOffsets.size(); i++) {
+			if (Text[charOffsets[i]] == '\n') lineStarts.push_back(i + 1);
+		}
+		cursorLineCacheIdx = -1;
+	}
+
+	void updateCursorLine() {
+		if (cursorLineCacheIdx == CursorIndex) return;
+		if (lineStarts.empty()) rebuildLineStarts();
+		auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), CursorIndex);
+		cursorLine = (int)(it - lineStarts.begin()) - 1;
+		cursorLineStartIdx = lineStarts[cursorLine];
+		cursorLineCacheIdx = CursorIndex;
+	}
 
 	void updateCharOffsets() {
 		charOffsets = SUI_ClusterOffsets(Text);
+		rebuildLineStarts();
+	}
+
+	void patchOffsets(int bytePos, int removedBytes, int insertedBytes) {
+		int delta = insertedBytes - removedBytes;
+
+		size_t lo = std::lower_bound(charOffsets.begin(), charOffsets.end(), bytePos) - charOffsets.begin();
+		size_t a = lo > 4 ? lo - 4 : 0;
+
+		size_t hi = std::lower_bound(charOffsets.begin(), charOffsets.end(), bytePos + removedBytes) - charOffsets.begin();
+		size_t b = std::min(charOffsets.size() - 1, hi + 4);
+
+		int byteA = charOffsets[a];
+		int byteB = charOffsets[b] + delta;
+
+		std::string window = Text.substr(byteA, byteB - byteA);
+		std::vector<int> local = SUI_ClusterOffsets(window);
+		local.pop_back();
+
+		int localN = (int)local.size();
+		int cdelta = localN - (int)(b - a);
+
+		std::vector<int> fresh;
+		for (int j = 0; j < localN; j++) {
+			if (Text[byteA + local[j]] == '\n') fresh.push_back((int)a + j + 1);
+		}
+
+		auto first = std::upper_bound(lineStarts.begin(), lineStarts.end(), (int)a);
+		auto last = std::upper_bound(lineStarts.begin(), lineStarts.end(), (int)b);
+		for (auto p = last; p != lineStarts.end(); ++p) *p += cdelta;
+		auto pos = lineStarts.erase(first, last);
+		lineStarts.insert(pos, fresh.begin(), fresh.end());
+
+		std::vector<int> merged;
+		merged.reserve(charOffsets.size() + local.size());
+		merged.insert(merged.end(), charOffsets.begin(), charOffsets.begin() + a);
+		for (int v : local) merged.push_back(byteA + v);
+		for (size_t i = b; i < charOffsets.size(); i++) merged.push_back(charOffsets[i] + delta);
+		charOffsets.swap(merged);
+
+		cursorLineCacheIdx = -1;
+	}
+
+	void editText(int bytePos, int removed, const std::string& ins) {
+		std::string t = Text;
+		t.replace(bytePos, removed, ins);
+		Text = t;
+		patchOffsets(bytePos, removed, (int)ins.size());
+		offsetsValid = true;
 	}
 
 	std::vector<int> getCharOffsets(const std::string& text) {
@@ -5038,6 +5174,12 @@ class TextBox : public Object2D {
 	bool texturePushed = false;
 	bool lastTextured = false;
 
+	int cursorLine = 0;
+	int cursorLineStartIdx = 0;
+	int cursorLineCacheIdx = -1;
+	float cachedLineH = 0;
+	std::vector<int> lineStarts;
+
 	TexturedTextLabelData data{};
 
 	std::string visibleText = "";
@@ -5050,6 +5192,9 @@ class TextBox : public Object2D {
 		} else {
 			textParams = getTextCFrame(visibleText.c_str(), getFont(FontFaceIndex), { RealPos.x, RealPos.y, RealSize.x, RealSize.y }, TextAnchor, TextSize, Spacing);
 		}
+
+		cachedLineH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
+		if (cachedLineH <= 0.0f) cachedLineH = textParams.z;
 	}
 
 	void updateVisible() {
@@ -5075,14 +5220,6 @@ class TextBox : public Object2D {
 	}
 
 	void updateTexture() {
-		if (Text != "") {
-			newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
-		} else {
-			if (CursorIndex == -1 or SIMPLEUI_CONTEXT::FocusedTextBox != this) {
-				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
-			}
-		}
-
 		float reqX = (Type != TextBoxType::TEXTBOX_RESIZING) ? std::max(newSize.x, RealSize.x) : newSize.x;
 		float reqY = (Type != TextBoxType::TEXTBOX_RESIZING) ? std::max(newSize.y, RealSize.y) : newSize.y;
 
@@ -5148,7 +5285,7 @@ class TextBox : public Object2D {
 
 			std::string beforeOnLine = Text.substr(s, charOffsets[idx] - s);
 			float cx = MeasureTextEx(getFont(FontFaceIndex), beforeOnLine.c_str(), textParams.z, Spacing).x;
-			float lineH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
+			float lineH = cachedLineH > 0.0f ? cachedLineH : textParams.z;
 			int line = 0;
 			for (int i = 0; i < idx; i++) {
 				if (Text[charOffsets[i]] == '\n') line++;
@@ -5171,7 +5308,7 @@ class TextBox : public Object2D {
 		ViewportPosition.y = calcY ? std::clamp(ViewportPosition.y, 0.0f, std::max(0.0f, full.y - RealSize.y)) : 0.0f;
 	}
 
-	static bool ClipSegmentToRect(Vector2& a, Vector2& b, float minX, float minY, float maxX, float maxY) {
+	static bool clipSegmentToRect(Vector2& a, Vector2& b, float minX, float minY, float maxX, float maxY) {
 		float dx = b.x - a.x;
 		float dy = b.y - a.y;
 		float t0 = 0.0f;
@@ -5199,7 +5336,7 @@ class TextBox : public Object2D {
 		return true;
 	}
 
-	inline std::string NormalizeLineBreaks(const std::string& s) {
+	inline std::string normalizeLine(const std::string& s) {
 		std::string out;
 		out.reserve(s.size());
 		for (size_t i = 0; i < s.size(); ) {
@@ -5207,6 +5344,9 @@ class TextBox : public Object2D {
 			if (c == '\r') {
 				if (i + 1 < s.size() and s[i + 1] == '\n') i++;
 				out.push_back('\n');
+				i++;
+			} else if (c == '\t') {
+				out.append("    ");
 				i++;
 			} else if (c == 0x0B or c == 0x0C) {
 				out.push_back('\n');
@@ -5235,6 +5375,8 @@ protected:
 			UnloadTextureFromAtlas(cachedText);
 		}
 	}
+
+	static constexpr int MaxSymbolsCap = 4000000;
 public:
 	Color CursorColor = { 0,0,0,255 };
 	float CursorRoundness = 0;
@@ -5245,7 +5387,7 @@ public:
 	Color TextColor = { 0,0,0,255 };
 	TextAnchorEnum TextAnchor = TextAnchorEnum::CENTER;
 	int TextSize = -1;
-	int MaxSymbols = -1;
+	int MaxSymbols = -1; // Set maximal symbols limit to input. Can be bypassed by directly Text changing (***->Text =). Also has an mechanical cap for 4.000.000 symbols (To avoid widget problems)
 	float TextTransparency = 0;
 	std::string AllowedSymbols = "";
 	std::string DisallowedSymbols = "";
@@ -5299,7 +5441,13 @@ public:
 		}
 
 		bool updateCondition1 = PlaceholderText.isChanged() or FontFace.isChanged() or Text.isChanged();
-		bool updateCondition2 = lastTextured != Textured or lastType != Type or cachedText.id == 0 or lastHideText != HideText or lastParams.z != textParams.z or ((SIMPLEUI_CONTEXT::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_CONTEXT::FocusedTextBox != this));
+		bool updateCondition2 = lastTextured != Textured
+		or lastType != Type
+		or (Textured and cachedText.id == 0)
+		or lastHideText != HideText
+		or lastParams.z != textParams.z
+		or ((SIMPLEUI_CONTEXT::FocusedTextBox == this and lastFocused != this) or (lastFocused == this and SIMPLEUI_CONTEXT::FocusedTextBox != this));
+
 		lastFocused = SIMPLEUI_CONTEXT::FocusedTextBox;
 
 		if (FontFace.isChanged()) {
@@ -5307,7 +5455,8 @@ public:
 		}
 
 		if (Text.isChanged()) {
-			updateCharOffsets();
+			if (offsetsValid) offsetsValid = false;
+			else updateCharOffsets();
 			int maxIndex = static_cast<int>(charOffsets.size()) - 1;
 			if (CursorIndex > maxIndex) CursorIndex = maxIndex;
 		}
@@ -5320,18 +5469,19 @@ public:
 		if (updateCondition1 or updateCondition2 or lastPerSymbol != UsePerSymbolColor or changedGlyphs or lastRealSize.x != RealSize.x or lastRealSize.y != RealSize.y) {
 			updateVisible();
 			updateTextParams();
+
 			if (Textured) {
+				if (Text == "") {
+					newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
+				} else {
+					newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
+				}
+
 				updateTexture();
 			} else {
 				if (cachedText.id and cachedText.currentAtlas) {
 					UnloadTextureFromAtlas(cachedText);
 				}
-			}
-
-			if (Text == "") {
-				newSize = MeasureTextEx(getFont(FontFaceIndex), PlaceholderText.c_str(), textParams.z, Spacing);
-			} else {
-				newSize = MeasureTextEx(getFont(FontFaceIndex), Text.c_str(), textParams.z, Spacing);
 			}
 		}
 
@@ -5392,8 +5542,8 @@ public:
 			}
 		}
 
-		float clipMinX = RealPos.x + CursorSize * 0.5f;
-		float clipMaxX = RealPos.x + RealSize.x - CursorSize * 0.5f;
+		float clipMinX = RealPos.x + CursorSize * 0;
+		float clipMaxX = RealPos.x + RealSize.x - CursorSize * 0;
 		float clipMinY = RealPos.y;
 		float clipMaxY = RealPos.y + RealSize.y;
 
@@ -5405,56 +5555,35 @@ public:
 					Vector2 a = { RealPos.x + (Type == TEXTBOX_RESIZING ? getTextOffset(TextAnchor).x : 0) * RealSize.x - viewX + 1, RealPos.y + textParams.y - viewY };
 					Vector2 b = { a.x, a.y + sizeY };
 
-					if (ClipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
+					if (clipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
 						SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(a, b, CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness);
 					}
 				}
 			}
 		}
 
-		if (CursorIndex >= 0 and CursorVisible and !Text.empty() and textParams.z > 1) { // NOT OPTIMIZED
-			int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : Text.size();
+		if (CursorIndex >= 0 and CursorVisible and !Text.empty() and textParams.z > 1) {
+			updateCursorLine();
+			int currentLine = cursorLine;
+			int startIndex = cursorLineStartIdx;
 
-			int startIndex = CursorIndex;
-			while (startIndex > 0 and charOffsets.size() >= startIndex and Text[charOffsets[startIndex - 1]] != '\n') {
-				startIndex--;
-			}
+			int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
+			int start = charOffsets[startIndex];
 
-			int start = (startIndex < (int)charOffsets.size()) ? charOffsets[startIndex] : Text.size();
+			std::string before;
+			if (HideText != '\0') before.assign(CursorIndex - startIndex, HideText);
+			else before = Text.substr(start, bytePos - start);
 
-			std::string textBeforeCursorOnThisLine = Text.substr(start, bytePos - start);
+			float lineH = cachedLineH > 0.0f ? cachedLineH : textParams.z;
+			Vector2 size = { 0, lineH };
+			if (!before.empty()) size.x = MeasureTextEx(getFont(FontFaceIndex), before.c_str(), textParams.z, Spacing).x;
 
-			if (HideText != '\0') {
-				textBeforeCursorOnThisLine = "";
-				for (int i = startIndex; i < CursorIndex; i++) {
-					textBeforeCursorOnThisLine += HideText;
-				}
-			}
-
-			int currentLine = 0;
-			for (int i = 0; i < CursorIndex; i++) {
-				if (Text[charOffsets[i]] == '\n') currentLine++;
-			}
-
-			Vector2 size = MeasureTextEx(getFont(FontFaceIndex), textBeforeCursorOnThisLine.c_str(), textParams.z, Spacing);
-
-			if (size.x == 0 or size.y == 0) {
-				size.y = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
-				if (size.y == 0) size.y = textParams.z;
-			}
-
-			float yOffset = 0.0f;
-			if (currentLine > 0) {
-				std::string newlinesStr(currentLine, '\n');
-				float totalH = MeasureTextEx(getFont(FontFaceIndex), newlinesStr.c_str(), textParams.z, Spacing).y;
-				float singleH = MeasureTextEx(getFont(FontFaceIndex), "|", textParams.z, Spacing).y;
-				yOffset = totalH - singleH;
-			}
+			float yOffset = currentLine * lineH;
 
 			Vector2 a = { RealPos.x + textParams.x + size.x - viewX, RealPos.y + textParams.y + yOffset - viewY };
 			Vector2 b = { a.x, a.y + size.y };
 
-			if (ClipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
+			if (clipSegmentToRect(a, b, clipMinX, clipMinY, clipMaxX, clipMaxY)) {
 				SIMPLEUI_GRAPHICS_WRAPS::DrawLineEx(a, b, CursorSize, CursorColor, RealPos, o, RealRotation, CursorRoundness);
 			}
 		}
@@ -5594,11 +5723,7 @@ public:
 				if (WheelMove != 0) {
 					bool entered = false;
 
-					bool enterAllowed = (
-						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
-						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
-						);
+					bool enterAllowed = EECenterAllowed();
 
 					if (Visible and ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::PreviousHigherObject != this) or enterAllowed)) {
 						entered = true;
@@ -5643,11 +5768,11 @@ public:
 			}
 		}
 
-		/* ⬇️ Keyboard Inputs ⬇️ (fatest part among all input widgets, fuck it) */
+		/* ⬇️ Keyboard Inputs ⬇️ */
 
 		if (SIMPLEUI_CONTEXT::FocusedTextBox == this and Visible and CanType) {
-			if (MaxSymbols >= charOffsets.size() or MaxSymbols < 0) {
-				int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
+			if (MaxSymbols >= charOffsets.size() - 1 or MaxSymbols < 0) {
+				int symbolsLeft = (MaxSymbols < 0 ? MaxSymbolsCap : MaxSymbols) - static_cast<int>(charOffsets.size()) + 1;
 				int addedSymbols = 0;
 				std::string buf;
 
@@ -5673,10 +5798,8 @@ public:
 				}
 
 				if (addedSymbols > 0) {
-					updateCharOffsets();
 					int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
-					Text = Text.substr(0, bytePos) + buf + Text.substr(bytePos);
-					updateCharOffsets();
+					editText(bytePos, 0, buf);
 					CursorIndex = cursorFromByte(bytePos + (int)buf.size());
 					CursorVisible = true; CursorTime = 0.0f;
 				}
@@ -5684,7 +5807,7 @@ public:
 		}
 
 		if (SIMPLEUI_CONTEXT::FocusedTextBox == this and Visible and CanType) {
-			if (IsKeyPressed(KEY_BACKSPACE)) {
+			if (IsKeyPressed(KEY_BACKSPACE) or IsKeyRepeated(KEY_BACKSPACE)) {
 				if (IsKeyDown(KEY_LEFT_CONTROL)) {
 					if (CursorIndex > 0) {
 						int start = CursorIndex;
@@ -5722,25 +5845,17 @@ public:
 							}
 						}
 
-						updateCharOffsets();
-
-						std::string other = "";
-						if (CursorIndex < charOffsets.size()) other = Text.substr(charOffsets[CursorIndex]);
-						Text = Text.substr(0, charOffsets[start]) + other;
+						int a = charOffsets[start];
+						int b = charOffsets[CursorIndex];
+						editText(a, b - a, "");
 						CursorIndex = start;
-
-						updateCharOffsets();
 					}
 				} else {
 					if (CursorIndex > 0) {
-						updateCharOffsets();
-
-						std::string other = "";
-						if (CursorIndex < charOffsets.size()) other = Text.substr(charOffsets[CursorIndex]);
-						Text = Text.substr(0, charOffsets[CursorIndex - 1]) + other;
+						int a = charOffsets[CursorIndex - 1];
+						int b = charOffsets[CursorIndex];
+						editText(a, b - a, "");
 						CursorIndex--;
-
-						updateCharOffsets();
 					}
 				}
 
@@ -5750,18 +5865,16 @@ public:
 
 			if (IsKeyPressed(KEY_DELETE)) {
 				if (CursorIndex < (int)charOffsets.size() - 1) {
-					updateCharOffsets();
-
-					Text = Text.substr(0, charOffsets[CursorIndex]) + Text.substr(charOffsets[CursorIndex + 1]);
-
-					updateCharOffsets();
+					int a = charOffsets[CursorIndex];
+					int b = charOffsets[CursorIndex + 1];
+					editText(a, b - a, "");
 				}
 
 				CursorVisible = true;
 				CursorTime = 0.0f;
 			}
 
-			if (IsKeyPressed(KEY_LEFT)) {
+			if (IsKeyPressed(KEY_LEFT) or IsKeyRepeated(KEY_LEFT)) {
 				if (IsKeyDown(KEY_LEFT_CONTROL)) {
 					while (CursorIndex > 0) {
 						unsigned char c = Text[charOffsets[CursorIndex - 1]];
@@ -5789,7 +5902,7 @@ public:
 				CursorTime = 0.0f;
 			}
 
-			if (IsKeyPressed(KEY_RIGHT)) {
+			if (IsKeyPressed(KEY_RIGHT) or IsKeyRepeated(KEY_RIGHT)) {
 				int maxIndex = (int)charOffsets.size() - 1;
 
 				if (IsKeyDown(KEY_LEFT_CONTROL)) {
@@ -5819,31 +5932,29 @@ public:
 				CursorTime = 0.0f;
 			}
 
-			if (IsKeyDown(KEY_LEFT_CONTROL) and IsKeyPressed(KEY_V) and ClipboardPasteAllowed) {
+			if (IsKeyDown(KEY_LEFT_CONTROL) and (IsKeyPressed(KEY_V) or IsKeyRepeated(KEY_V)) and ClipboardPasteAllowed) {
 				std::string clipboardText;
 
 				try {
-					clipboardText = NormalizeLineBreaks(GetClipboardText());
+					clipboardText = normalizeLine(GetClipboardText());
 				} catch (const std::logic_error& e) {
 					clipboardText = "";
 				}
 
 				if (!clipboardText.empty()) {
 					std::vector<int> offsets = getCharOffsets(clipboardText);
-					int symbolsLeft = MaxSymbols - static_cast<int>(charOffsets.size());
+					int symbolsLeft = (MaxSymbols < 0 ? MaxSymbolsCap : MaxSymbols) - static_cast<int>(charOffsets.size()) + 1;
 
 					if (symbolsLeft > 0 or MaxSymbols < 0) {
-						int b = (MaxSymbols < 0 or symbolsLeft >= (int)offsets.size()) ? (int)clipboardText.size() : offsets[symbolsLeft];
+						int b = (symbolsLeft >= (int)offsets.size()) ? (int)clipboardText.size() : offsets[symbolsLeft];
 						std::string toPaste = clipboardText.substr(0, b);
 						
 						bool allowed = true;
 						if (ClipboardPasteCondition and !ClipboardPasteCondition(toPaste)) allowed = false;
 
 						if (allowed) {
-							updateCharOffsets();
 							int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
-							Text = Text.substr(0, bytePos) + toPaste + Text.substr(bytePos);
-							updateCharOffsets();
+							editText(bytePos, 0, toPaste);
 							CursorIndex = cursorFromByte(bytePos + (int)toPaste.size());
 							CursorVisible = true; CursorTime = 0.0f;
 						}
@@ -5851,8 +5962,8 @@ public:
 				}
 			}
 
-			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (MaxSymbols > charOffsets.size() or MaxSymbols < 0)) {
-				bool enter = IsKeyPressed(KEY_ENTER);
+			if (EnterInputCondition != TextBoxNextLine::TEXTBOX_NEXTLINE_NOT_ALLOWED and (MaxSymbols > charOffsets.size() - 1 or MaxSymbols < 0)) {
+				bool enter = IsKeyPressed(KEY_ENTER) or IsKeyRepeated(KEY_ENTER);
 
 				if (enter) {
 					bool ctrl = IsKeyDown(KEY_LEFT_CONTROL);
@@ -5865,17 +5976,15 @@ public:
 					if (EnterInputCondition == TextBoxNextLine::TEXTBOX_NEXTLINE_SHIFT_ENTER and shift) allowed = true;
 
 					if (allowed) {
-						updateCharOffsets();
 						int bytePos = (CursorIndex < (int)charOffsets.size()) ? charOffsets[CursorIndex] : (int)Text.size();
-						Text = Text.substr(0, bytePos) + '\n' + Text.substr(bytePos);
-						updateCharOffsets();
+						editText(bytePos, 0, "\n");
 						CursorIndex = cursorFromByte(bytePos + 1);
 						CursorVisible = true; CursorTime = 0.0f;
 					}
 				}
 			}
 
-			if (IsKeyPressed(KEY_UP)) {
+			if (IsKeyPressed(KEY_UP) or IsKeyRepeated(KEY_UP)) {
 				int s = -1;
 				int s1 = -1;
 				int charI = -1;
@@ -5939,7 +6048,7 @@ public:
 				CursorTime = 0.0f;
 			}
 
-			if (IsKeyPressed(KEY_DOWN)) {
+			if (IsKeyPressed(KEY_DOWN) or IsKeyRepeated(KEY_DOWN)) {
 				int s = -1;
 				int s1 = -1;
 				int s2 = -1;
@@ -6039,6 +6148,8 @@ public:
 		}
 
 		if (!Visible) { CursorIndex = -1; CursorVisible = false; deleteText = true; if (posOrSizeChanged or posOrSizeChangedResult or Rotation != lastRotation) updateWhenWillBeVisible = true; return; }
+
+		if (MaxSymbols > MaxSymbolsCap) MaxSymbols = MaxSymbolsCap;
 
 		inputHandler();
 
@@ -6704,11 +6815,7 @@ inline void Object2D::EventHandler() {
 				}
 
 				if (mouseOnObject) {
-					bool enterAllowed = (
-						EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
-						(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-							EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((higherObject == this and higherObject != nullptr) or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
-						);
+					bool enterAllowed = EECenterAllowed();
 
 					if (Visible and ((higherObject == this and PreviousHigherObject != this) or enterAllowed)) {
 						entered = true;
@@ -6726,11 +6833,7 @@ inline void Object2D::EventHandler() {
 					mouseCalculated = true;
 				}
 
-				bool enterAllowed = (
-					EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == higherObject :
-					(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-						EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? (higherObject == this or (higherObject and higherObject != this and higherObject->IsDescendantOf(this))) : false)
-					);
+				bool enterAllowed = EECenterAllowed();
 
 				if (MouseEntered and (!Visible or !mouseOnObject or !enterAllowed)) {
 					MouseEntered = false;
@@ -7623,6 +7726,11 @@ inline void UpdateHigher(Instance* StartInstance) {
 				}
 			}
 		} else {
+			if (Is2DInheritor(parent)) {
+				Object2D* o = static_cast<Object2D*>(parent);
+				if (o->ClipDescendants and !o->PointInObject(SIMPLEUI_CONTEXT::mousePosition)) return false;
+			}
+
 			for (auto it = parent->Children.rbegin(); it != parent->Children.rend(); it++) {
 				Instance* child = *it;
 

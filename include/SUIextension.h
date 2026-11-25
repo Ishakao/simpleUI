@@ -209,7 +209,7 @@ class GraphBuilder : public Object2D {
 		}
 
 		texSize = { std::min(reqW, cached.size.x), std::min(reqH, cached.size.y) };
-
+		std::cout << cached.id << " " << cached.position.x << " " << cached.position.y << " " << cached.size.x << " " << cached.size.y << std::endl;
 		if (BeginAtlasDraw(cached)) {
 			FT_TextManagement::DrawTextEx(font, str.c_str(), { 0.0f, 0.0f }, textParams.z, 0, { 255, 255, 255, 255 });
 			EndAtlasDraw(cached);
@@ -612,11 +612,7 @@ class ToggleSwitcher : public Object2D {
 
 	void checkClick() {
 		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_CONTEXT::mousePosition)) {
-			bool canBePressed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
-				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
-				);
+			bool canBePressed = EECenterAllowed();
 
 			if (canBePressed) {
 				if (ClickOnSlider) {
@@ -847,21 +843,6 @@ class CheckBox : public Object2D {
 
 	std::vector<button> buttons;
 
-	void RedrawText(button& but) {
-		if (but.tex.id) {
-			Vector3 textParams = getTextCFrame(but.Text.c_str(), getFont(getFontIndex(but.FontFace)), { 0,0, but.tex.size.x, but.tex.size.y }, TextAnchorEnum::E, -1, 0);
-
-			SIMPLEUI_GRAPHICS_WRAPS::StopClipping();
-
-			SIMPLEUI_GRAPHICS_WRAPS::BeginTextureMode(but.tex.currentAtlas->renderTexture());
-			but.tex.currentAtlas->blankArea(but.tex);
-			DrawTextEx(getFont(getFontIndex(but.FontFace)), but.Text.c_str(), { but.tex.position.x + (AnchorToLeft ? 0 : textParams.x), but.tex.position.y + textParams.y }, textParams.z, 0, {255,255,255,255});
-
-			SIMPLEUI_GRAPHICS_WRAPS::EndTextureMode();
-			SIMPLEUI_GRAPHICS_WRAPS::ResumeClipping();
-		}
-	}
-
 	bool lA = true;
 	Vector2 LastTextAreaSize = { 0.0f, 0.0f };
 	std::function<void(Instance*, int, bool)> func = [](Instance* t, int id, bool value) {};
@@ -884,11 +865,7 @@ class CheckBox : public Object2D {
 
 	void checkClick() {
 		if (Enabled and Active and IsMouseButtonPressed(ButtonType) and PointInObject(SIMPLEUI_CONTEXT::mousePosition)) {
-			bool canBePressed = (
-				EnterEventCondition == SUI_EEC::EEC_DEFAULT ? this == SIMPLEUI_CONTEXT::higherObject :
-				(EnterEventCondition == SUI_EEC::EEC_EVERY_ENTER ? true :
-					EnterEventCondition == SUI_EEC::EEC_IF_DESCENDANT_HIGHER ? ((SIMPLEUI_CONTEXT::higherObject == this and SIMPLEUI_CONTEXT::higherObject != nullptr) or (SIMPLEUI_CONTEXT::higherObject and SIMPLEUI_CONTEXT::higherObject != this and SIMPLEUI_CONTEXT::higherObject->IsDescendantOf(this))) : false)
-				);
+			bool canBePressed = EECenterAllowed();
 
 			if (!canBePressed) return;
 
